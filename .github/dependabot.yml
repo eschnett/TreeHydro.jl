@@ -1,0 +1,19 @@
+# Only the actions are watched, because only the actions go stale in
+# silence. A pinned major keeps running long after a new one ships and
+# says nothing about it. Julia is deliberately not covered: Dependabot has
+# no Pkg ecosystem, and TreeAMR is reached through a [sources] entry
+# pinned to a moving branch, so it is already re-resolved on every run and
+# there is no version string to bump.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # One pull request a month for all of them, rather than one per
+    # action: these move together and are reviewed together.
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: CI
