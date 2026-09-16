@@ -32,8 +32,10 @@ on the host, and the answer is bit-identical at any thread count.
 
 *Status: milestone H1 in progress. The module shell, the `Base` bridges
 for software floats and the device helpers exist, and so do the equation
-of state, the two state conversions and the floors; the scheme itself —
-reconstruction, fluxes, the right-hand side — does not yet.*
+of state, the two state conversions, the floors, the MUSCL reconstruction
+with its three limiters and the three Riemann solvers; the right-hand
+side that calls them — the field sets, the kernels, the time integration
+— does not yet.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -57,6 +59,12 @@ export pressure, internal_energy, soundspeed
 export statedims, density, velocity, momentum, pressure_of, energy
 export prim2con, con2prim
 
+# Reconstruction
+export slope, face_states
+
+# The physical flux and the three approximate Riemann solvers
+export physical_flux, signal_speed, riemann_flux
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -66,5 +74,10 @@ include("device.jl")
 # is compiled.
 include("floors.jl")
 include("eos.jl")
+# The two halves of the flux kernel of step 3, in the order it calls them:
+# `face_states` builds the pair of primitive states at a face, and
+# `riemann_flux` turns that pair into the flux through it.
+include("reconstruction.jl")
+include("riemann.jl")
 
 end # module TreeHydro
