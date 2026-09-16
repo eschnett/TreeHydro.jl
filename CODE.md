@@ -12,7 +12,8 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: design, before implementation.* Nothing below is measured.
+*Status: milestone H0 (scaffolding) done; the scheme itself is not written
+yet.* Nothing below is measured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -986,12 +987,45 @@ follow TreeAMR's `CLAUDE.md`, since the three packages are read together.
 
 Each has an acceptance test; serial `Float64` correctness first.
 
-- **H0 — Scaffolding and prerequisites.** The two TreeAMR prerequisites
-  landed on TreeAMR's `main`; `Project.toml` with the `[sources]` pin to
-  `main`, CI on 1.11 and release at one and four threads,
-  `CLAUDE.md`, this document. *Accept:* a clean clone instantiates, an
-  empty test suite passes, and the pinned TreeAMR provides both
-  prerequisites.
+- **H0 — Scaffolding and prerequisites.** *(Done.)* The two TreeAMR
+  prerequisites landed on TreeAMR's `main`; `Project.toml` with the
+  `[sources]` pin to `main`, CI on 1.11 and release at one and four
+  threads, `CLAUDE.md`, this document. *Accept:* a clean clone
+  instantiates, an empty test suite passes, and the pinned TreeAMR
+  provides both prerequisites.
+
+  What H0 settled, beyond what was written above:
+
+  - **The suite is not empty.** `test/prerequisite_tests.jl` asserts the
+    two prerequisites rather than assuming them — that
+    `fill_by_coordinates!(AllVariables(f), fs)` fills a field set with
+    *bit-for-bit* the numbers the per-variable form does (the convergence
+    studies compare against numbers the two forms must agree on, so
+    agreement to roundoff would put a floor under every error this
+    package measures), and that `map_blocks!(…; stored = true)` reaches
+    every stored point with the kernel's index *as* the stored index,
+    checked on a face-centered set with `G = (0, 1)` so that a
+    per-dimension ghost width with a zero in it is what is tested. The
+    rest of the M8 surface — `InterfaceSchedule`, `restrict_interfaces!`,
+    `CellBoundary`, `boundary_by_coordinates`, `firing_boxes`,
+    `block_mapreduce` — is checked as a list of exported names, which is
+    the cheapest thing that fails when the pin moves under a rename.
+  - **`hostcopy` is split.** `hostcopy(fs)` returns `fs` *itself* on the
+    CPU, so on a machine with no device its copying path would be dead
+    code — which is every machine CI runs on. The copy is therefore
+    `hostcopy!(dst, src)`, callable host to host and tested that way; it
+    checks that the two layouts agree, because a `copyto!` between arrays
+    of equal length and unequal shape transposes the data instead of
+    failing, and `G` and the centering are exactly what a destination
+    built carelessly would get wrong. Only `hostcopy` is exported, as in
+    TreeWave; `hostcopy!` is reached as `TreeHydro.hostcopy!`.
+  - **The compat bounds.** `KernelAbstractions = "0.9.42, 1"` and
+    `SciMLBase = "3.50.1"` follow TreeWave's, `OrdinaryDiffEqSSPRK =
+    "2.3.2"` the version TreeAMR's test environment resolves,
+    `TreeAMR = "0.1.0"`, `julia = "1.11"` for the `[sources]` entry.
+    `OrdinaryDiffEqSSPRK` and `SciMLBase` are dependencies from H0 and
+    unused until H1c, so that the floor is fixed before anything relies
+    on it.
 - **H1 — The scheme on a uniform mesh.** EOS, `con2prim`, MUSCL with the
   three limiters, LLF and HLLE, SSPRK33, the six-step RHS with `D` flux
   sets — on a single-level periodic forest, `D = 1, 2` (3D smoke).

@@ -33,15 +33,19 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Design only.** `CODE.md` is complete and reviewed; `src/TreeHydro.jl`
-is a placeholder; there are no tests, no commits and no remote yet. The
-milestones are H0–H6 in `CODE.md`; H0 (scaffolding) starts once TreeAMR's
-`main` provides the two prerequisites named there.
+**Scaffolding (H0) done; no physics yet.** `CODE.md` is complete and
+reviewed. What exists: `Project.toml` with the `[sources]` pin to
+TreeAMR's GitHub `main`; `src/TreeHydro.jl`, the module shell;
+`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
+`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
+TreeWave; `test/precision_tests.jl` and `test/prerequisite_tests.jl`; CI
+and a `README.md`. The milestones are H0–H6 in `CODE.md`; H1 (the scheme
+on a uniform mesh) is next, and `PLAN.md` breaks it into steps 1–3.
 
 ## Commands
 
-None work yet beyond reading `CODE.md`. When H0 lands they will mirror
-TreeWave's, and this section should then be updated to match reality:
+The full suite (a few seconds at H0), and the same at four threads —
+`Pkg.test` does not inherit `-t`, so it has to be passed explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -51,15 +55,22 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
 
+The clean-checkout check, which is what the `[sources]` pin exists for: a
+tree with no `Manifest.toml` resolves TreeAMR from GitHub and passes.
+This is what CI does, and a local run that passes proves nothing about it:
+
 ```bash
-julia --project=bin bin/visualize2d.jl --case=kh
+d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
+  julia --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-`Pkg.test` does not inherit `-t`; the thread-independence test spawns
-its own subprocess at another count either way. Device tests will be
-opt-in behind `TREEHYDRO_TEST_BACKEND` (`metal`, `cuda`), in an
-environment of your own that has the device package — neither this
-package nor TreeAMR depends on one.
+Not yet real, and listed so the section can be filled in rather than
+rewritten: the viewer (`julia --project=bin bin/visualize2d.jl --case=kh`)
+arrives in step 11, the thread-independence test — which spawns its own
+subprocess at another count either way — in step 13, and device tests,
+opt-in behind `TREEHYDRO_TEST_BACKEND` (`metal`, `cuda`) in an environment
+of your own that has the device package, in step 14. Neither this package
+nor TreeAMR depends on a device package.
 
 ## Things that will bite
 
@@ -163,14 +174,18 @@ Match TreeAMR's, since the three packages are read together:
 
 ## Repository facts
 
-- **No commits and no remote yet.** When they exist: work on a branch,
-  and do not push, open a pull request, or merge to `main` without being
-  asked.
+- **There are commits; there is still no remote.** Work on a branch, and
+  do not push, open a pull request, or merge to `main` without being
+  asked. The first commit is the design documents; H0 is on
+  `claude/step-0-scaffolding`.
 - `TODO.md` is Erik's personal to-do list. **Do not modify it.**
-  `TODO.md~` is an editor backup, not a file of this package.
-- H0 will add a `.gitignore` in TreeWave's image: `Manifest.toml`
-  everywhere, `bin/output/`, `docs/build/`, `TODO.md`. `CODE.md` and this
-  file are committed.
+  `TODO.md~` is an editor backup, not a file of this package. Both are
+  kept out of the tree by `.gitignore`.
+- `.gitignore` exists, in TreeWave's image: `Manifest.toml` everywhere,
+  `bin/output/`, `docs/build/`, editor leftovers, `TODO.md`. No
+  `Manifest.toml` is tracked — that is what makes the clean-checkout
+  check above mean something. `CODE.md`, `PLAN.md` and this file are
+  committed.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,
