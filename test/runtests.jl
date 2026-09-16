@@ -11,4 +11,5 @@ using TreeHydro
     include("precision_tests.jl")
     include("prerequisite_tests.jl")
     include("eos_tests.jl")
+    include("riemann_tests.jl")
 end
