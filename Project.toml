@@ -2,3 +2,30 @@ name = "TreeHydro"
 uuid = "18f621c7-d3c4-4697-8f68-54143cdddff7"
 version = "0.1.0"
 authors = ["Erik Schnetter <schnetter@gmail.com>"]
+
+[deps]
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+OrdinaryDiffEqSSPRK = "669c94d9-1f4b-4b64-b377-1aa079aa2388"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
+
+[compat]
+KernelAbstractions = "0.9.42, 1"
+OrdinaryDiffEqSSPRK = "2.3.2"
+SciMLBase = "3.50.1"
+TreeAMR = "0.1.0"
+julia = "1.11"
+
+# TreeAMR is not in the General registry, so a clean clone has no way to
+# find it: `Manifest.toml` is not tracked, and Project.toml alone carries
+# only the UUID. This is what makes `Pkg.instantiate()` work from a fresh
+# checkout, and therefore what makes CI possible. It also requires Julia
+# 1.11, hence the compat bound above.
+#
+# `rev = "main"` rather than a commit: TreeAMR is developed alongside this
+# package, and the two prerequisites of milestone H0 — `AllVariables` and
+# `map_blocks!(…; stored = true)` — landed there. The price is that the
+# checkout at `~/src/jl/TreeAMR` is *not* what the tests see; an unpushed
+# change there is invisible here.
+[sources]
+TreeAMR = {url = "https://github.com/eschnett/TreeAMR.jl", rev = "main"}
