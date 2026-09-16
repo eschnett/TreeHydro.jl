@@ -30,12 +30,13 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestone H1 in progress. The module shell, the `Base` bridges
-for software floats and the device helpers exist, and so do the equation
-of state, the two state conversions, the floors, the MUSCL reconstruction
-with its three limiters and the three Riemann solvers; the right-hand
-side that calls them — the field sets, the kernels, the time integration
-— does not yet.*
+*Status: milestone H1 in progress. The scheme runs on a uniform mesh: the
+equation of state, the two state conversions and the floors, the MUSCL
+reconstruction with its three limiters, the three Riemann solvers, the
+six-step right-hand side with its three kernels, SSPRK33 in time, and the
+entropy wave, which measures second order and conservation to roundoff.
+Sod and the exact Riemann solution, the coarse-fine faces, the refinement
+criterion and the driver are still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -46,6 +47,11 @@ module TreeHydro
 using TreeAMR
 
 using KernelAbstractions: Backend, CPU, allocate, get_backend
+using KernelAbstractions: @kernel, @index, @Const
+# Unused before step 3 and depended on from step 0, so that the Julia floor
+# the two of them set is fixed before anything relies on it.
+using OrdinaryDiffEqSSPRK: SSPRK33
+using SciMLBase: ODEProblem, solve
 
 # Devices
 export hostcopy
@@ -65,6 +71,15 @@ export slope, face_states
 # The physical flux and the three approximate Riemann solvers
 export physical_flux, signal_speed, riemann_flux
 
+# The right-hand side and what a driver needs around it
+export HydroProblem, hydro_rhs!, update_primitives!
+export max_signal_speed, floor_hits, hydro_dt
+export conserved_totals, conserved_scales, hydro_solve!, convergence_rate
+
+# The entropy wave: the mesh, the exact cell averages, the study
+export EntropyWave, hydro_forest
+export fill_entropywave_averages!, entropywave_reference, entropywave_errors
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -79,5 +94,9 @@ include("eos.jl")
 # `riemann_flux` turns that pair into the flux through it.
 include("reconstruction.jl")
 include("riemann.jl")
+# The right-hand side that calls all of the above over a mesh, and the
+# first case to run on it.
+include("evolution.jl")
+include("entropywave.jl")
 
 end # module TreeHydro
