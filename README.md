@@ -30,20 +30,22 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the scheme solves something — second order and conservative on
-a uniform mesh; the adaptive half is next.** What exists is the module
-shell, the `Base` bridges for software floating-point types, the
-host-copy helpers, the tests that say the pinned TreeAMR still provides
-what the scheme is written against, the ideal-gas equation of state, the
-conversions between the conserved and primitive states, the two floor
-rules, the MUSCL reconstruction with its three slope limiters, the LLF,
-HLLE and HLLC fluxes, and — from step 3 — the six-step right-hand side
-over the mesh with its three kernels, SSPRK33 in time, and the entropy
-wave. That wave is an exact solution of the nonlinear system, and it
-measures second order in L1 and L∞ in one and two dimensions and all
-`D + 2` conserved integrals constant to a few ulp of their own scale.
-Still missing: Sod against an exact Riemann solver, the coarse-fine
-faces, the refinement criterion and the driver.
+**Status: the scheme captures shocks — milestone H1 is done, and the
+adaptive half is next.** What exists is the module shell, the `Base`
+bridges for software floating-point types, the host-copy helpers, the
+tests that say the pinned TreeAMR still provides what the scheme is
+written against, the ideal-gas equation of state, the conversions between
+the conserved and primitive states, the two floor rules, the MUSCL
+reconstruction with its three slope limiters, the LLF, HLLE and HLLC
+fluxes, the six-step right-hand side over the mesh with its three kernels,
+SSPRK33 in time, and two cases. The entropy wave is an exact solution of
+the nonlinear system, and it measures second order in L1 and L∞ in one and
+two dimensions with all `D + 2` conserved integrals constant to a few ulp
+of their own scale. Sod's shock tube runs against Toro's exact Riemann
+solution through a Dirichlet boundary — the first use of TreeAMR's
+physical-boundary hook by any downstream package — at an L1 rate of 0.903,
+with the tube giving the same answer along every axis *bit for bit*. Still
+missing: the coarse-fine faces, the refinement criterion and the driver.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'

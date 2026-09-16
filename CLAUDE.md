@@ -33,9 +33,9 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0) done; H1 most of the way — the scheme runs, and the
-first numbers are measured.** `CODE.md` is complete and reviewed. What
-exists: `Project.toml` with the `[sources]` pin to TreeAMR's GitHub
+**Scaffolding (H0) and the scheme on a uniform mesh (H1) are done.**
+`CODE.md` is complete and reviewed. What exists: `Project.toml` with the
+`[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
 `ceilint`, `floorint`, `tofloat64`) and `src/device.jl` (`to_backend`,
 `hostcopy`, `hostcopy!`), both ported from TreeWave; `src/floors.jl`
@@ -47,28 +47,41 @@ exists: `Project.toml` with the `[sources]` pin to TreeAMR's GitHub
 for `:none`, `:minmod` and `:mc`, and `face_states`) and `src/riemann.jl`
 (`physical_flux`, `signal_speed`, and `riemann_flux` for `:llf`, `:hlle`
 and `:hllc`) from step 2 — all `isbits`, pointwise, kernel-callable,
-non-allocating and inferred; and from step 3 `src/evolution.jl`
+non-allocating and inferred; from step 3 `src/evolution.jl`
 (`HydroProblem`, the three kernels `con2prim_kernel!`, `flux_kernel!` and
 `divergence_kernel!`, `hydro_rhs!`, `update_primitives!`,
 `max_signal_speed`, `floor_hits`, `hydro_dt`, `conserved_totals`,
 `conserved_scales`, `hydro_solve!`, `convergence_rate`) and
 `src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
 `fill_entropywave_averages!`, `entropywave_reference`,
-`entropywave_errors`). Tests: `test/precision_tests.jl`,
+`entropywave_errors`); and from step 4 `src/exact_riemann.jl`
+(`ExactRiemann`, `exact_riemann`, `sample`, `max_signal_speed(::ExactRiemann)`
+— host `Float64`, Toro ch. 4, a *reference* and not a flux) and
+`src/sod.jl` (`SodTube`, `sod_state`, `sod_initial`, `sod_conserved`,
+`sod_boundary`, `sod_forest`, `sod_reference`, `assert_no_arrival`,
+`sod_errors`). Tests: `test/precision_tests.jl`,
 `test/prerequisite_tests.jl`, `test/eos_tests.jl`,
-`test/riemann_tests.jl`, `test/evolution_tests.jl` and
-`test/entropywave_tests.jl`; CI and a `README.md`. The milestones are
-H0–H6 in `CODE.md`; H1 (the scheme on a uniform mesh) is in progress, and
-`PLAN.md` breaks it into steps 1–4, of which step 4 (Sod and the exact
-Riemann solver) is next.
+`test/riemann_tests.jl`, `test/evolution_tests.jl`,
+`test/entropywave_tests.jl`, `test/exact_riemann_tests.jl` and
+`test/sod_tests.jl`; CI and a `README.md`. The milestones are
+H0–H6 in `CODE.md`; H1 covered steps 1–4, and `PLAN.md`'s step 5 (the
+static two-level mesh, H2) is next.
 
-The first measured numbers are in `CODE.md`'s "Measured results": the
+The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
 (rates 2.02 and 2.03), second order in L1 and **1.35 in L∞** with `:mc`
 (the limiter clipping the smooth extrema, which is why the study runs
 with `:none`), and all `D + 2` conserved integrals hold to a few ulp of
 their own scale on the uniform mesh with the fixup and — bit-identically
-— without it.
+— without it. Sod converges against the exact Riemann solution at an L1
+rate of **0.903** with `:minmod` and **0.945** with `:mc` over
+`N = 16 … 128`; the exact solver reproduces Toro's Table 4.3 for tests 1,
+2 and 3 to the last digit the table prints; the tube gives the same answer
+along every axis **bit for bit**, ghosts included, and the `D = 2` planar
+tube equals the `D = 1` run with `S_y` exactly zero; and where the
+boundary is physical the drift *is* the boundary flux, the momentum total
+moving by exactly `(p_L − p_R)·t_end·A` while mass and energy do not move.
+No floor has fired in any run of any case yet.
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
@@ -76,9 +89,10 @@ defined.
 
 ## Commands
 
-The full suite (about 50 s after step 3, most of it the entropy wave's
-convergence studies), and the same at four threads — `Pkg.test` does not
-inherit `-t`, so it has to be passed explicitly:
+The full suite (about 50 s after step 4 — 45 s at one thread and 41 s at
+four, most of it the entropy wave's and Sod's convergence studies), and
+the same at four threads — `Pkg.test` does not inherit `-t`, so it has to
+be passed explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -153,7 +167,23 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
 - **Dirichlet-from-initial-data reflects once a wave arrives.** The
   driver asserts `t_end · λ_max` against the distance to the nearest
   physical boundary before the run. If that assertion fires, shorten
-  `t_end` or enlarge the box; do not remove it.
+  `t_end` or enlarge the box; do not remove it. `assert_no_arrival` in
+  `src/sod.jl` is the shock tube's copy of it, and it is written on the
+  *characteristic* speed rather than on the shock's own travel, which is
+  conservative by about 25% on Sod's data and conservative in the right
+  direction.
+- **The initial data's `max_signal_speed` is not a bound for a resolving
+  discontinuity** (measured in step 4). A Riemann problem's fastest signal
+  is not present at `t = 0`: Sod's initial data carries nothing above
+  `c_L = 1.18322` and the gas behind its shock carries 2.19157, a factor
+  of **1.8522**. So a `λ_max` measured at the start of a chunk can be
+  exceeded *within* that chunk, and the end-of-chunk recheck is a detector
+  rather than a guard — it fires after the damage. The driver therefore
+  needs a headroom factor as a case parameter beside the recheck, and
+  Sod's 1.8522 is the number that sizes it. `sod_errors` sidesteps this by
+  taking `λ` from the exact solution, which no driver can do. A second,
+  smaller term: the *discrete* state sits above the exact supremum at a
+  discontinuity by about half a percent at `N = 16`, falling with `h`.
 - **The CFL recheck at chunk end throws on purpose.** `λ_max` is measured
   once per chunk; if a chunk's fastest signal grew past the step it
   used, the fix is a shorter `chunk` or a smaller `cfl`, not deleting

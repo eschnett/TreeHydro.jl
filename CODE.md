@@ -12,14 +12,17 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: milestone H0 (scaffolding) done, and H1 most of the way — the
-equation of state, the two state conversions and the floors are written
-(step 1), the reconstruction and the three Riemann fluxes (step 2), and
-the six-step right-hand side, the time integration and the entropy wave
-(step 3); Sod and the exact Riemann solution are not.* The first measured
-numbers are in [Measured results](#measured-results): the scheme's order
-and the conservation of all `D + 2` integrals on the uniform mesh.
-Everything else below is still unmeasured.
+*Status: milestones H0 (scaffolding) and H1 (the scheme on a uniform mesh)
+done — the equation of state, the two state conversions and the floors
+(step 1), the reconstruction and the three Riemann fluxes (step 2), the
+six-step right-hand side, the time integration and the entropy wave (step
+3), and the exact Riemann solver, Sod's shock tube and the Dirichlet
+boundary hook (step 4).* The measured numbers are in
+[Measured results](#measured-results): the scheme's order on smooth data,
+its L1 rate against the exact Riemann solution, the conservation of all
+`D + 2` integrals on the uniform mesh, and the boundary flux that replaces
+that claim where a boundary is physical. Everything from the coarse-fine
+faces on is still unmeasured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -437,6 +440,41 @@ is constant (Sod), nearly constant (Kelvin–Helmholtz) or decreasing
 (Sedov, after the deposition), so the per-chunk value is a bound in
 practice; the check is what makes that a fact rather than a hope.
 
+**(Amended in step 4: "constant for Sod" is wrong, and the driver needs a
+headroom factor beside the recheck.)** A Riemann problem's fastest signal
+is *not in its initial data*. Sod's initial data carries nothing above
+`c_L = sqrt(7/5) ≈ 1.18322`; the gas behind the shock, which does not
+exist until the discontinuity resolves, carries
+`u★ + c★_R ≈ 2.19157`. The ratio is **1.8522** (measured in step 4; see
+[Measured results](#measured-results)), so a step sized from
+`max_signal_speed(p)` at the start of a chunk would run the first steps of
+that chunk at nearly twice the CFL number it asked for. The speed is
+constant in the sense that matters — it stops growing once the waves are
+formed — and that is exactly the wrong sense for a `λ_max` measured at
+`t = 0`.
+
+Two consequences, one taken now and one recorded for step 7:
+
+- **The shock tube takes its `λ` from the exact solution.**
+  `max_signal_speed(::ExactRiemann)` is the supremum over all time, by
+  construction, so `sod_errors` needs no headroom at all. That is
+  available because Sod has a closed-form solution; the driver will not
+  have one.
+- **The per-chunk `λ_max` needs a headroom factor, as a case parameter,
+  beside the end-of-chunk recheck.** The recheck is a detector, not a
+  guard: it fires *after* the chunk that violated the condition has
+  already been integrated. Sod's 1.8522 is the number that sizes the
+  factor — it is the largest growth within a chunk that any case here
+  produces, and it is produced by the first chunk of a shock tube, which
+  is the configuration the driver will meet on Sod, on Sedov's deposition
+  and on any restart from discontinuous initial data. A second, much
+  smaller contribution is measured beside it: the *discrete* state sits
+  above the exact supremum at a discontinuity by 0.49% at `N = 16`, falling
+  to 0.0056% at `N = 128`, because a reconstruction of a jump produces a
+  face state the exact solution does not contain. The driver is not
+  designed here; the fact and the number are recorded so that it is not
+  designed without them.
+
 The Amdahl term TreeWave measured — the integrator's serial stage
 arithmetic capping a threaded step at 3.6× — applies here unchanged and
 is not TreeHydro's to fix. A hand-written SSPRK33 with its stage updates
@@ -759,6 +797,41 @@ mesh whose refined region touches a Dirichlet boundary is the
 configuration that would show a mistake there; the Sod tests include one
 on a face, and the Sedov tests include one on an edge and a corner.
 
+**(Implemented in step 4.)** The shock tube is the first downstream use of
+the physical-boundary path, and `src/sod.jl` uses it through
+`boundary_by_coordinates(AllVariables(x -> prim2con(eos, sod_state(w, x))))`
+handed to `HydroProblem`'s `boundary` keyword, which step 3 put in the
+signature for this. What the exercise showed:
+
+- **One callback serves the interior at setup and the exterior forever.**
+  The same `AllVariables` object goes to `fill_by_coordinates!` and, wrapped
+  in `boundary_by_coordinates`, to `fill_ghosts!`. That they are the same
+  object is what makes the boundary exact rather than merely consistent, and
+  it is the shape the other three cases will copy.
+- **The claim has to be made after the run, not before it.** At `t = 0`
+  every ghost cell holds the initial state whether the hook ran or not,
+  because the interior does too. After seventy steps the interior near the
+  diaphragm has moved, and then the two halves separate: the outer `x`
+  ghosts still hold the left and right conserved states *exactly*, while the
+  transverse ghosts hold the evolved interior of their periodic neighbour.
+  A test written at `t = 0` would pass with no hook at all.
+- **The corner and edge regions of a Dirichlet face are filled.** With
+  `D = 2`, the outer `x` ghosts hold the boundary state over the whole
+  transverse extent, the transverse ghost rows included — TreeAMR fills
+  them unconditionally, so the tube's two faces already exercise a little
+  of what Sedov's six will exercise in full.
+- **Transverse periodicity is not a detail.** A Dirichlet condition applied
+  across the tube instead of along it would be wrong from the first step and
+  would still produce a profile that looks like a shock tube, which is why
+  both halves are asserted rather than only the interesting one.
+- **Direction independence came out bit for bit**, over the whole stored
+  array including the ghosts the hook wrote: see
+  [Measured results](#measured-results).
+
+Not yet exercised: the hook in `regrid!` and in `adapt_to_initial_data!`,
+which arrive with the driver, and a refined region touching a Dirichlet
+face, which is step 5's.
+
 ## The cases
 
 Four initial conditions. As in TreeWave, none is a variation on another:
@@ -781,7 +854,8 @@ same at every RHS evaluation; an all-variables form of
 `CellBoundary` is therefore an **upstream prerequisite** (decided; see
 [Upstream prerequisites](#upstream-prerequisites)), and the cases are
 written against it.
-**Point samples at cell centers**, not cell averages (proposed): every
+**Point samples at cell centers**, not cell averages (decided in step 4,
+which is the first case to use them): every
 case but the entropy wave is discontinuous or nearly so, where a cell
 average is no better defined than a sample, and the initial-data cycle
 re-evaluates the data on every mesh it produces, which a closed-form
@@ -852,10 +926,10 @@ so.
 **Reference:** the exact Riemann solution (Toro's pressure iteration and
 sampling), host `Float64` code in the role TreeWave's Hankel table
 plays, evaluated at cell centers and compared in the volume-weighted L1
-norm. **(predicted)** L1 convergence at a rate between 0.8 and 1 on a
-uniform mesh, as a limited second-order scheme gives on a solution with a
-contact and a shock — this is a check that the scheme is right, not a
-claim of order.
+norm. **(measured in step 4: 0.903)** L1 convergence at a rate between 0.8
+and 1 on a uniform mesh, as a limited second-order scheme gives on a
+solution with a contact and a shock — this is a check that the scheme is
+right, not a claim of order.
 
 **What it measures beyond that:**
 
@@ -868,7 +942,8 @@ claim of order.
   cells**, reduced onto a common grid as `track_shock` does, with the
   uniform coarse mesh as the control that says refinement bought
   something.
-- **Direction independence, bit for bit** (predicted). On a uniform mesh
+- **Direction independence, bit for bit** (measured in step 4: both
+  halves hold, with no differing entry anywhere). On a uniform mesh
   the tube along `y` is the tube along `x` transposed, and the `D = 2`
   planar tube's profile equals the `D = 1` run's: the transverse flux
   differences are *exactly* zero (both faces see identical states), and
@@ -879,6 +954,52 @@ claim of order.
 
 `D = 3` is a smoke test at small size; the planar tube in 3D exercises
 nothing the 2D one does not, except cost.
+
+**(Implemented in step 4.)** `src/exact_riemann.jl` and `src/sod.jl`,
+measured on the *uniform* mesh; the two-level Sod forest whose refined
+region touches the Dirichlet face is step 5's. The numbers are in
+[Measured results](#measured-results). What the writing settled:
+
+- **The `t ≈ 0.29` above is the shock's travel time, and the assertion is
+  made on the characteristic speed instead.** `assert_no_arrival` compares
+  `t_end · λ` against the distance from the diaphragm to the nearer
+  physical boundary, with `λ` the supremum of `|v| + c_s` over the exact
+  solution, so it permits `t_end < 0.228` rather than `0.285`. That is
+  conservative by the right amount and in the right direction: the
+  boundary state is exact only while *nothing* has reached it, and a
+  characteristic carries information a shock front does not.
+- **The parameters are a struct**, `SodTube(T, Val(D); ρ_L = 1, v_L = 0,
+  p_L = 1, ρ_R = 1//8, v_R = 0, p_R = 1//10, γ = 7//5, x₀ = 1//2, L = 1,
+  direction = 1, floors)`, `isbits` and carrying its own EOS and floors, as
+  `EntropyWave` is. **The tube's axis is a type parameter**, not a field,
+  so that the coordinate the initial data reads is a compile-time index
+  rather than a runtime index into a tuple — which matters because the
+  initial-data callback is also the boundary hook and runs as a kernel at
+  every right-hand-side evaluation.
+- **The forest is a tuple of root counts**, not one count. The two kinds of
+  direction are not alike: the tube wants several roots and the transverse
+  directions want one, since the solution is uniform across the tube and a
+  planar tube wastes nothing by being thin. TreeAMR's blocks are cubes, so
+  the transverse *extents* follow from the tube's root spacing rather than
+  being given — a box of side `L` across would be `roots[direction]` times
+  too much mesh.
+- **`λ` comes from the exact solution**, which is the amendment recorded
+  under [Time integration and the time
+  step](#time-integration-and-the-time-step) and the one thing about this
+  case that generalizes badly: a driver without a closed-form solution
+  cannot do the same and needs a headroom factor instead.
+- **The conservation claim is a different claim here.** With a physical
+  boundary the domain integral is not constant, and the entropy wave's
+  "constant to roundoff" is simply false. What replaces it is sharper: until
+  a wave arrives, both sides of each boundary face are in that face's own
+  initial state, which is at rest, so the only nonzero component of the
+  Euler flux there is the pressure, and the momentum total must move by
+  exactly `(p_L − p_R) · t_end · A` while the mass and the energy totals do
+  not move at all. That is an equality with a closed form, and it fails for
+  a forgotten hook, for a reflecting boundary and for a run long enough for
+  a wave to arrive. The roundoff conservation claim proper is made for Sod
+  on a refined mesh in step 5, as the *difference* between two runs sharing
+  this same boundary flux.
 
 ### Sedov blast wave
 
@@ -1231,9 +1352,10 @@ Each has an acceptance test; serial `Float64` correctness first.
     `OrdinaryDiffEqSSPRK` and `SciMLBase` are dependencies from H0 and
     unused until H1c, so that the floor is fixed before anything relies
     on it.
-- **H1 — The scheme on a uniform mesh.** EOS, `con2prim`, MUSCL with the
-  three limiters, LLF and HLLE, SSPRK33, the six-step RHS with `D` flux
-  sets — on a single-level periodic forest, `D = 1, 2` (3D smoke).
+- **H1 — The scheme on a uniform mesh.** *(Done.)* EOS, `con2prim`, MUSCL
+  with the three limiters, LLF, HLLE and HLLC, SSPRK33, the six-step RHS
+  with `D` flux sets, the exact Riemann solver and the Dirichlet boundary
+  hook — on a single-level forest, `D = 1, 2` (3D smoke).
   *Accept:* the entropy wave converges at second order in L1 and L∞ with
   `:none`, and in L1 with `:mc` (amended in step 3: the first draft said
   "near it" in both norms under a limiter, and the measurement says
@@ -1241,9 +1363,45 @@ Each has an acceptance test; serial `Float64` correctness first.
   [Measured results](#measured-results)); Sod against the exact Riemann
   solution at an L1 rate in `[0.8, 1.0]`; direction independence bit for
   bit; every conserved integral constant to roundoff (every face is a
-  same-level face, with or without the fixup — the control). *The entropy
-  wave, the right-hand side and the conservation control are done and
-  measured (step 3); Sod is step 4.*
+  same-level face, with or without the fixup — the control).
+
+  What H1 measured, across steps 1–4, all of it in
+  [Measured results](#measured-results) and all of it identical at one and
+  at four threads:
+
+  - **Second order on smooth data**: the entropy wave at L1 and L∞ rates
+    2.015 and 2.024 in `D = 1`, 2.021 and 2.029 in `D = 2`, with `:none`;
+    and the semi-discrete residual — one right-hand-side evaluation against
+    the exact time derivative of the exact cell averages, with no time
+    stepping in it — at 2.033.
+  - **What a limiter costs on smooth data**: `:mc` keeps the L1 rate (2.006)
+    and loses the L∞ one (1.354, falling toward the 1 the theory gives),
+    which is why the convergence study runs with `:none`. The prediction was
+    wrong and is amended rather than met.
+  - **First order, near enough, on a discontinuous one**: Sod at an L1 rate
+    of 0.903 under `:minmod` and 0.945 under `:mc` over `N = 16 … 128`,
+    inside the predicted 0.8 to 1.
+  - **Conservation on the uniform mesh**: all `D + 2` integrals to a few ulp
+    of their own scale in `D = 1, 2, 3`, with the drift *per step* falling
+    as `N` rises, and **bit-identical with the fixup and without it** —
+    which is the control that gives H2's coarse-fine claim its meaning. No
+    floor fired in any run of any case.
+  - **The boundary flux where a boundary is physical**: Sod's momentum total
+    moves by exactly `(p_L − p_R) · t_end · A` while its mass and energy
+    totals do not move, which is the form the conservation claim takes when
+    the domain integral is not constant.
+  - **Direction independence, bit for bit, both halves**, over the whole
+    stored array including the ghosts the boundary hook wrote.
+  - **`λ_max` from the initial data is not a bound.** Sod's post-shock gas
+    is 1.8522 times faster than anything at `t = 0`, which is the amendment
+    under [Time integration and the time
+    step](#time-integration-and-the-time-step) and the number that will size
+    the driver's headroom factor in H3.
+
+  The pieces H1 wrote but did not measure: HLLC, which is step 10's
+  comparison; the two-level `hydro_forest`, which is H2's; and the boundary
+  hook's other two call sites, `regrid!` and `adapt_to_initial_data!`, which
+  are H3's.
 - **H2 — Coarse-fine faces, static mesh.** The two-level `hydro_forest`,
   the fixup, the boundary hook. *Accept:* conservation of all `D + 2`
   integrals to roundoff with the fixup and a leak without, in
@@ -1340,6 +1498,95 @@ averages, `D = 1`, `:none`, `N = 8, 16, 32` — converges at **2.033** in
 the volume-weighted L∞ norm. It is the sharpest and cheapest statement
 that the space discretization is second order, since no time stepping and
 no approximate reference enter it.
+
+### Step 4 — Sod on the uniform mesh
+
+Sod's states on `[0, 1]`, `γ = 7/5`, `:minmod`, HLLE, `cfl = 2/5`, to
+`t = 1/5`, Dirichlet along the tube and periodic across it, `roots = 4`
+along the tube and one across. Errors are the volume-weighted norms of the
+whole `D + 2` component state vector against the exact Riemann solution
+sampled at cell centers.
+
+**The exact solver against Toro's Table 4.3**, tests 1, 2 and 3, each to
+one unit in the last decimal the table prints:
+
+| test | `p★` | `u★` | `ρ★_L` | `ρ★_R` | Newton steps |
+|---|---|---|---|---|---|
+| 1, Sod | 0.3031301781 | 0.9274526200 | 0.4263194282 | 0.2655737117 | 4 |
+| 2, the 123 problem | 0.0018938734 | 0.0 | 0.0218521182 | 0.0218521182 | 1 |
+| 3, the left blast | 460.89378749 | 19.597451389 | 0.5750622985 | 5.9992407048 | 4 |
+
+Every entry also agrees to `1e-4` *relative* except test 2's `p★`: the
+table prints 0.00189, which is five decimal places but only three
+significant digits, and the agreement is 3.9e-6 absolute, 2.0e-3 relative.
+That is the table's rounding, recorded rather than absorbed into a looser
+tolerance.
+
+**L1 convergence**, `D = 1`:
+
+| `N` | cells | steps | L1 | L∞ |
+|---|---|---|---|---|
+| 16 | 64 | 71 | 1.668e-2 | 3.344e-1 |
+| 32 | 128 | 141 | 8.501e-3 | 1.997e-1 |
+| 64 | 256 | 281 | 4.537e-3 | 2.226e-1 |
+| 128 | 512 | 562 | 2.553e-3 | 3.398e-1 |
+
+**L1 rate 0.903**, inside the predicted 0.8 to 1, with the errors falling
+monotonically. L∞ is recorded and nothing is asserted on it: on a solution
+with a shock in it, L∞ is the error in the one cell nearest the
+discontinuity and does not even decrease with `h`. Under `:mc` the same
+sweep gives 0.945, which is the number to beat when HLLC is measured.
+
+**The signal speed, and why the driver will need headroom.**
+
+| | value |
+|---|---|
+| `λ` from the exact solution, `u★ + c★_R` | **2.191566** |
+| `λ` from the initial data, `c_L = sqrt(7/5)` | 1.183216 |
+| **ratio** | **1.85221** |
+| `u★ + c★_L`, the gas behind the contact | 1.925175 |
+| shock speed | 1.752156 |
+
+The fastest signal is in the post-shock gas, which does not exist at
+`t = 0`. The *discrete* state overshoots the exact supremum slightly at the
+discontinuity — `λ_final/λ` is 1.00491, 1.00175, 1.00035, 1.000056 at
+`N = 16 … 128` under `:minmod` and 1.00775 … 1.00439 under `:mc` — because
+a reconstruction of a jump produces a face state the exact solution does
+not contain. Both numbers are recorded against
+[Time integration and the time step](#time-integration-and-the-time-step).
+
+**Direction independence, bit for bit, both halves.** With `N = 16`,
+`roots = 4` along the tube and the same 71 steps in every run:
+
+- the `D = 2` tube along `y`, transposed and with its two momentum
+  components swapped, equals the tube along `x` in **every entry of the
+  whole stored array** — ghosts included, blocks matched by their
+  transposed origins, 0 differences out of 25 600 comparisons;
+- the `D = 2` planar tube's profile equals the `D = 1` run's in every
+  entry, and `S_y` is exactly zero everywhere.
+
+The two `D = 2` runs' `l1` differ in the last ulp, which is the same
+numbers summed in a different order; the claim is made on the solution and
+not on the norm, and the `D = 1` and `D = 2` `l1` differ by exactly 3/4
+because the norm divides by the number of stored entries and there are
+four variables rather than three.
+
+**The drift is the boundary flux.** With a physical boundary the domain
+integral is not constant, so the entropy wave's claim does not apply. Until
+a wave arrives both sides of each boundary face are in that face's own
+initial state — at rest — so the only nonzero flux there is the pressure,
+in the momentum row. At `N = 16`:
+
+| `D` | momentum drift | `(p_L − p_R)·t_end·A` | mass | energy | `S_y` |
+|---|---|---|---|---|---|
+| 1 | 0.17999999994 | 0.18 | 2.1e-11 | 4.7e-11 | — |
+| 2 | 0.04499999998 | 0.045 | 5.8e-12 | 1.3e-11 | **0** |
+
+Mass and energy would cross exactly nothing; the `1e-11` is the numerical
+rarefaction's foot having diffused a little way toward the left boundary by
+`t = 1/5`, and it is roundoff from `N = 32` on. The transverse momentum
+drifts by *exactly* zero. **No floor fired in any run**, in any dimension,
+at any resolution.
 
 ## Possible extensions
 
