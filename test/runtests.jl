@@ -10,4 +10,5 @@ using TreeHydro
 @testset "TreeHydro.jl" begin
     include("precision_tests.jl")
     include("prerequisite_tests.jl")
+    include("eos_tests.jl")
 end
