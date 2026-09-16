@@ -33,14 +33,26 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0) done; no physics yet.** `CODE.md` is complete and
-reviewed. What exists: `Project.toml` with the `[sources]` pin to
-TreeAMR's GitHub `main`; `src/TreeHydro.jl`, the module shell;
-`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
-`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
-TreeWave; `test/precision_tests.jl` and `test/prerequisite_tests.jl`; CI
-and a `README.md`. The milestones are H0–H6 in `CODE.md`; H1 (the scheme
-on a uniform mesh) is next, and `PLAN.md` breaks it into steps 1–3.
+**Scaffolding (H0) done; H1 begun — the equation of state and the floors
+exist, the scheme does not.** `CODE.md` is complete and reviewed. What
+exists: `Project.toml` with the `[sources]` pin to TreeAMR's GitHub
+`main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
+`ceilint`, `floorint`, `tofloat64`) and `src/device.jl` (`to_backend`,
+`hostcopy`, `hostcopy!`), both ported from TreeWave; `src/floors.jl`
+(`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
+`src/eos.jl` (`EquationOfState`, `IdealGas`, `pressure`,
+`internal_energy`, `soundspeed`, the state accessors `statedims`,
+`density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
+`prim2con` / `con2prim`) from step 1 — all `isbits`, pointwise, and
+kernel-callable; `test/precision_tests.jl`, `test/prerequisite_tests.jl`
+and `test/eos_tests.jl`; CI and a `README.md`. The milestones are H0–H6
+in `CODE.md`; H1 (the scheme on a uniform mesh) is in progress, and
+`PLAN.md` breaks it into steps 1–3, of which step 2 (reconstruction and
+Riemann fluxes) is next.
+
+`floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
+says so in its signature, and a signature is evaluated where the method is
+defined.
 
 ## Commands
 

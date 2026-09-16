@@ -12,8 +12,9 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: milestone H0 (scaffolding) done; the scheme itself is not written
-yet.* Nothing below is measured.
+*Status: milestone H0 (scaffolding) done, and H1 begun — the equation of
+state, the two state conversions and the floors are written (step 1); the
+scheme itself is not.* Nothing below is measured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -129,7 +130,7 @@ index `γ`:
 
     p = (γ − 1) ρ ε,     E = ρ ε + ½ ρ v²,     c_s² = γ p / ρ
 
-**Variable order** (proposed): index 1 is `ρ`, indices `2 … D+1` are the
+**Variable order** (decided): index 1 is `ρ`, indices `2 … D+1` are the
 `D` momentum (velocity) components, index `D+2` is `E` (`p`). The same
 positions in `U` and `P`, so that a kernel reading "variable `1+d`" reads
 the `d`-component of whichever set it was handed.
@@ -149,6 +150,44 @@ interface — `pressure(eos, ρ, ε)`, `internal_energy(eos, ρ, p)`,
 struct and nothing else. `γ` is stored in the working type `T`, and is a
 case parameter: Sod uses `7/5`, Kelvin–Helmholtz uses `5/3` (following
 the setups they are compared against).
+
+**(Implemented in step 1.)** What writing `src/eos.jl` and
+`src/floors.jl` settled, beyond the above:
+
+- **A state is an `NTuple{D+2,T}` and nothing indexes one by a literal.**
+  `density`, `velocity`, `momentum`, `pressure_of` and `energy` are the
+  accessors, and `statedims` is the `Val{D}` read off the tuple's length,
+  so every function is generic in `D` without being told it. A `P[3]`
+  that means the pressure in 1D and the second velocity component in 2D
+  is the mistake this removes; it is invisible at the call site.
+- **A non-positive or `NaN` density never reaches the division.** The
+  atmosphere condition is tested in `con2prim` *before* `S/ρ` is formed,
+  so `ρ ≤ 0` returns the atmosphere state rather than an `Inf` velocity
+  that a later comparison could not undo.
+- **Every floor comparison is the negation of the healthy condition** —
+  `!(ρ ≥ ρ_atm)`, `!(p ≥ p_floor)` — because a `NaN` fails `<` and `≥`
+  alike, and the natural spelling would report a state full of `NaN`s as
+  needing no floor. The consequence is a claim worth having: `hit` is
+  true for *any* `U` that is not a finite physical state. A `NaN` in `ρ`
+  yields the atmosphere state, which is finite; a `NaN` that reaches only
+  `p` yields `hit = true` and `p = p_floor` with `ρ` and `v` as they
+  came, since the two rules are rules about `ρ` and `p` and a repaired
+  velocity would make a broken state indistinguishable from a floored
+  one.
+- **`Floors` refuses `p_atm < p_floor`**, beside the three positivity
+  checks, because the atmosphere state would otherwise trip the pressure
+  floor and `apply_floors` would not be idempotent — the property the
+  stage reset of H4 rests on. With the check, idempotence holds *bit for
+  bit* rather than to roundoff: both rules select a state rather than
+  computing one.
+- **The recovery's cancellation is real, and it is not the floors'.**
+  `ε = (E − ½ S·S/ρ)/ρ` loses relative accuracy in proportion to
+  `½ρv²/(ρε)`, so a pressure floor orders of magnitude below the kinetic
+  energy survives a round trip through `U` only to that ratio, and
+  whether a state sitting exactly *on* `p_floor` trips it again is a
+  question about the last ulp. Idempotence is therefore claimed on
+  `apply_floors`, where it is exact, and the round trip is claimed on the
+  values and not on the flag.
 
 ## The scheme
 

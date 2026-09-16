@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Step 0 is done** (H0 marked *(Done.)* in `CODE.md`); step 1 is next.
+**Steps 0–1 are done; step 2 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a

@@ -30,11 +30,13 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: design complete; step 0 scaffolding done; nothing solves
-anything yet.** What exists is the module shell, the `Base` bridges for
-software floating-point types, the host-copy helpers, and the tests that
-say the pinned TreeAMR still provides what the scheme is written against.
-The physics starts at step 1.
+**Status: design complete; the scaffolding and the equation of state are
+done; nothing solves anything yet.** What exists is the module shell, the
+`Base` bridges for software floating-point types, the host-copy helpers,
+the tests that say the pinned TreeAMR still provides what the scheme is
+written against, and — from step 1 — the ideal-gas equation of state, the
+conversions between the conserved and primitive states, and the two
+floor rules. The scheme itself starts at step 2.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
