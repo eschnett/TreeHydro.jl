@@ -80,6 +80,9 @@ export conserved_totals, conserved_scales, hydro_solve!, convergence_rate
 export EntropyWave, hydro_forest
 export fill_entropywave_averages!, entropywave_reference, entropywave_errors
 
+# The exact Riemann solution: the shock tube's reference, and not a flux
+export ExactRiemann, exact_riemann, sample
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -98,5 +101,8 @@ include("riemann.jl")
 # first case to run on it.
 include("evolution.jl")
 include("entropywave.jl")
+# The host `Float64` reference the shock tube of step 4 is judged against.
+# It is not a flux and nothing in it is reachable from a kernel.
+include("exact_riemann.jl")
 
 end # module TreeHydro
