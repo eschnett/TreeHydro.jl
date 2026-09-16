@@ -30,8 +30,10 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestone H0 (scaffolding). The module shell, the `Base` bridges
-for software floats and the device helpers exist; no physics does yet.*
+*Status: milestone H1 in progress. The module shell, the `Base` bridges
+for software floats and the device helpers exist, and so do the equation
+of state, the two state conversions and the floors; the scheme itself —
+reconstruction, fluxes, the right-hand side — does not yet.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -46,7 +48,23 @@ using KernelAbstractions: Backend, CPU, allocate, get_backend
 # Devices
 export hostcopy
 
+# Floors and the atmosphere
+export Floors, apply_floors
+
+# Equation of state and the two state conversions
+export EquationOfState, IdealGas
+export pressure, internal_energy, soundspeed
+export statedims, density, velocity, momentum, pressure_of, energy
+export prim2con, con2prim
+
 include("precision.jl")
 include("device.jl")
+# `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
+# its signature, and a signature is evaluated where the method is defined.
+# The reverse dependency — `apply_floors` reading a state through the
+# accessors `eos.jl` defines — is resolved when it is called, not when it
+# is compiled.
+include("floors.jl")
+include("eos.jl")
 
 end # module TreeHydro
