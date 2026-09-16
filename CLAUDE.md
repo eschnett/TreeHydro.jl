@@ -33,22 +33,26 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0) done; H1 begun — the equation of state and the floors
-exist, the scheme does not.** `CODE.md` is complete and reviewed. What
-exists: `Project.toml` with the `[sources]` pin to TreeAMR's GitHub
-`main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
-`ceilint`, `floorint`, `tofloat64`) and `src/device.jl` (`to_backend`,
-`hostcopy`, `hostcopy!`), both ported from TreeWave; `src/floors.jl`
-(`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
-`src/eos.jl` (`EquationOfState`, `IdealGas`, `pressure`,
-`internal_energy`, `soundspeed`, the state accessors `statedims`,
-`density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
-`prim2con` / `con2prim`) from step 1 — all `isbits`, pointwise, and
-kernel-callable; `test/precision_tests.jl`, `test/prerequisite_tests.jl`
-and `test/eos_tests.jl`; CI and a `README.md`. The milestones are H0–H6
+**Scaffolding (H0) done; H1 begun — the per-cell physics of the scheme
+exists, the right-hand side that calls it does not.** `CODE.md` is
+complete and reviewed. What exists: `Project.toml` with the `[sources]`
+pin to TreeAMR's GitHub `main`; `src/TreeHydro.jl`, the module shell;
+`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
+`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
+TreeWave; `src/floors.jl` (`Floors`, `apply_floors`, `in_atmosphere`,
+`atmosphere_state`) and `src/eos.jl` (`EquationOfState`, `IdealGas`,
+`pressure`, `internal_energy`, `soundspeed`, the state accessors
+`statedims`, `density`, `velocity`, `momentum`, `pressure_of`, `energy`,
+and `prim2con` / `con2prim`) from step 1; `src/reconstruction.jl`
+(`slope` for `:none`, `:minmod` and `:mc`, and `face_states`) and
+`src/riemann.jl` (`physical_flux`, `signal_speed`, and `riemann_flux` for
+`:llf`, `:hlle` and `:hllc`) from step 2 — all `isbits`, pointwise,
+kernel-callable, non-allocating and inferred; `test/precision_tests.jl`,
+`test/prerequisite_tests.jl`, `test/eos_tests.jl` and
+`test/riemann_tests.jl`; CI and a `README.md`. The milestones are H0–H6
 in `CODE.md`; H1 (the scheme on a uniform mesh) is in progress, and
-`PLAN.md` breaks it into steps 1–3, of which step 2 (reconstruction and
-Riemann fluxes) is next.
+`PLAN.md` breaks it into steps 1–3, of which step 3 (the right-hand side
+and the entropy wave) is next.
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
@@ -111,6 +115,16 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   `U` are two mechanisms on purpose (owned cells versus prolongated
   ghosts and face states); do not merge them, and keep the floor counts
   by population — they are a measurement the design depends on.
+- **Face-state floor hits are not counted, and that is deliberate.**
+  `face_states` floors both reconstructed states and returns the states
+  alone. Under `:minmod` or `:mc` the floors cannot fire on physical cell
+  states at all — the face value lies between the two neighbouring cell
+  values — and under `:none` they can. The counts the design rests on are
+  the ones in *cells*, owned from the stage reset and ghost from
+  `con2prim`; a third count over face states, which are not cells and are
+  rebuilt at every stage, would blur the ghost count that decides the
+  upstream prolongation question. Do not add one to make the accounting
+  look symmetric.
 - **Conservation is claimed net of measured injection.** Where no cell is
   floored the totals before and after a reset are bit-identical and the
   injection is *exactly* zero; a test that sees a nonzero injection on

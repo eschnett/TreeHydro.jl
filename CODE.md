@@ -13,8 +13,9 @@ face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
 *Status: milestone H0 (scaffolding) done, and H1 begun — the equation of
-state, the two state conversions and the floors are written (step 1); the
-scheme itself is not.* Nothing below is measured.
+state, the two state conversions and the floors are written (step 1), and
+so are the reconstruction and the three Riemann fluxes (step 2); the
+right-hand side that calls them is not.* Nothing below is measured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -284,6 +285,34 @@ put its failures where they are hardest to handle. Characteristic-variable
 reconstruction is rejected for the GRMHD reason: the eigenvectors are
 expensive and nobody uses them there.
 
+**(Implemented in step 2.)** `src/reconstruction.jl` is `slope(lim, a, b)`
+for the three limiters and
+`face_states(lim, eos, floors, P₋₂, P₋₁, P₀, P₊₁) -> (P_L, P_R)`. What
+writing it settled:
+
+- **The face-state floor hits are not counted, anywhere.**
+  `face_states` returns the two floored states and discards both flags.
+  Under a TVD limiter they cannot fire on physical cell states at all —
+  the face value lies between the two neighbouring cell values, so a
+  positive `ρ` and `p` on both sides give a positive `ρ` and `p` at the
+  face, which is a testset of its own — and under `:none` they can,
+  which is why the call is there. The counts the design depends on are
+  the ones in *cells*, owned and ghost (see
+  [Floors and the atmosphere](#floors-and-the-atmosphere)); a third count
+  over face states, which are not cells and are rebuilt at every stage of
+  every step, would only blur the ghost count that decides the upstream
+  prolongation question.
+- **`:mc` is `minmod` applied twice**, not a third formula. Where
+  `a b > 0` all three candidates carry the sign of `a`, so the
+  smaller-magnitude rule composes: `minmod(minmod(2a, 2b), (a+b)/2)`; and
+  where `a b ≤ 0` the inner call already returns zero, so `:mc`'s
+  vanishing at an extremum comes from the same line that gives `:minmod`
+  its own. All three slopes are symmetric in their arguments and odd
+  under negation.
+- **A fourth limiter is refused at compile time** by not existing: a
+  symbol with no method is a `MethodError` where the kernel specializes,
+  not a branch taken in the middle of a run.
+
 ### Riemann solver
 
 Three fluxes, selected by a `Val` like the limiter, all needing only
@@ -311,6 +340,50 @@ every `D`.
 Deliberately **not** the flux: the exact Riemann solver. It exists in
 this package — as the *reference solution* for the shock tube — but it
 has no GRMHD counterpart as a flux and is not used as one.
+
+**(Implemented in step 2.)** `src/riemann.jl` is
+`physical_flux(eos, P, ::Val{d})`, `signal_speed(eos, P)` and
+`riemann_flux(::Val{:llf|:hlle|:hllc}, eos, P_L, P_R, ::Val{d})`. HLLC is
+written here beside the other two, and measured in H5. What writing them
+settled:
+
+- **`s_R − s_L > 0` is a fact about the floors, not about Davis's
+  estimate.** `s_R − s_L ≥ (v_L + c_L) − (v_L − c_L) = 2 c_L > 0` because
+  `c_s = sqrt(γ p / ρ)` is strictly positive wherever `ρ ≥ ρ_atm` and
+  `p ≥ p_floor`, which `apply_floors` guarantees of every state that
+  reaches a flux. So the HLL average never divides by zero, and the
+  guarantee is the floors' rather than the solver's.
+- **The HLLC transcription is Toro's**, *Riemann Solvers and Numerical
+  Methods for Fluid Dynamics*, 3rd ed., §10.4: the contact speed is
+  (10.37), the star state (10.39) with `E_K` the total energy per unit
+  *volume* so that `E_K/ρ_K` is the specific total energy, and
+  `F★_K = F_K + s_K (U★_K − U_K)` is (10.38). Davis's speeds are shared
+  with HLLE, so the two differ in the middle wave and in nothing else,
+  which is what makes the H5 comparison a comparison of that wave.
+- **HLLC's four-way cascade also removes the divisions that could
+  vanish.** `F_L` if `s_L ≥ 0`, else `F★_L` if `s★ ≥ 0`, else `F★_R` if
+  `s_R ≥ 0`, else `F_R`: the left star state is reached only when
+  `s_L < 0 ≤ s★` and the right one only when `s★ < 0 ≤ s_R`, so the
+  `s_K − s★` each divides by straddles zero. `s★`'s own denominator,
+  `ρ_L (s_L − v_L) − ρ_R (s_R − v_R)`, is a sum of two strictly negative
+  terms for the same reason `s_R − s_L` is positive.
+- **A stationary contact is exact under HLLC and wrong under HLLE by a
+  closed form.** With both states at rest and at equal pressure, Davis
+  gives `s_R = −s_L = max(c_L, c_R)` and the HLLE average collapses to
+  its dissipative term: its mass flux is `c (ρ_L − ρ_R)/2` where the
+  exact flux is zero. HLLC's `s★` is zero there and its star state is the
+  cell state, so it returns the exact flux `(0, p δ_id, 0)`. Both halves
+  are asserted in the tests; the second is what the H5 measurement is
+  about.
+- **LLF is at least as diffusive as HLLE**, and Sod's states *at rest*
+  are the degenerate pair where the two coincide exactly (`s_R = −s_L`
+  makes the two central terms equal and `|s_L s_R|/(s_R − s_L) = λ/2`).
+  Worth recording because "LLF is the diffusive one" is otherwise checked
+  on the one pair where it is not.
+- **The direction enters in two places only**: as an index into the
+  velocity tuple, and as the slot the pressure — and, in HLLC, the
+  contact speed — is written to with `Base.setindex`. One method serves
+  every `d` and every `D`, which a cyclic-permutation test asserts.
 
 ### Time integration and the time step
 
