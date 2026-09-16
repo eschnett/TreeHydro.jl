@@ -33,26 +33,42 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0) done; H1 begun — the per-cell physics of the scheme
-exists, the right-hand side that calls it does not.** `CODE.md` is
-complete and reviewed. What exists: `Project.toml` with the `[sources]`
-pin to TreeAMR's GitHub `main`; `src/TreeHydro.jl`, the module shell;
-`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
-`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
-TreeWave; `src/floors.jl` (`Floors`, `apply_floors`, `in_atmosphere`,
-`atmosphere_state`) and `src/eos.jl` (`EquationOfState`, `IdealGas`,
-`pressure`, `internal_energy`, `soundspeed`, the state accessors
-`statedims`, `density`, `velocity`, `momentum`, `pressure_of`, `energy`,
-and `prim2con` / `con2prim`) from step 1; `src/reconstruction.jl`
-(`slope` for `:none`, `:minmod` and `:mc`, and `face_states`) and
-`src/riemann.jl` (`physical_flux`, `signal_speed`, and `riemann_flux` for
-`:llf`, `:hlle` and `:hllc`) from step 2 — all `isbits`, pointwise,
-kernel-callable, non-allocating and inferred; `test/precision_tests.jl`,
-`test/prerequisite_tests.jl`, `test/eos_tests.jl` and
-`test/riemann_tests.jl`; CI and a `README.md`. The milestones are H0–H6
-in `CODE.md`; H1 (the scheme on a uniform mesh) is in progress, and
-`PLAN.md` breaks it into steps 1–3, of which step 3 (the right-hand side
-and the entropy wave) is next.
+**Scaffolding (H0) done; H1 most of the way — the scheme runs, and the
+first numbers are measured.** `CODE.md` is complete and reviewed. What
+exists: `Project.toml` with the `[sources]` pin to TreeAMR's GitHub
+`main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
+`ceilint`, `floorint`, `tofloat64`) and `src/device.jl` (`to_backend`,
+`hostcopy`, `hostcopy!`), both ported from TreeWave; `src/floors.jl`
+(`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
+`src/eos.jl` (`EquationOfState`, `IdealGas`, `pressure`,
+`internal_energy`, `soundspeed`, the state accessors `statedims`,
+`density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
+`prim2con` / `con2prim`) from step 1; `src/reconstruction.jl` (`slope`
+for `:none`, `:minmod` and `:mc`, and `face_states`) and `src/riemann.jl`
+(`physical_flux`, `signal_speed`, and `riemann_flux` for `:llf`, `:hlle`
+and `:hllc`) from step 2 — all `isbits`, pointwise, kernel-callable,
+non-allocating and inferred; and from step 3 `src/evolution.jl`
+(`HydroProblem`, the three kernels `con2prim_kernel!`, `flux_kernel!` and
+`divergence_kernel!`, `hydro_rhs!`, `update_primitives!`,
+`max_signal_speed`, `floor_hits`, `hydro_dt`, `conserved_totals`,
+`conserved_scales`, `hydro_solve!`, `convergence_rate`) and
+`src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
+`fill_entropywave_averages!`, `entropywave_reference`,
+`entropywave_errors`). Tests: `test/precision_tests.jl`,
+`test/prerequisite_tests.jl`, `test/eos_tests.jl`,
+`test/riemann_tests.jl`, `test/evolution_tests.jl` and
+`test/entropywave_tests.jl`; CI and a `README.md`. The milestones are
+H0–H6 in `CODE.md`; H1 (the scheme on a uniform mesh) is in progress, and
+`PLAN.md` breaks it into steps 1–4, of which step 4 (Sod and the exact
+Riemann solver) is next.
+
+The first measured numbers are in `CODE.md`'s "Measured results": the
+entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
+(rates 2.02 and 2.03), second order in L1 and **1.35 in L∞** with `:mc`
+(the limiter clipping the smooth extrema, which is why the study runs
+with `:none`), and all `D + 2` conserved integrals hold to a few ulp of
+their own scale on the uniform mesh with the fixup and — bit-identically
+— without it.
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
@@ -60,8 +76,9 @@ defined.
 
 ## Commands
 
-The full suite (a few seconds at H0), and the same at four threads —
-`Pkg.test` does not inherit `-t`, so it has to be passed explicitly:
+The full suite (about 50 s after step 3, most of it the entropy wave's
+convergence studies), and the same at four threads — `Pkg.test` does not
+inherit `-t`, so it has to be passed explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'

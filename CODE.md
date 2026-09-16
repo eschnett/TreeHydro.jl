@@ -12,10 +12,14 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: milestone H0 (scaffolding) done, and H1 begun — the equation of
-state, the two state conversions and the floors are written (step 1), and
-so are the reconstruction and the three Riemann fluxes (step 2); the
-right-hand side that calls them is not.* Nothing below is measured.
+*Status: milestone H0 (scaffolding) done, and H1 most of the way — the
+equation of state, the two state conversions and the floors are written
+(step 1), the reconstruction and the three Riemann fluxes (step 2), and
+the six-step right-hand side, the time integration and the entropy wave
+(step 3); Sod and the exact Riemann solution are not.* The first measured
+numbers are in [Measured results](#measured-results): the scheme's order
+and the conservation of all `D + 2` integrals on the uniform mesh.
+Everything else below is still unmeasured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -205,8 +209,27 @@ Three kinds of field set over one forest (decided):
 | set | centering | `nvars` | `G` | in the state vector | at a regrid |
 |---|---|---|---|---|---|
 | `U`, conserved | cell | `D+2` | `2` | yes | `U => schedule` (Conservative, `p = 3`) |
-| `P`, primitive | cell | `D+2` | `2` | no | `P => nothing` (resized; recomputed by the next RHS) |
+| `P`, primitive | cell | `D+4` | `2` | no | `P => nothing` (resized; recomputed by the next RHS) |
 | `F_d`, fluxes, `d = 1 … D` | `facecentered(D, d)` | `D+2` | `0` | no | `F_d => nothing` |
+
+**`P` carries two diagnostic slots beyond the `D + 2` primitives**
+(amended in step 3; it was `nvars = D+2` when this table was first
+written). Slot `D+3` is the cell's signal speed `max_d (|v_d| + c_s)` and
+slot `D+4` its floor-hit flag, `1` or `0`; the `con2prim` kernel writes
+both as it recovers each cell, over the stored extent like everything else
+it writes. They are there because `block_mapreduce` maps a *scalar*
+function over *one* variable's values and so cannot form `|v_d| + c_s`
+from three of them — the reduction would need the velocity and the sound
+speed of the same cell at once, which its signature does not offer. The
+kernel that already holds all `D + 2` primitives writes the number once,
+after which `λ_max` and the owned-cell floor count are plain
+`block_mapreduce` calls over one slot each, deterministic upstream and
+with no second pass over the data. The alternative — a reduction kernel of
+this package's own over the stored extent — would be mesh machinery
+written downstream, which `CLAUDE.md` rules out. (The *ghost*-cell floor
+count does need the stored extent, which `block_mapreduce` does not cover;
+that one is a one-item-per-block kernel summing slot `D+4`, and it arrives
+with the atmosphere reset.)
 
 `U` is the **only evolved set**, so the state vector is `statevector(U)`
 and the several-set form TreeAMR has specified is not needed. `G = 2` on
@@ -219,9 +242,9 @@ and what `p = 5` would need (`G ≥ 2`), so the order is free to move
 within the layout. `N ≥ 2G` puts `N ≥ 4`; tests use `N = 8`, demos
 `N = 16 … 32`.
 
-**`P` has the same layout as `U` and holds primitives in its ghost cells
-too** (decided). The reconstruction reads primitives at `i−2 … i+1`, so
-a block needs primitives two cells into its neighbours. There are two
+**`P` has `U`'s ghost width and centering, and holds primitives in its
+ghost cells too** (decided). The reconstruction reads primitives at
+`i−2 … i+1`, so a block needs primitives two cells into its neighbours. There are two
 ways to get them, and the choice is a real design decision because the
 two prolongate different quantities across a coarse-fine face:
 
@@ -590,6 +613,40 @@ widths, the limiter and the Riemann solver. It is rebuilt after every
 regrid and takes the existing `P` and `F_d` when it is, since `regrid!`
 already resized them.
 
+**(Implemented in step 3.)** `src/evolution.jl`, in `hydro_rhs!`, is the
+six steps above with nothing between them. What the writing settled:
+
+- **`HydroProblem(U, ops; eos, floors, limiter, riemann = :hlle, fixup =
+  true, boundary = nothing, prims = nothing, fluxes = nothing)`.** `U` is
+  the only field set the caller builds, because it is the only evolved
+  one; `P` and the `D` flux sets are scratch and the constructor allocates
+  them, or takes the ones a `regrid!` has already resized. `limiter` has
+  **no default** — the cases choose differently, and a default would pick
+  one of them silently — while `riemann` defaults to `:hlle`, which is
+  this document's decision and not the caller's. The layout obligations
+  are checked here rather than discovered later: `U` cell-centered with
+  `G ≥ 2` everywhere, `P` with `U`'s forest, ghost width and centering and
+  `nvars = D + 4`, the fluxes with `G = 0`.
+- **Three kernels, three ranges.** `con2prim_kernel!` runs under
+  `stored = true` and its index *is* the stored index; `flux_kernel!` runs
+  under `closed = true`, one launch per direction with a constant
+  `Val(d)`, and reads `P` at `c[d]−2 … c[d]+1` around face `I[d]`;
+  `divergence_kernel!` runs over the owned range and writes straight into
+  the state layout. The empty source slot is a comment on the line that
+  would carry `S(P)`.
+- **The boundary hook is passed through** `fill_ghosts!(U, schedule;
+  boundary)` from step 3 on, although the only case here is periodic and
+  hands it `nothing`: the hook is the part of the signature a Dirichlet
+  case needs, and adding it in step 4 would mean touching the right-hand
+  side again for it.
+- **Four helpers the driver will want** live beside the right-hand side
+  rather than inside it: `update_primitives!(p, u)` is steps (0)–(2)
+  alone, so a driver can refresh `P` for `λ_max` or for the refinement
+  criterion without computing fluxes; `max_signal_speed(p)` and
+  `floor_hits(p)` are the two reductions over the diagnostic slots, and
+  both require `P` to be current; `hydro_dt(forest, cfl, λ, Val(D))` is
+  the time step above.
+
 ## Conservation at coarse-fine faces
 
 The mechanism is TreeAMR's and needs nothing from this package but the
@@ -605,7 +662,12 @@ integral, and the claim is made for all of them:
   between, in `D = 1, 2, 3`; the drift does not grow with the step count.
   The negative control — `fixup = false`, the single difference — leaks
   by orders of magnitude more, and a uniform mesh conserves either way.
-  This is TreeAMR's M8b table, repeated for a system.
+  This is TreeAMR's M8b table, repeated for a system. The last clause —
+  the **uniform control** — is **(measured in step 3)** and is in
+  [Measured results](#measured-results): on a single-level mesh the two
+  runs agree bit for bit, since `restrict_interfaces!` has no coarse-fine
+  face to act on, and all `D + 2` integrals hold to a few ulp of their
+  own scale in `D = 1, 2, 3`. The refined half of the claim is step 5's.
 - The **momentum** is the new case: for a momentum component whose total
   is zero by symmetry (the Kelvin–Helmholtz `S_y`, the Sedov `S_d`), the
   drift is measured against the maximum of that component's `Σ hᴰ |S_d|`
@@ -747,6 +809,37 @@ exactly what HLLE diffuses most; the rate is unaffected, the constant is
 not, and the HLLE/HLLC comparison has its first number here.
 
 Not a demo: it lives in the tests and the viewer does not draw it.
+
+**(Implemented in step 3.)** `src/entropywave.jl`, measured on the
+*uniform* mesh (`refined = false`); the two-level runs are step 5's. The
+rates and the drifts are in [Measured results](#measured-results). What
+the writing settled:
+
+- **The parameters are a struct**, `EntropyWave(T, Val(D); ρ₀ = 1,
+  a = 1//5, v = 1, p₀ = 1, γ = 7//5, L = 1, floors)`, `isbits` and
+  carrying its own EOS and floors, so that one object is the whole case
+  and every default is a rational converted to `T`. `v_d = 1` in every
+  direction, so no momentum component is zero by accident; the floors sit
+  eight orders of magnitude below the data and never fire, which the tests
+  assert rather than assume.
+- **Everything is an exact cell average and there is no quadrature
+  anywhere.** The average of `sin(k Σ_d x_d)` over a cube of side `h` is
+  `((2/(kh)) sin(kh/2))^D` times its value at the center; `v` and `p` are
+  constant, so the averages of `S = ρ v` and `E = p/(γ−1) + ½ ρ v²` follow
+  from the averaged `ρ` exactly, and the reference at time `t` is the same
+  expression with `x_d → x_d − v_d t`. Unlike Burgers' sine, this solution
+  never becomes implicit, so the reference needs neither a Newton solve
+  nor a Gauss–Legendre oracle. The damping factor depends on the *block's*
+  own `h`, which is why the fill is a host loop and one `copyto!`.
+- **The `O(h²)` damping factor is not optional.** It is the same order as
+  the error being measured, so a reference built from point samples would
+  put an `O(h²)` floor under every number in the table and the study would
+  measure the initial data.
+- **`entropywave_errors` returns the whole claim**, not just an error:
+  the two norms, the per-variable drift *and* the per-variable scale it is
+  roundoff against, the floor count, `h`, the step count and the block
+  count. A run that conserved because nothing happened is then
+  distinguishable from one that conserved through something.
 
 ### Sod shock tube
 
@@ -1071,7 +1164,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` stage limiter and its injection accounting |
 | `src/reconstruction.jl` | the three slopes, face states |
 | `src/riemann.jl` | LLF, HLLE, HLLC fluxes, direction-generic |
-| `src/evolution.jl` | the kernels (`con2prim!`, flux, divergence), `HydroProblem`, `hydro_rhs!`, `max_signal_speed`, `hydro_dt` |
+| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `hydro_solve!`, `convergence_rate` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — and its diagnostics |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
@@ -1142,10 +1235,15 @@ Each has an acceptance test; serial `Float64` correctness first.
   three limiters, LLF and HLLE, SSPRK33, the six-step RHS with `D` flux
   sets — on a single-level periodic forest, `D = 1, 2` (3D smoke).
   *Accept:* the entropy wave converges at second order in L1 and L∞ with
-  `:none` and near it with `:mc`; Sod against the exact Riemann solution
-  at an L1 rate in `[0.8, 1.0]`; direction independence bit for bit;
-  every conserved integral constant to roundoff (every face is a
-  same-level face, with or without the fixup — the control).
+  `:none`, and in L1 with `:mc` (amended in step 3: the first draft said
+  "near it" in both norms under a limiter, and the measurement says
+  otherwise — `:mc` clips the smooth extrema and its L∞ rate is 1.35, see
+  [Measured results](#measured-results)); Sod against the exact Riemann
+  solution at an L1 rate in `[0.8, 1.0]`; direction independence bit for
+  bit; every conserved integral constant to roundoff (every face is a
+  same-level face, with or without the fixup — the control). *The entropy
+  wave, the right-hand side and the conservation control are done and
+  measured (step 3); Sod is step 4.*
 - **H2 — Coarse-fine faces, static mesh.** The two-level `hydro_forest`,
   the fixup, the boundary hook. *Accept:* conservation of all `D + 2`
   integrals to roundoff with the fixup and a leak without, in
@@ -1186,8 +1284,62 @@ Each has an acceptance test; serial `Float64` correctness first.
 
 ## Measured results
 
-None yet. This section takes the numbers as the milestones produce them,
-each beside the prediction it confirms or corrects.
+This section takes the numbers as the milestones produce them, each beside
+the prediction it confirms or corrects. Everything here is `Float64` on the
+CPU backend, and every number is identical at one and at four threads.
+
+### Step 3 — the entropy wave on the uniform mesh
+
+The M3 box with `roots = 4` left unrefined (`roots = 2` in `D = 3`),
+`ρ₀ = 1`, `a = 1/5`, `v_d = 1`, `p₀ = 1`, `γ = 7/5`, `L = 1`, HLLE,
+`cfl = 2/5`, to `t = 1/4` (`t = 1/8` in `D = 3`). Rates are the
+least-squares slope of the volume-weighted error of the whole `D + 2`
+component state vector against `h`, over the `N` listed.
+
+| `D` | limiter | `N` | L1 rate | L∞ rate |
+|---|---|---|---|---|
+| 1 | `:none` | 8, 16, 32, 64 | **2.015** | **2.024** |
+| 2 | `:none` | 8, 16, 32 | **2.021** | **2.029** |
+| 1 | `:mc` | 8, 16, 32, 64 | **2.006** | **1.354** |
+| 2 | `:mc` | 8, 16, 32 | **1.894** | **1.351** |
+
+Second order with `:none` in both norms and both dimensions, as predicted.
+With `:mc` the L1 rate survives and **the L∞ rate does not**: 1.35, and
+falling as `N` grows (1.49, 1.25, 1.36 between consecutive `D = 1` pairs;
+1.55 then 1.15 in `D = 2`). This is the TVD limiter clipping the sine's
+two smooth extrema, where it is first order by construction, so L∞ tends
+to 1 while the shrinking width of the clipped region leaves L1 at 2. The
+plan predicted "≥ 1.5 with `:mc`"; that prediction was wrong in L∞ and the
+tests assert 1.2, with the measured value recorded here rather than the
+threshold moved to meet it. It is also the reason the convergence study is
+run with `:none`: under a limiter the study measures the limiter.
+
+**Conservation, all `D + 2` integrals.** Worst over the `D + 2` variables
+of `|Σ hᴰ U_v(t_end) − Σ hᴰ U_v(0)|`, in ulp of that variable's own scale
+`Σ hᴰ |U_v|`:
+
+| `D` | limiter | steps | drift, ulp of the scale | per step |
+|---|---|---|---|---|
+| 1 | `:none` | 47 … 372 | 0.67 … 2.0 | ≤ 0.015 |
+| 2 | `:none` | 93 … 372 | 1.0 … 17.1 | ≤ 0.047 |
+| 1 | `:mc` | 47 … 372 | 0.67 … 1.33 | ≤ 0.015 |
+| 2 | `:mc` | 93 … 372 | 1.71 … 4.0 | ≤ 0.019 |
+| 3 | `:none` | 18 | 1.5 | 0.084 |
+
+Roundoff, and not growing with the step count — the drift per step *falls*
+as `N` rises. **With `fixup = false` every number above is bit-identical**,
+which is the uniform control: `restrict_interfaces!` has no coarse-fine
+face to act on, so switching it off must change nothing, and the tests
+assert the two runs agree bit for bit rather than merely both conserving.
+No floor fired anywhere (`floor_hits == 0` in every run), so the
+conservation claim here is the plain one and not one net of an injection.
+
+**The semi-discrete residual** — one right-hand-side evaluation on the
+exact initial averages against the exact time derivative of those
+averages, `D = 1`, `:none`, `N = 8, 16, 32` — converges at **2.033** in
+the volume-weighted L∞ norm. It is the sharpest and cheapest statement
+that the space discretization is second order, since no time stepping and
+no approximate reference enter it.
 
 ## Possible extensions
 

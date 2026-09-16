@@ -30,17 +30,20 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: design complete; the scaffolding and the per-cell physics of
-the scheme are done; nothing solves anything yet.** What exists is the
-module shell, the `Base` bridges for software floating-point types, the
+**Status: the scheme solves something — second order and conservative on
+a uniform mesh; the adaptive half is next.** What exists is the module
+shell, the `Base` bridges for software floating-point types, the
 host-copy helpers, the tests that say the pinned TreeAMR still provides
-what the scheme is written against, and — from steps 1 and 2 — the
-ideal-gas equation of state, the conversions between the conserved and
-primitive states, the two floor rules, the MUSCL reconstruction with its
-three slope limiters, and the LLF, HLLE and HLLC fluxes. They are
-pointwise functions of `isbits` tuples, so they run in a kernel on any
-backend; what is still missing is the right-hand side that calls them
-over a mesh, which is step 3.
+what the scheme is written against, the ideal-gas equation of state, the
+conversions between the conserved and primitive states, the two floor
+rules, the MUSCL reconstruction with its three slope limiters, the LLF,
+HLLE and HLLC fluxes, and — from step 3 — the six-step right-hand side
+over the mesh with its three kernels, SSPRK33 in time, and the entropy
+wave. That wave is an exact solution of the nonlinear system, and it
+measures second order in L1 and L∞ in one and two dimensions and all
+`D + 2` conserved integrals constant to a few ulp of their own scale.
+Still missing: Sod against an exact Riemann solver, the coarse-fine
+faces, the refinement criterion and the driver.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'

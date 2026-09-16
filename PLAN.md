@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–2 are done; step 3 is next.**
+**Steps 0–3 are done; step 4 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -62,7 +62,8 @@ writing kernels.
   `stage_limiter!` (step 8) and a driver call after `regrid!`; the
   RHS-level floor touches `P` only.
 - **`P` carries two diagnostic slots** beyond the `D + 2` primitives
-  (amended here, to be recorded in `CODE.md` at step 3): slot `D + 3` is
+  (amended here, and recorded in `CODE.md`'s "Field sets" in step 3):
+  slot `D + 3` is
   the cell's signal speed `max_d(|v_d| + c_s)`, slot `D + 4` is the
   floor-hit flag, both written by the `con2prim` kernel. They exist
   because `block_mapreduce` maps a scalar function over one variable's
