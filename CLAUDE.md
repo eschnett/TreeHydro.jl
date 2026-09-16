@@ -174,10 +174,10 @@ Match TreeAMR's, since the three packages are read together:
 
 ## Repository facts
 
-- **There are commits; there is still no remote.** Work on a branch, and
-  do not push, open a pull request, or merge to `main` without being
-  asked. The first commit is the design documents; H0 is on
-  `claude/step-0-scaffolding`.
+- **`origin` is `git@github.com:eschnett/TreeHydro.jl.git`, and `main` tracks
+  it.** Work on a branch, and do not push, open a pull request, or merge
+  to `main` without being asked. Each step lands on `main` only after
+  review.
 - `TODO.md` is Erik's personal to-do list. **Do not modify it.**
   `TODO.md~` is an editor backup, not a file of this package. Both are
   kept out of the tree by `.gitignore`.
