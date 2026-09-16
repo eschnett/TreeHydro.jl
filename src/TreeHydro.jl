@@ -30,13 +30,14 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestone H1 in progress. The scheme runs on a uniform mesh: the
+*Status: milestone H1 done. The scheme runs on a uniform mesh: the
 equation of state, the two state conversions and the floors, the MUSCL
 reconstruction with its three limiters, the three Riemann solvers, the
-six-step right-hand side with its three kernels, SSPRK33 in time, and the
-entropy wave, which measures second order and conservation to roundoff.
-Sod and the exact Riemann solution, the coarse-fine faces, the refinement
-criterion and the driver are still to come.*
+six-step right-hand side with its three kernels, SSPRK33 in time, the
+entropy wave, which measures second order and conservation to roundoff,
+and Sod's shock tube against the exact Riemann solution, with the
+Dirichlet boundary hook. The coarse-fine faces, the refinement criterion
+and the driver are still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -83,6 +84,10 @@ export fill_entropywave_averages!, entropywave_reference, entropywave_errors
 # The exact Riemann solution: the shock tube's reference, and not a flux
 export ExactRiemann, exact_riemann, sample
 
+# Sod's shock tube: the case, its Dirichlet boundary, the study
+export SodTube, sod_initial, sod_conserved, sod_boundary
+export sod_forest, sod_reference, assert_no_arrival, sod_errors
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -101,8 +106,10 @@ include("riemann.jl")
 # first case to run on it.
 include("evolution.jl")
 include("entropywave.jl")
-# The host `Float64` reference the shock tube of step 4 is judged against.
-# It is not a flux and nothing in it is reachable from a kernel.
+# The shock tube and the host `Float64` reference it is judged against. The
+# solver comes first because the case reads it: `λ` and the reference both
+# come out of one `ExactRiemann`.
 include("exact_riemann.jl")
+include("sod.jl")
 
 end # module TreeHydro
