@@ -1,0 +1,64 @@
+name: Long
+
+# The **long** tier: the physics claims themselves — the convergence
+# sweeps and their rates, the interface-order tables and the negative
+# control on the rate, the D = 3 runs, the refinement calibration, the
+# tracked shock tube and its tables. Every number in `CODE.md`'s "Measured
+# results" comes from a test that runs here, and nowhere else.
+#
+# It is not on `push` on purpose. Before the tiers existed the whole suite
+# ran on every push and took 53 minutes on the 4-thread Ubuntu entry of
+# CI.yml, all of it in the tests, because the two-dimensional sweeps are 10
+# to 17 times slower under 4 threads on a 4-vCPU shared runner than under 1
+# thread on the same kind of runner (the D = 2 interface-order sweep 1m54
+# -> 31m05; the D = 2 entropy wave 13 s -> 2m57; p = 1 with the fixup off
+# 34 s -> 9m27; the D = 3 two-level 15 s -> 1m17), while one-dimensional
+# runs cost seconds either way. So this job runs at **one thread**, weekly
+# and on request, and CI.yml runs the short tier on every push. What
+# guards the numbers between two runs of this job is the short tier's
+# comparison against the reference outputs committed in
+# `test/references/`, which this job also checks.
+#
+# It does **not** regenerate those references. Regenerating is
+# `TREEHYDRO_TEST_LONG=1 TREEHYDRO_REGENERATE=1` locally, so that moved
+# numbers arrive as a reviewed `git diff` with a commit message saying why
+# they moved, rather than as a machine quietly rewriting committed data.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 05:17 UTC. Off the hour, as GitHub asks, so the job is not
+    # queued behind everybody else's midnight cron.
+    - cron: "17 5 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  long:
+    name: Long tier - ubuntu-latest - 1 thread
+    runs-on: ubuntu-latest
+    # Locally the long tier is 1 m 30 s; the serial CI runners were 3 to 6
+    # minutes for a suite of that size, so two hours is a wide margin that
+    # still fails rather than hanging.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        with:
+          # Nothing consumes it, and it is one more multiplier on a job
+          # that is already the long one.
+          coverage: false
+        env:
+          TREEHYDRO_TEST_LONG: "1"
+          # One thread: see the note at the top. The threaded path is
+          # covered by CI.yml's 4-thread entry on the short tier, and the
+          # reference outputs the short tier compares are bit-identical at
+          # both counts by TreeAMR's invariant.
+          JULIA_NUM_THREADS: "1"

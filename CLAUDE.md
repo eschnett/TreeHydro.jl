@@ -72,17 +72,21 @@ alone, with no driver and no `regrid!` yet); and from step 7
 `HydroCase(::SodTube)` in `sod.jl` and `HydroCase(::EntropyWave)` plus
 `entropywave_primitive` in `entropywave.jl`, and with `hydro_flags` and
 `max_signal_speed` each split into a `FieldSet` core and a
-`HydroProblem` forwarder. Tests:
+`HydroProblem` forwarder. Tests, in **two tiers** since step 7b — short:
 `test/precision_tests.jl`,
 `test/prerequisite_tests.jl`, `test/eos_tests.jl`,
 `test/riemann_tests.jl`, `test/evolution_tests.jl`,
-`test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
-`test/sod_tests.jl`, `test/interface_tests.jl`,
-`test/refinement_tests.jl` and `test/driver_tests.jl`; CI and a
+`test/exact_riemann_tests.jl`, `test/sod_tests.jl`,
+`test/interface_tests.jl`, `test/refinement_tests.jl`,
+`test/driver_tests.jl` and `test/regression_tests.jl` with its helper
+`test/references.jl` and the committed `test/references/*.toml`; long:
+`test/long/entropywave_tests.jl`, `test/long/sod_tests.jl`,
+`test/long/interface_tests.jl`, `test/long/refinement_tests.jl` and
+`test/long/driver_tests.jl`. Two workflows, `CI.yml` and `Long.yml`, and a
 `README.md`.
 The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6 and H3b step 7, and `PLAN.md`'s step 8 (the atmosphere reset,
-H4a) is next.
+H3a step 6 and H3b step 7, step 7b split the suite into its two tiers,
+and `PLAN.md`'s step 8 (the atmosphere reset, H4a) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -161,13 +165,17 @@ defined.
 
 ## Commands
 
-The full suite (about 90 s after step 7 — 1 m 30 s at one thread and
-1 m 16 s at four, most of it still the entropy wave's convergence studies,
-of which the interface-order sweep in `D = 2` alone is 19 s; the
-refinement criterion adds 11 s and the driver adds 16 s, the latter being
-twelve tracked and uniform Sod evolutions and three entropy waves), and
-the same at four threads — `Pkg.test` does not inherit `-t`, so it has to
-be passed explicitly:
+The suite runs in **two tiers** since step 7b; `CODE.md`'s "Testing: two
+tiers" has the discipline and the reason.
+
+The **short** tier is the default, and it is what CI runs on every push:
+every unit test as it was, plus `test/regression_tests.jl`, which runs a
+reduced configuration of each physics study and compares its outputs
+against the references committed under `test/references/` to roundoff.
+About 47 s at one thread and 47 s at four (measured after step 7b; 36 s of
+it is the unit files and their compilation, and the five reduced studies
+are 7 s of arithmetic between them). `Pkg.test` does not inherit `-t`, so
+the thread count has to be passed explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -176,6 +184,36 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
+
+The **long** tier is the short tier *and* `test/long/`: the convergence
+sweeps and their rates, the interface-order tables and the negative
+control, the `D = 3` runs, the calibration, the tracked shock tube and its
+buffer and prolongation-order tables. Every number in `CODE.md`'s
+"Measured results" comes from a test that runs here. 1 m 30 s at one
+thread. It runs weekly and on request in `.github/workflows/Long.yml`, and
+it is what to run before recording a number:
+
+```bash
+TREEHYDRO_TEST_LONG=1 julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+**Regenerating the references** is the long tier plus one more flag. It
+runs the physics claims first and rewrites `test/references/*.toml` only
+if they pass, from the very results the comparison would have used:
+
+```bash
+TREEHYDRO_TEST_LONG=1 TREEHYDRO_REGENERATE=1 \
+  julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+Regenerate when the numerics changed **on purpose** — a new limiter
+branch, a different summation order, an upstream change in TreeAMR's
+prolongation, a reduced configuration that had to move — and say *why* in
+the commit that carries the new numbers; `git status` after the run shows
+exactly which studies moved. Never regenerate to make a red comparison
+green: a moved number with no reason is the regression the tier exists to
+catch. A step that adds a study adds it to `reference_outputs` in
+`test/references.jl` and regenerates to create its file.
 
 The clean-checkout check, which is what the `[sources]` pin exists for: a
 tree with no `Manifest.toml` resolves TreeAMR from GitHub and passes.
@@ -363,9 +401,37 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   Sedov similarity code are host `Float64`, converted once at the
   comparison. For the Sedov law, `E₀` is the *measured* energy deposited
   on the adapted mesh at `t = 0`, not the nominal value.
+- **A physics sweep put in the short tier will take half an hour on the
+  threaded CI runner** (measured in step 7b). GitHub's 4-vCPU shared
+  runners are the opposite of this machine: at four threads the
+  *two-dimensional* sweeps run 10–17× slower than at one on the same kind
+  of runner — the `D = 2` interface-order sweep 1 m 54 → 31 m 05, the
+  `D = 2` entropy wave 13 s → 2 m 57, `p = 1, fixup = false` 34 s →
+  9 m 27, the `D = 3` two-level 15 s → 1 m 17 — while one-dimensional runs
+  cost seconds either way, and locally on twelve cores four threads is
+  *faster* than one. So a sweep added to the default suite does not cost
+  its local seconds, it costs minutes per matrix entry, and the one
+  4-thread entry pays 16× over. Convergence studies, tables, calibrations
+  and tracked runs go in `test/long/`; the short tier keeps every `D ≥ 2`
+  run at `N ≤ 8` and a few dozen steps and pins the numbers against
+  `test/references/` instead. `CI.yml` carries `timeout-minutes: 30` so
+  that breaking this fails loudly rather than billing an hour.
+- **Regenerating the references on another machine is a change, not a
+  refresh.** `TREEHYDRO_REGENERATE=1` rewrites committed data, and the
+  data is expected to be bit-identical everywhere — Julia's `sin`, `cos`,
+  `exp`, `log` and `^` are pure Julia, `sqrt` is correctly rounded, Julia
+  does not contract `a*b + c` into an `fma`, and TreeAMR's reductions are
+  order-fixed — so a diff that appears only because the machine changed is
+  a finding to report, not a file to commit. (The comparison is stated at
+  `rtol = 1e-12` precisely so that a last-bit platform difference does not
+  break CI.) The flag is refused without `TREEHYDRO_TEST_LONG=1`, so the
+  physics claims always run first; that is on purpose, and it is why a
+  long run on a cluster cannot quietly move the numbers.
 - **Measured numbers go into `CODE.md`**, beside the prediction they
   confirm or correct, so a regression shows up as a changed number and
-  not as a test that merely still passes.
+  not as a test that merely still passes. The test that produces one lives
+  in the **long** tier; a reduced version of it with stored references
+  lives in the short one.
 
 ## Conventions
 
@@ -401,6 +467,19 @@ Match TreeAMR's, since the three packages are read together:
   `Manifest.toml` is tracked — that is what makes the clean-checkout
   check above mean something. `CODE.md`, `PLAN.md` and this file are
   committed.
+- **`test/references/*.toml` are committed and reviewed like code.** They
+  are generated data, but they are the short tier's whole claim: a changed
+  number there is a changed numerical result, so read the diff, and let
+  the commit that carries it say why the numbers moved. They are the only
+  generated files in the tree, and the one thing here that must never be
+  regenerated to make a test pass.
+- Two workflows: `.github/workflows/CI.yml` runs the **short** tier on
+  every push, over the Julia 1.11/1 × Linux/macOS matrix with one 4-thread
+  entry, with coverage off (nothing consumes it) and a 30-minute timeout;
+  `.github/workflows/Long.yml` runs the **long** tier weekly and on
+  `workflow_dispatch`, on Ubuntu at Julia `"1"` and **one thread**, with a
+  120-minute timeout. Long.yml compares the references and never
+  regenerates them.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

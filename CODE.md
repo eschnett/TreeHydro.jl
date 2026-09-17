@@ -1645,13 +1645,18 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/sedov_reference.jl` | the similarity law; later the Kamm–Timmes profile |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | per-phase timings, TreeWave's format |
-| `test/` | one `*_tests.jl` per case, plus `conservation_tests.jl`, `type_tests.jl`, `threading_tests.jl`, `device_tests.jl`, and the standalone `thread_workload.jl` |
+| `test/` | the **short** tier: one `*_tests.jl` per case holding its unit and structural claims, plus `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
+| `test/regression_tests.jl`, `test/references.jl` | the reduced configuration of every study and the comparison against its stored outputs; `reference_outputs`, `write_references`, `compare_references` |
+| `test/references/*.toml` | the stored outputs, one file per study, committed and reviewed like code |
+| `test/long/` | the **long** tier: the same case files' physics — convergence sweeps, tables, the calibration, the tracked runs — behind `TREEHYDRO_TEST_LONG` |
+| `.github/workflows/CI.yml`, `Long.yml` | the short tier on every push over the matrix; the long tier weekly and on request, at one thread |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
 | `bin/backend.jl`, `bin/benchmark.jl`, `bin/Project.toml` | as in TreeWave |
 
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
-`OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats`; `bin/`
+`OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats` and the
+`TOML` stdlib; `bin/`
 adds `CairoMakie` and `SixelTerm` in its own environment. TreeAMR is
 unregistered and is located through a `[sources]` entry, which puts the
 Julia floor at 1.11 as it does for TreeWave. **The entry pins
@@ -1661,6 +1666,72 @@ against the `m8` branch, which has since been merged).
 Testset names are claims, each opening with the failure mode it guards;
 measured numbers are recorded in this file when they change. Conventions
 follow TreeAMR's `CLAUDE.md`, since the three packages are read together.
+
+## Testing: two tiers
+
+*(Added in step 7b.)* The suite is split in two, and which one runs is an
+environment variable. The reason is a measurement: on GitHub's 4-vCPU
+shared runners the *two-dimensional* physics sweeps run **10–17× slower at
+four threads than at one** — the `D = 2` interface-order sweep 1 m 54 →
+31 m 05, the `D = 2` entropy wave 13 s → 2 m 57 — while one-dimensional
+runs cost seconds either way, and locally on twelve cores four threads is
+faster than one. The single 4-thread matrix entry therefore took **53
+minutes** where the four serial entries took 3 to 6. A suite that cannot
+run on every push is a suite that stops being run.
+
+**The long tier holds the physics.** Everything under `test/long/`, behind
+`TREEHYDRO_TEST_LONG=1`: the convergence sweeps and their rates, the
+interface-order tables and the negative control on the rate, the `D = 3`
+runs, the refinement calibration, the tracked shock tube and its buffer
+and prolongation-order tables. **Every number in "Measured results" comes
+from a test that runs here**, with its claim and its tolerance unchanged
+by the split. It runs weekly and on request, at one thread, and before any
+number in this file is written or changed.
+
+**The short tier is a regression net, not a weaker physics suite.** It is
+every unit-level test as it was, the structural claims the expensive ones
+rest on, and `test/regression_tests.jl`: a *reduced* configuration of each
+study — coarser `N`, fewer roots, a shorter `t_end`, fewer chunks — whose
+named outputs are compared against `test/references/*.toml` **to
+roundoff**, `isapprox(…; rtol = 1e-12, atol = 1e-300)` for floats and
+exact equality for step counts, block counts, levels and each table's
+`_config`. It cannot say the scheme is second order. What it says is that
+*this* code produces *these* numbers, so a reordered sum, a limiter branch
+or an upstream change in TreeAMR's prolongation fails in seconds with the
+moved number printed beside the stored one. Every stored key is compared
+and a missing or extra key fails, so a study that gains an output cannot
+silently escape comparison. Only `Float64` is stored: a MultiFloats value's
+last bits depend on whether the platform has an `fma`. Beside the numbers
+the cheap *claims* are kept — conservation to roundoff with the fixup, the
+leak without it, the momentum equal to its closed-form boundary flux, no
+floor firing, `tracking == 1` — because a reference records what the code
+did and a claim records what it is supposed to do.
+
+The short tier keeps every `D ≥ 2` run at `N ≤ 8` and a few dozen steps,
+which is what makes it safe on the threaded runner, and it is about 47 s
+at one thread and the same at four, with the stored numbers identical at
+both counts (TreeAMR's bit-identity invariant, restated as data).
+
+**Regeneration is deliberate.** `TREEHYDRO_TEST_LONG=1
+TREEHYDRO_REGENERATE=1` runs the long tier and rewrites the reference
+files *after* its physics claims pass, from the very results the
+comparison would have used; the flag is refused without the long one. So a
+long run on another machine cannot quietly move committed numbers: a
+regeneration arrives as a reviewed `git diff` whose commit says why they
+moved. Regenerating to make a red comparison green is the one thing the
+tier forbids.
+
+**Across platforms the numbers are expected to be identical, bit for
+bit.** The files are generated on Apple silicon and compared on GitHub's
+Linux x86-64 and macOS arm64 runners; Julia's `sin`, `cos`, `exp`, `log`
+and `^` are pure Julia and therefore platform-independent, `sqrt` is
+correctly rounded by IEEE 754, Julia does not contract `a*b + c` into an
+`fma` unless asked, and TreeAMR's reductions are order-fixed, so there is
+nothing left for the hardware to disagree about. The stated tolerance is
+nevertheless `rtol = 1e-12` — roundoff, not physics — so that a last-bit
+difference, should one ever appear, does not break CI; what CI reports is
+then the agreement actually observed, and a failure at `1e-12` is a change
+in the numerics.
 
 ## Milestones
 

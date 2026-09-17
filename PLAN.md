@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–7 are done; step 8 is next.**
+**Steps 0–7 and 7b are done; step 8 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -43,6 +43,15 @@ brief a single session can carry. The order is the dependency order.
 - Testset names are claims; each opens with a comment naming the failure
   mode it guards. Convergence rates, conservation drifts and mesh
   statistics are asserted as numbers with tolerances.
+- **Every later step adds its physics claims to the long tier and a
+  reduced configuration with references to the short tier.** A convergence
+  sweep, a table, a calibration or a tracked run goes in `test/long/`; the
+  short tier gets the same study at a size the threaded CI runner cannot
+  choke on (`D ≥ 2` at `N ≤ 8`, a few dozen steps), its outputs added to
+  `reference_outputs` in `test/references.jl`, and the file created by one
+  regeneration. And whenever a step changes the numerics **on purpose**,
+  regenerate the references and say in that commit *why* the numbers
+  moved. See step 7b and "Testing: two tiers" in `CODE.md`.
 - One step at a time; the next starts from a green suite on `main`.
 
 ## Sharp edges to know before starting
@@ -266,6 +275,57 @@ coarse mesh as control; all `D + 2` integrals to roundoff through the
 regrids and a leak without the fixup; the `p = 1` against `p = 3` table
 on Sod; the buffer-width table; the CFL recheck's assertion tested on
 synthetic numbers. Record the tables.
+
+## Step 7b — Fast CI (no milestone; the suite itself)
+
+`CODE.md`: "Testing: two tiers", "File layout".
+
+Why: GitHub CI took **53 minutes** on the last push before this step. The
+four single-thread jobs took 3 to 6 minutes each; the one **4-thread
+Ubuntu job** took 53, all of it in the tests. The log's timestamps
+localize it — the two-dimensional physics sweeps are **10–17× slower under
+4 threads** on the 4-vCPU shared runner than under 1 thread on the same
+kind of runner (entropy wave `D = 2` 13 s → 2 m 57; the `D = 2`
+interface-order sweep 1 m 54 → **31 m 05**; the `D = 2`
+`p = 1, fixup = false` sweep 34 s → 9 m 27; `D = 3` two-level 15 s →
+1 m 17) — while one-dimensional runs cost seconds either way, and locally
+on twelve cores four threads is *faster* than one. Coverage, on by default
+in `julia-runtest` and consumed by nothing, cost nothing measurable. So
+the threaded job must run a small suite, and the sweeps must leave the
+default one.
+
+Changes:
+
+- `test/runtests.jl` reads `TREEHYDRO_TEST_LONG` and
+  `TREEHYDRO_REGENERATE`, prints the tier and the thread count, includes
+  the short files, then the long ones under the flag.
+- The physics moved to `test/long/` **verbatim** — `entropywave_tests.jl`
+  whole, and from `sod_tests.jl`, `interface_tests.jl`,
+  `refinement_tests.jl` and `driver_tests.jl` the sweeps, tables,
+  calibration, `D = 3` runs and fifteen tracked evolutions. No claim
+  weakened, no number changed; the short files keep the unit and
+  structural halves and the helpers both share.
+- `test/references.jl` (`reference_outputs`, `write_references`,
+  `compare_references`), `test/regression_tests.jl`, and
+  `test/references/*.toml` — 25 reduced configurations over five studies,
+  compared at `rtol = 1e-12` with exact equality for integers, levels and
+  each table's `_config`, and a missing or extra key a failure. Only
+  `Float64` is stored. `TOML` added to `test/Project.toml`.
+- `.github/workflows/CI.yml`: `coverage: false`, `timeout-minutes: 30`,
+  the measurement in a comment, the matrix unchanged; new
+  `.github/workflows/Long.yml`, `workflow_dispatch` plus a weekly
+  `schedule`, Ubuntu, Julia `"1"`, **one thread**,
+  `TREEHYDRO_TEST_LONG=1`, `timeout-minutes: 120`, `coverage: false`.
+
+Measured: short tier **47 s** at one thread and **47 s** at four (36 s of
+it the unit files and their compilation), long tier **1 m 30 s**, against
+the 1 m 35 s the undivided suite took. Every `@info` number the long tier
+prints is byte-identical to the undivided suite's.
+
+Accept: `Pkg.test()` green and under a minute; the long tier green with
+every number in "Measured results" unchanged; a regeneration followed by a
+short and a long run that both compare clean; the short tier bit-identical
+at one and four threads.
 
 ## Step 8 — The atmosphere reset (H4a)
 

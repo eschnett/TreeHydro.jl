@@ -81,8 +81,33 @@ chunk, loudly: with the headroom at 1, Sod throws in its first chunk.
 Still missing: the atmosphere reset, and the Sedov and Kelvin–Helmholtz
 cases.
 
+The tests come in two tiers. The **short** one is the default and is what
+CI runs on every push: the unit tests, plus a reduced configuration of
+every physics study compared against reference outputs committed under
+`test/references/` to roundoff. About 45 seconds.
+
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+The **long** one adds `test/long/`: the convergence sweeps, the
+interface-order tables, the refinement calibration and the tracked shock
+tube — every claim the measured results above rest on. A minute and a
+half, and it runs weekly rather than on every push, because the
+two-dimensional sweeps are an order of magnitude slower on a shared
+four-thread CI runner than on one thread.
+
+```bash
+TREEHYDRO_TEST_LONG=1 julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+The references are regenerated only on request, and only by a run that
+passed the physics claims first — so moved numbers arrive as a reviewed
+diff and not as a silent rewrite.
+
+```bash
+TREEHYDRO_TEST_LONG=1 TREEHYDRO_REGENERATE=1 \
+  julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
 See [CODE.md](CODE.md) for the design document — the equations, the
