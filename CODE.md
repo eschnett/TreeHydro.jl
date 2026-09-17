@@ -2118,10 +2118,10 @@ one-thread entry is the one to watch, the Kelvin–Helmholtz file being the
 most parallel work any one file holds and therefore the one that gains
 least from a serial runner.
 
-**The one thing that must stay off is code coverage**, and the reason is
-the whole of the history below. `julia-actions/julia-runtest` turns
-coverage on by default, and nothing here consumes it — no upload step, no
-badge — so it buys nothing. What it costs is a factor of a hundred.
+**Code coverage runs on the serial cells and must stay off the threaded
+one** (amended in step 10b), and the reason for the exclusion is the whole
+of the history below. `julia-actions/julia-runtest` turns coverage on by
+default; what it costs on the threaded entry is a factor of a hundred.
 
 Julia compiles a coverage hit into an atomic read-modify-write on one
 global 64-bit counter per source line (`visitLine` in `src/codegen.cpp`
@@ -2166,11 +2166,26 @@ With coverage off the whole suite runs in **1 m 45 at four threads and
 1 m 58 at one** on the development machine — four threads faster than
 one, as it was before any of this.
 
-The rule that follows is one line of YAML: `coverage: false` in CI.yml,
-and if coverage is ever wanted it goes on a *separate one-thread entry*
-and leaves the threaded one alone. Nothing about the suite's contents has
-to change; a `D ≥ 2` sweep is seconds of arithmetic and belongs wherever
-the claim it makes belongs.
+The rule that follows is one line of YAML:
+`coverage: ${{ (matrix.threads || 1) == 1 }}` in CI.yml, with the
+`julia-processcoverage` and `codecov-action` steps carrying the same
+condition. Coverage is wanted — there is a badge in `README.md` and a
+`CODECOV_TOKEN` in the repository's secrets — so it goes on the
+*one-thread entries*, which run the same lines the threaded entry does,
+and leaves the threaded one alone. Instrumenting only the serial cells
+therefore loses no coverage at all. What it costs is measured on the
+whole suite rather than on the sweep alone, at one thread, locally and
+back to back: **4 m 01 without coverage and 12 m 38 with it, a factor of
+3.14** — three times the 5.7× sweep figure diluted by the parts of the
+suite that are not kernel-heavy, and far from the hundred the threaded
+entry would pay. A serial CI cell therefore costs about three times what
+it did, and `timeout-minutes: 30` is now the binding constraint rather
+than a distant guard: the complete serial baseline is 7 m 26 of test
+phase on macOS, which projects to roughly 23 minutes instrumented.
+Nothing about the suite's contents has to change; a `D ≥ 2` sweep is
+seconds of arithmetic and belongs wherever the claim it makes belongs.
+This is TreeAMR's and TreeWave's arrangement, and the three packages are
+read together.
 
 **Step 7b's diagnosis was wrong and is corrected here** (amended in step
 7c). It read the same segment table as evidence that "on GitHub's 4-vCPU

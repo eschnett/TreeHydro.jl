@@ -44,22 +44,22 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
-          # Coverage must stay off, and this is the single most important
-          # line in the file. `julia-runtest` turns it on by default, and
-          # nothing here consumes it -- there is no upload step and no
-          # Codecov badge -- so it buys nothing; what it costs is a factor
-          # of 100. Julia compiles a coverage hit into an atomic
+          # Coverage exactly on the single-threaded cells, and the
+          # exclusion is the single most important thing in this file.
+          # Julia compiles a coverage hit into an atomic
           # read-modify-write on one global counter per source line, and
           # the counters of 32 neighbouring lines share a 256-byte block,
           # so every thread running the same kernel contends on the same
           # cache line. Measured locally on the D = 2 entropy-wave sweep:
           # 1.83 s at one thread and 0.79 s at four without coverage,
-          # 10.35 s and 79.13 s with it. On this matrix it turned a
-          # 5-minute serial job into a 53-minute threaded one, the
-          # two-dimensional segments running 14 to 17 times slower at four
-          # threads than at one. If coverage is ever wanted, add it as a
-          # separate 1-thread entry and leave the threaded one alone.
-          coverage: false
+          # 10.35 s and 79.13 s with it -- 5.7x at one thread, 100x at
+          # four, and the sign of threading inverted. On this matrix,
+          # with coverage on everywhere, it turned a 5-minute serial job
+          # into a 53-minute threaded one. The serial cells pay the 5.7x
+          # and run the same lines the threaded one does, so instrumenting
+          # them alone loses no coverage and leaves the expensive job
+          # alone.
+          coverage: ${{ (matrix.threads || 1) == 1 }}
         env:
           # The suite must pass, with identical numbers, threaded as well
           # as serial. One entry of the matrix is enough to guard that:
@@ -71,6 +71,15 @@ jobs:
           # prints must be identical at both counts, which is TreeAMR's
           # invariant restated for this package.
           JULIA_NUM_THREADS: ${{ matrix.threads || 1 }}
+      - uses: julia-actions/julia-processcoverage@v1
+        if: ${{ (matrix.threads || 1) == 1 }}
+      - uses: codecov/codecov-action@v5
+        if: ${{ (matrix.threads || 1) == 1 }}
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # A Codecov outage should not turn a green test run red.
+          fail_ci_if_error: false
 
   # There is deliberately no viewer job yet. TreeWave has one because
   # `bin/` is a second environment with its own copy of the TreeAMR

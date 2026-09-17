@@ -671,8 +671,16 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   53-minute threaded one, the `D ≥ 2` segments 14–17× slower at four
   threads than at one. Step 7b read that same table as a fact about
   GitHub's 4-vCPU runners and split the suite; it was the coverage, which
-  both jobs had on. So: `coverage: false` stays in `CI.yml`, and if
-  coverage is ever wanted it goes on a *separate one-thread entry*. A
+  both jobs had on. So: `CI.yml` carries
+  `coverage: ${{ (matrix.threads || 1) == 1 }}` — on for the four serial
+  cells, whose lines are the same lines, off for the one threaded cell,
+  which is where the factor of a hundred would land — with the
+  `julia-processcoverage` and Codecov upload steps under the same
+  condition, matching TreeAMR and TreeWave. Never put coverage back on
+  the threaded entry. Measured on the full suite at one thread, locally
+  and back to back: **4 m 01 without coverage and 12 m 38 with it**, a
+  factor of **3.14**, so a serial CI cell costs about three times what it
+  did and `timeout-minutes: 30` has much less room than it had. A
   `D ≥ 2` sweep costs its local seconds and may go anywhere the claim
   belongs. `timeout-minutes: 30` is there so that a runtime regression
   fails loudly rather than billing an hour.
@@ -734,9 +742,10 @@ Match TreeAMR's, since the three packages are read together:
   and step 7c removed, were the one exception and are gone.
 - One workflow: `.github/workflows/CI.yml` runs the whole suite on every
   push, over the Julia 1.11/1 × Linux/macOS matrix with one 4-thread entry,
-  with **coverage off** — nothing consumes it and under threads it costs a
-  factor of a hundred, see "Things that will bite" — and a 30-minute
-  timeout as a guard against a runtime regression.
+  with **coverage on the serial cells only** — uploaded to Codecov, and
+  kept off the threaded entry because there it costs a factor of a
+  hundred, see "Things that will bite" — and a 30-minute timeout as a
+  guard against a runtime regression.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,
