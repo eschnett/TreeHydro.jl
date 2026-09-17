@@ -759,7 +759,12 @@ Match TreeAMR's, since the three packages are read together:
   `${{ matrix.coverage == true && 40 || 30 }}` minutes, the instrumented
   cell getting the same ratio of guard to healthy run as the others. Do
   not flatten it back to one number: coverage on `version: "1"` measured
-  42 m 45 and would have gone red under a flat 30.
+  42 m 45 and would have gone red under a flat 30. End to end the matrix
+  costs **12 m 16** with the coverage collected, against 12 m 07 before
+  any of it — the threaded cell is the critical path either way. And
+  treat every CI timing here as ±60%: the same instrumented cell came
+  back at 18 m 08 and 11 m 24 on consecutive runs, so only orderings
+  wider than that (18 against 42) carry a decision.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

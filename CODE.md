@@ -2200,6 +2200,24 @@ stage limiter installed in a field nobody reads.
 
 *Never the threaded cell*, which is the whole of the history above.
 
+Measured end to end afterwards, on the arrangement described above and
+with the coverage actually collected: **12 m 16** of wall clock, against
+**12 m 07** for the same matrix before any of this and **24 m 39** for
+the straight mirror of TreeAMR's and TreeWave's arrangement. The critical
+path is the threaded cell again, at 11 m 48, exactly as it was before
+coverage existed here — so the whole of the coverage cost now hides
+behind a cell that was already the slowest. An ordinary push or pull
+request, which is not instrumented at all, is cheaper still.
+
+A caution on all the CI numbers above, in the spirit of the one about
+this machine being shared: GitHub's runners vary by more than the effects
+being measured here. The instrumented 1.11 cell came back at **18 m 08**
+on one run and **11 m 24** on the next, on identical configuration — a
+factor of 1.6. The ordering that decided where coverage goes (18 against
+42 minutes) is far outside that band and is safe; a comparison of two
+cells within a factor of two is not, and should be taken as the same
+measurement twice. `timeout-minutes` is sized off the pessimistic draw.
+
 Two more economies come from the same measurement, since `timeout` and
 matrix size are both set by what a cell costs. The cap is now
 `${{ matrix.coverage == true && 40 || 30 }}`, which keeps the
