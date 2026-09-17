@@ -17,4 +17,5 @@ using TreeHydro
     include("exact_riemann_tests.jl")
     include("sod_tests.jl")
     include("interface_tests.jl")
+    include("refinement_tests.jl")
 end
