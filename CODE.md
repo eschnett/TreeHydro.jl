@@ -477,6 +477,35 @@ Two consequences, one taken now and one recorded for step 7:
   designed here; the fact and the number are recorded so that it is not
   designed without them.
 
+**(Implemented in step 7; the amendment is closed.)** The driver sizes each
+chunk's step from `cfl · h_min / (D · speed_headroom · λ)` with `λ`
+measured once at the start of the chunk, re-measures at the end, and calls
+`check_cfl(dt_used, h_min, D, cfl, λ_end)`, which **throws** an
+`ArgumentError` naming the chunk, both speeds, the headroom and the two
+remedies. The comparison carries a few ulp of slack, because the step
+actually taken is `(stop − t)/steps` with an integer `steps` and is
+therefore at most the step that was asked for; the equality case is real.
+
+The measurement that justifies the parameter existing: `speed_headroom = 1`
+on Sod throws in the **first chunk**, with `λ_end = 1.9486` against a step
+sized for `1.25` — a CFL number of **0.6236** against the requested 0.4. At
+`2` the same run completes, and `λ_end` never exceeds `2λ` at any chunk,
+with `λ` rising from 1.1832 to 2.2047 over the run. So the recheck is not
+decoration: it fires on the first thing a driver does with discontinuous
+initial data, and the headroom is what stops it firing.
+
+The headroom feeds one other thing, and that is the constraint which sets
+the regrid cadence. The travelling margin is derived from
+`speed_headroom · λ · chunk` at the cap's spacing, and TreeAMR's
+recruitment reaches one ring of neighbours, so the travel must stay under
+one finest-level block width `(L/roots)/2^cap`. On the tracked tube that
+caps the cadence at `chunk < 0.0071` in `D = 1` at a cap of 2, and
+`chunk = 1/50` is refused by `refinement_buffer` naming the constraint —
+the guard working, not a tuning knob. Doubling the travel through the
+headroom is conservative by exactly the factor the headroom is, and in the
+right direction: a margin that is too wide costs cells, and one that is too
+narrow costs the feature.
+
 The Amdahl term TreeWave measured — the integrator's serial stage
 arithmetic capping a threaded step at 3.6× — applies here unchanged and
 is not TreeHydro's to fix. A hand-written SSPRK33 with its stage updates
@@ -712,6 +741,19 @@ integral, and the claim is made for all of them:
   regrids in between; that is step 7's, and the static mesh is the sharper
   measurement of the two because nothing but the fixup differs between the
   runs.
+- **(measured in step 7)** The moving mesh holds as well as the static one.
+  On the tracked Sod tube — the mesh rebuilt under the solution **9** times
+  in `D = 1` over 588 steps and **3** times in `D = 2` over 431 — the mass
+  and energy drifts are `3.3e-16` and `1.6e-15` in `D = 1` and `4.2e-17`
+  and `1.9e-16` in `D = 2`, and the momentum equals its closed-form
+  boundary flux to `8.6e-16` and `1.0e-16`. The negative control leaks
+  `4.2e9`, `1.2e9` and `7.4e9` times more in `D = 1` and `1.0e9`, `7.8e8`
+  and `4.9e8` in `D = 2`, on **the same mesh history and the same step
+  count** — the leak does not move the criterion, which is worth knowing
+  because it means the two runs really do differ in one line. The static
+  measurement is still the sharper one, and this is the one that says
+  prolongating a fresh fine block and restricting a coarsened one preserve
+  the integrals too.
 - The **momentum** is the new case: for a momentum component whose total
   is zero by symmetry (the Kelvin–Helmholtz `S_y`, the Sedov `S_d`), the
   drift is measured against the maximum of that component's `Σ hᴰ |S_d|`
@@ -789,6 +831,26 @@ Two things this package expects to add to that finding:
   and Sedov in step 9, run at `p = 1` beside `p = 3` with the floor counts
   beside the errors. Until then `p = 3` remains the default and the
   upstream request remains unmade.
+
+  **The first discontinuous row (measured in step 7), and it goes against
+  `p = 1`.** On the tracked Sod tube in `D = 1`:
+
+  | `p` | L1 against the exact solution | tracking | cells | floor hits |
+  |---|---|---|---|---|
+  | 1 | 4.701364e-3 | **0.9091** | 216 | 0 |
+  | 3 | **4.540016e-3** | 1.0000 | 200 | 0 |
+  | 5 | 4.539988e-3 | 1.0000 | 200 | 0 |
+
+  `p = 1` is 3.6% worse in L1, uses 8% more cells, and — the interesting
+  column — **loses tracking**: the defect a piecewise-constant prolongation
+  leaves on a coarse-fine face is itself a second difference, so the
+  indicator fires on it, on a block that is not at the cap. So on this case
+  the lower order costs accuracy *and* mesh, and buys nothing in the floor
+  count because Sod fires no floor at all. That last clause is why the
+  question is not closed here: positivity is the argument for `p = 1`, and
+  Sod cannot speak to it. Sedov, whose density spans orders of magnitude
+  and whose bubble sits at the atmosphere, is where the floor count becomes
+  a real column, and it completes the table in step 9.
 
 ## Boundaries
 
@@ -898,8 +960,14 @@ that measured:
   hook on a fine block and a coarse-fine face with the boundary state on
   one side of the refined region.
 
-Not yet exercised: the hook in `regrid!` and in `adapt_to_initial_data!`,
-which arrive with the driver in step 7.
+**(Measured in step 7.)** The hook's other two call sites, `regrid!` and
+`adapt_to_initial_data!`, are wired in `evolve!` and exercised on the
+tracked tube: after the adaptation cycle every stored entry of the
+outward-facing ghost regions along the tube holds its conserved boundary
+state exactly — ghost rows across the tube included — on blocks that did
+not exist when the run started, and it stays that way through nine
+regrids. What is still not exercised is the M2 ordering case in full,
+which needs two physical faces meeting; that is Sedov's corner, in step 9.
 
 ## The cases
 
@@ -1010,11 +1078,13 @@ right, not a claim of order.
   follows the shock (and the contact, and the rarefaction — the Löhner
   indicator on `ρ` fires on all three), the mesh is rebuilt every chunk,
   and all `D + 2` integrals hold to roundoff with the fixup and leak
-  without it. The M8b acceptance test, for a system.
+  without it. The M8b acceptance test, for a system. (Measured in step 7:
+  they do, and the leak is `4.9e8` to `7.4e9` times the bound.)
 - **A tracked shock matches the uniformly fine reference at fewer
   cells**, reduced onto a common grid as `track_shock` does, with the
   uniform coarse mesh as the control that says refinement bought
-  something.
+  something (measured in step 7: the error ratio is 1.0004 and 1.0000
+  against a control of 3.678 and 1.850).
 - **Direction independence, bit for bit** (measured in step 4: both
   halves hold, with no differing entry anywhere). On a uniform mesh
   the tube along `y` is the tube along `x` transposed, and the `D = 2`
@@ -1119,6 +1189,43 @@ depending on the box's thickness. What step 5 settled about the case:
   run's at the coarse spacing. That is a sanity bound and not the
   tracked-shock claim, which needs a mesh that follows the shock and is
   step 7's.
+
+**(Implemented in step 7: the tracked tube.)** `HydroCase(::SodTube)` and
+`evolve!`; the numbers are in
+[Measured results](#step-7--the-driver-and-the-tracked-shock-tube). What
+step 7 settled about the case:
+
+- **A tracked shock does match the uniformly fine reference, and the
+  match is much better than the static mesh's 1.338.** The tracked run's
+  L1 error against the exact Riemann solution is **1.0004** times the
+  uniform run's at the same finest spacing in `D = 1` and **1.0000** times
+  it in `D = 2`, against a uniform *coarse* control at 3.678 and 1.850.
+  Reduced onto the grid the meshes have in common, the tracked and fine
+  runs differ by `1.745e-5` in `D = 1` where the coarse and fine runs
+  differ by `1.073e-2` — three orders of magnitude, and four in `D = 2`.
+  The static two-level mesh cost 1.338 because its refined region did not
+  move; a mesh that follows the waves costs essentially nothing.
+- **`tracking == 1.0`**: every cell whose indicator exceeded `refine_tol`
+  sat on a block already at the cap, at every one of the 40 chunks in
+  `D = 1` and 30 in `D = 2`. This is the claim the case exists for, and it
+  is a claim about the *criterion plus the buffer plus the cadence*
+  together — the buffer table below is what it costs.
+- **The cell saving is real but modest, because Sod's waves are most of
+  the tube.** 200 cells against 256 in `D = 1` (22%) and 1472 against 2048
+  in `D = 2` (28%). By `t = 0.2` the rarefaction head has reached
+  `x = 0.263` and the shock `x = 0.850`, so 59% of the box holds something
+  the criterion fires on; the `D = 2` run stops at `t = 0.15` for cost,
+  where it is 44%. A case whose feature is a thin shell — Sedov, in step 9
+  — is where the saving becomes the headline.
+- **`speed_headroom = 1` throws in the first chunk**, which is the
+  measurement that turns the step-4 amendment into a parameter. See
+  [Time integration and the time
+  step](#time-integration-and-the-time-step).
+- **The boundary hook's other two call sites hold.** After the adaptation
+  cycle the two root blocks meeting at the diaphragm are at the cap, and
+  every stored entry of the outward-facing ghost regions along the tube —
+  ghost rows across the tube included — holds its conserved boundary state
+  exactly, on blocks that did not exist when the run started.
 
 ### Sedov blast wave
 
@@ -1346,6 +1453,23 @@ amending:
   the HLL diffusion spreads it over more cells the longer the run goes
   on. It will hold the cap in practice.
 
+**(Measured in step 7: the criterion driving a real `regrid!`, and the
+buffer against a real `λ_max · chunk`.)** The calibrated thresholds do what
+they were calibrated to do on a mesh that moves: on the tracked Sod tube
+the initial-data cycle converges in 3 passes in `D = 1` and 2 in `D = 2`,
+the mesh holds the diaphragm at the cap, and every strongly firing cell
+stays on a block at the cap for the whole run. The buffer table is in
+[Measured results](#step-7--the-driver-and-the-tracked-shock-tube), and it
+says something neither upstream package's did: TreeAMR measured a margin
+narrower than the motion coming out *slightly worse* than none at all, and
+TreeWave measured it coming out no worse; here the widths are **strictly
+ordered**, every cell of margin buying both tracking and accuracy. The
+difference is what the margin is around. TreeAMR's and TreeWave's narrow
+margins were measured on features their criteria could resolve away, where
+losing the feature and half-holding it cost the same; a shock fires
+forever, so a partially covered shock is partially resolved and the
+partial credit is real.
+
 ## Regridding: one driver, restart per chunk
 
 Regridding changes the length and the meaning of the state vector, so
@@ -1389,6 +1513,59 @@ integral against its scale, the floor counts, the mesh statistics per
 chunk, the tracking measure, the final state and forest, and — through
 `observer(p, t, u)`, called with `U` scattered and `P` current — whatever
 the viewer wants, so that `bin/` contains no time-stepping of its own.
+
+**(Implemented in step 7.)** `src/driver.jl`: `HydroCase`, `evolve!`,
+`uniform_run`, and the three measurements around them — `check_cfl`,
+`tracked_share`, and `reduce_to_grid` / `l1_difference` after TreeAMR's
+Burgers test. The numbers are in
+[Measured results](#step-7--the-driver-and-the-tracked-shock-tube). What
+the implementation settled:
+
+- **The shape of the case.** `HydroCase` holds the primitive initial data
+  as a pure `x -> P` closure, the EOS, the floors, the boundary hook or
+  `nothing`, the periodicity per dimension, the physical extents, the root
+  brick, `speed_headroom`, and an optional reference `(U, t) -> state
+  vector`. The two case constructors, `HydroCase(::SodTube)` and
+  `HydroCase(::EntropyWave)`, live *with their cases* in `sod.jl` and
+  `entropywave.jl` rather than in the driver, which is what keeps the
+  driver free of anything case-specific; the dependency runs from the case
+  to the loop and never back. The struct carries its own working type, so
+  `evolve!` takes `T` as a leading positional argument only to check it
+  against the case's, and refuses a mismatch by name.
+- **The headroom is a case parameter, and Sod's is 2.** This is the step-4
+  amendment closed; see [Time integration and the time
+  step](#time-integration-and-the-time-step) for what the driver does with
+  it and for what `speed_headroom = 1` measures.
+- **The criterion the initial-data cycle runs is the evolution's, on a
+  scratch primitive set.** The cycle regrids `U` alone with
+  `transfer = false` and re-evaluates the initial data, so a primitive set
+  built before it would have the wrong number of blocks by the second pass,
+  and there is no `HydroProblem` to borrow one from. `hydro_flags` and
+  `max_signal_speed` therefore each gained a `FieldSet` method with the
+  `HydroProblem` method forwarding — one implementation, two entry points —
+  and the cycle's `flags` callback allocates a set per pass, at most
+  `maxpasses` allocations of a mesh that is still small. The cycle
+  converges in **3** passes on Sod in `D = 1` and **2** in `D = 2`.
+- **`uniform_run` is `evolve!` with the cap at zero**, and not a second
+  loop. With `maxlevel_cap = 0` nothing can refine and `Coarsen` is never
+  issued below level 0, so the mesh never changes; the *fine* reference is
+  the case's root brick scaled by `2^cap`, which is why `HydroCase` holds
+  the brick and the extents separately — scaling every root count by the
+  same factor leaves the box exactly where it was and the blocks cubes.
+  The buffer derivation is skipped at a cap of zero, since a mesh that
+  cannot refine has no margin to travel.
+- **The loop does not regrid after the last chunk**, so the mesh, the block
+  count and the state that come back all describe the same thing.
+- **The observer is called once at `t = 0` and once per chunk**, with the
+  state scattered into `U`, `P` current, and before the regrid that would
+  invalidate either — TreeWave's contract, so that the viewers of step 11
+  get the initial frame without a loop of their own.
+- **The cell saving on Sod is modest, and that is the case's doing rather
+  than the driver's.** Sod's three waves occupy 59% of the tube by
+  `t = 0.2`; the tracked mesh saves 22% of the cells in `D = 1` at
+  `t = 0.2` and 28% in `D = 2` at `t = 0.15`. What the tracked run claims
+  is the fine reference's *error*, which it matches to four decimal places,
+  and the cell count is the price of that match.
 
 ## Precision
 
@@ -1463,7 +1640,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/riemann.jl` | LLF, HLLE, HLLC fluxes, direction-generic |
 | `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `hydro_solve!`, `convergence_rate` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
-| `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — and its diagnostics |
+| `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law; later the Kamm–Timmes profile |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
@@ -1632,11 +1809,11 @@ Each has an acceptance test; serial `Float64` correctness first.
   wave cannot answer (it confirms the premise — an integral norm does not
   see the interface defect — and leaves the answer to the discontinuous
   cases of steps 7 and 9).
-- **H3 — Regridding.** *(The criterion and the buffer are measured in
-  step 6; `evolve!` and the initial-data cycle remain, in step 7.)* The
-  criterion, the buffer, `evolve!`, the
+- **H3 — Regridding.** *(Done.)* The criterion, the buffer, `evolve!`, the
   initial-data cycle. *Accept:* the cycle converges to a fixed hierarchy
-  on all four initial data; the tracked Sod tube in `D = 1, 2` matches
+  on the initial data it is given — Sod's and the entropy wave's here;
+  Sedov's and Kelvin–Helmholtz's arrive with their cases in H4 and H5, and
+  run through this same cycle; the tracked Sod tube in `D = 1, 2` matches
   the uniformly fine reference at fewer cells with the uniform coarse
   mesh as control, conserves to roundoff through the regrids, and leaks
   without the fixup; the `p = 1` against `p = 3` table for Sod; the
@@ -1667,9 +1844,48 @@ Each has an acceptance test; serial `Float64` correctness first.
     does *not* fire forever — a numerically computed rarefaction head
     falls at first order in `h`.
 
-  What step 6 wrote but did not exercise: the criterion driving an actual
-  `regrid!`, which is step 7's, and with it the buffer width against a
-  real `λ_max · chunk`.
+  What step 7 measured, all of it in
+  [Measured results](#step-7--the-driver-and-the-tracked-shock-tube) and
+  all of it identical at one and at four threads. Step 7 is the first step
+  whose mesh *moves*:
+
+  - **A tracked shock matches the uniformly fine reference at fewer
+    cells.** The tracked Sod tube's L1 error against the exact Riemann
+    solution is **1.0004** times the uniform fine run's in `D = 1` and
+    **1.0000** in `D = 2`, at 200 cells against 256 and 1472 against 2048,
+    with the uniform coarse control at **3.678** and **1.850** — and
+    reduced onto the grid the meshes share, the tracked and fine runs
+    differ by three to four orders of magnitude less than the coarse and
+    fine runs do. The static two-level mesh of H2 cost 1.338 for the same
+    finest spacing; a mesh that follows the waves costs essentially
+    nothing.
+  - **The mesh really does follow them.** `tracking == 1.0` in both
+    dimensions: at every chunk, every cell whose indicator exceeded
+    `refine_tol` sat on a block already at the cap. The initial-data cycle
+    converges in 3 passes and 2, and puts the diaphragm's two blocks at the
+    cap.
+  - **Conservation survives a mesh rebuilt under the solution.** Mass
+    `3.3e-16` and energy `1.6e-15` in `D = 1` over 588 steps and 9 mesh
+    changes, `4.2e-17` and `1.9e-16` in `D = 2`, the momentum equal to its
+    closed-form boundary flux to `8.6e-16` and `1.0e-16`; `fixup = false`
+    leaks `4.9e8` to `7.4e9` times more, on the same step count and the
+    same mesh history, and the single-level control is bit-identical either
+    way.
+  - **The headroom is what the recheck is for.** `speed_headroom = 1` on
+    Sod throws in the **first chunk** — a CFL number of 0.6236 against the
+    requested 0.4 — and at 2 the run completes with `λ_end ≤ 2λ` at every
+    chunk. That closes the step-4 amendment.
+  - **The buffer table is new**, and reproduces neither upstream finding:
+    the widths are strictly ordered in both tracking and error, because a
+    shock fires forever and a partially covered one is partially resolved.
+  - **The first discontinuous row of the `p = 1` question**, and it goes
+    against `p = 1`: 3.6% worse in L1, 8% more cells, tracking lost to
+    0.9091, and no floor count to buy — which is exactly why Sod cannot
+    close the question and Sedov must.
+
+  What step 7 wrote but did not exercise: the atmosphere reset, whose
+  place in the loop is a comment and whose keyword is already in the
+  signature (step 8), and every case but Sod and the entropy wave.
 - **H4 — Sedov.** Floors and the atmosphere reset, the `D = 2` and
   `D = 3` blasts, the similarity checks, the hook on edges and corners.
   *Accept:* the exponent and the jump; the reset idempotent and `U`/`P`
@@ -2057,6 +2273,130 @@ exceed 0.08 at every resolution and refine to the cap, which is intended.
 The plateau is about the smooth feature, because that is the only one
 whose refinement the indicator can terminate.
 
+### Step 7 — the driver and the tracked shock tube
+
+`Float64`, the CPU backend, `:minmod`, HLLE, `cfl = 2/5`, the conservative
+family at `p = 3` unless said otherwise, `refine_tol = 0.08`,
+`coarsen_tol = 0.02`, `ε = 1/100`, `ε_g = 1/1000`, and every number
+identical at one and at four threads. Two configurations:
+
+| | `roots` | `N` | cap | `chunk` | `t_end` | headroom |
+|---|---|---|---|---|---|---|
+| `D = 1` | `(8,)` | 8 | 2 | 1/200 | 1/5 | 2 |
+| `D = 2` | `(8, 1)` | 8 | 1 | 1/200 | 3/20 | 2 |
+
+The cadence is not free: the derived margin covers
+`speed_headroom · λ · chunk` at the cap's spacing, and TreeAMR's
+recruitment reaches one ring of neighbours, so the travel must stay under
+one finest-level block width — 1/32 in `D = 1` and 1/16 in `D = 2`. With
+`λ = 2.20` and a headroom of 2 that means `chunk < 0.0071` and
+`chunk < 0.014`; `chunk = 1/50` is **refused** by `refinement_buffer`,
+naming the constraint. The derived width comes out **6** cells on the first
+regrid and **7** on every later one in `D = 1`, and **4** throughout in
+`D = 2`.
+
+**The tracked tube against its two uniform references.** L1 of the whole
+`D + 2`-component state against the exact Riemann solution, volume
+weighted; "fine" is the uniform mesh at the tracked run's *finest* spacing
+and "coarse" the uniform mesh at its *coarsest*, both through the same
+loop with the cap at zero and the same chunk.
+
+| | L1 | ratio to fine | cells | blocks | steps |
+|---|---|---|---|---|---|
+| `D = 1` tracked | **4.540016e-3** | **1.0004** | 200 | 25 | 588 |
+| `D = 1` fine | 4.538238e-3 | 1 | 256 | 32 | 588 |
+| `D = 1` coarse | 1.669060e-2 | **3.6778** | 64 | 8 | 156 |
+| `D = 2` tracked | **6.215185e-3** | **1.0000** | 1472 | 23 | 431 |
+| `D = 2` fine | 6.215186e-3 | 1 | 2048 | 32 | 431 |
+| `D = 2` coarse | 1.149851e-2 | **1.8501** | 512 | 8 | 216 |
+
+The same claim without the exact solution in it, through
+`reduce_to_grid` onto the grid the meshes have in common (`64` cells in
+`D = 1`, `64 × 8` in `D = 2`) and `l1_difference`:
+
+| | tracked − fine | coarse − fine |
+|---|---|---|
+| `D = 1` | **1.745e-5** | 1.073e-2 |
+| `D = 2` | **2.219e-7** | 5.292e-3 |
+
+`tracking == 1.0` in both dimensions: at every one of the 40 chunks in
+`D = 1` and 30 in `D = 2`, every cell whose indicator exceeded
+`refine_tol` sat on a block already at the cap. The initial-data cycle
+converged in **3** passes in `D = 1` and **2** in `D = 2`; the mesh grew
+from 12 to 25 blocks in `D = 1` and 14 to 23 in `D = 2`, changing 9 and 3
+times; no floor fired in any run.
+
+**Conservation through the regrids, and the negative control.** The bound
+on mass and energy is step 5's — the larger of `8 eps · scale · nsteps` and
+ten times the uniform mesh's drift at the same coarse spacing, since a
+physical boundary's own numerical flux is what remains there — and the
+momentum's yardstick is the closed form `(p_L − p_R)·t_end·A` it must
+equal (0.18 in `D = 1`, 0.016875 in `D = 2`), because Sod starts at rest
+and `Σ hᴰ |S|` gives the momentum no scale at all.
+
+| | mass | energy | \|Δmomentum − flux\| |
+|---|---|---|---|
+| `D = 1` tracked | 3.331e-16 | 1.554e-15 | 8.604e-16 |
+| `D = 1` `fixup = false` | 1.385e-6 | 1.793e-6 | 6.350e-6 |
+| ratio | **4.2e9** | **1.2e9** | **7.4e9** |
+| `D = 2` tracked | 4.163e-17 | 1.943e-16 | 1.041e-16 |
+| `D = 2` `fixup = false` | 4.309e-8 | 1.508e-7 | 5.116e-8 |
+| ratio | **1.0e9** | **7.8e8** | **4.9e8** |
+
+The two runs of each pair take the **same number of steps and regrid at
+the same chunks with the same block counts**, so they differ in one line
+and nothing else — the leak does not move the criterion. The transverse
+momentum in `D = 2` is *exactly* zero either way. And the uniform control
+is bit-identical with the fixup and without it, which is what says the
+leak belongs to the coarse-fine face and not to the driver.
+
+**The buffer-width table** (`D = 1`, everything else as above):
+
+| buffer | L1 | tracking | cells | mesh changes |
+|---|---|---|---|---|
+| derived, 6–7 | **4.540016e-3** | **1.0000** | 200 | 9 |
+| 2 | 4.540964e-3 | 1.0000 | 176 | 14 |
+| 1 | 4.546217e-3 | 0.9444 | 168 | 13 |
+| 0 | 4.552096e-3 | 0.9048 | 168 | 12 |
+
+Strictly ordered in both columns, which is **neither** upstream finding:
+TreeAMR measured a margin narrower than the motion coming out slightly
+*worse* than no margin, TreeWave measured it coming out no worse, and here
+every cell of margin buys something. See [The refinement
+criterion](#the-refinement-criterion) for why. Note also what a narrow
+margin costs in the other currency: the mesh changes 14 times instead of 9,
+because the refined region has to be rebuilt as the feature walks out of
+it.
+
+**`p = 1` against `p = 3` and `p = 5`** (`D = 1`, tracked): the table is
+under [Operator order](#operator-order), where it is the first
+*discontinuous* row of the open question — 4.701364e-3 at tracking 0.9091
+and 216 cells for `p = 1`, against 4.540016e-3 at 1.0000 and 200 cells for
+`p = 3`, with `p = 5` indistinguishable from `p = 3`, and zero floor hits
+throughout.
+
+**The CFL recheck.** `speed_headroom = 1` on Sod throws in the **first**
+chunk: `λ_end = 1.9486` against a step sized for `1.25`, a CFL number of
+**0.6236** against the requested 0.4. At the case's own headroom of 2 the
+run completes, `λ` rises from **1.183216** at `t = 0` to **2.204737**, and
+`λ_end ≤ 2λ` at every chunk.
+
+**The entropy wave through the driver**, on the periodic, hook-free path
+with the cap at zero, against `entropywave_errors` at the same `N`:
+
+| | driver L1 | study L1 | ratio | steps |
+|---|---|---|---|---|
+| `D = 1`, `N = 8` | 5.219843e-4 | 5.538618e-4 | 0.9424 | 50 / 47 |
+| `D = 1`, `N = 16` | 1.343281e-4 | 1.350740e-4 | **0.9945** | 95 / 93 |
+| `D = 2`, `N = 8` | 1.249213e-3 | 1.325157e-3 | 0.9427 | 95 / 93 |
+
+Not bit for bit, and for two reasons that both close like `h²`: the driver
+chunks its steps, so it takes a slightly different number of them; and a
+case states its initial data as a pure `x -> P`, which is a **point
+sample**, where the convergence study fills the exact cell average — a
+relative difference of `(kh)²/24` in the amplitude. All `D + 2` integrals
+hold to roundoff, which here is the plain claim, the box being periodic.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:
@@ -2107,4 +2447,9 @@ Still proposed:
 Smaller defaults marked (proposed) in the text — the variable order,
 point samples rather than cell averages for discontinuous initial data,
 `λ_max` measured once per chunk — are implementation choices that the
-first milestones will either confirm or amend in place.
+first milestones will either confirm or amend in place. All three are now
+settled: the variable order in step 1, the point samples in step 4 (and
+generalized in step 7, where a case states its data pointwise because the
+adaptation cycle changes `h` under it), and `λ_max` once per chunk in
+steps 4 and 7 — confirmed, but only beside a `speed_headroom` factor and
+a recheck that throws.

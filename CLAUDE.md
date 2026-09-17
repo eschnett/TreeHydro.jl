@@ -33,9 +33,9 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0), the scheme on a uniform mesh (H1) and the coarse-fine
-faces on a static mesh (H2) are done, and H3's refinement criterion is
-implemented and calibrated (step 6); the driver is step 7.**
+**Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
+faces on a static mesh (H2) and regridding (H3) are done; the atmosphere
+reset is step 8.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -66,16 +66,23 @@ non-allocating and inferred; from step 3 `src/evolution.jl`
 `src/evolution.jl`, the step being a measurement rather than a
 construction; and from step 6 `src/refinement.jl` (`lohner`, `cell_tau`,
 `indicator_scales`, `hydro_flags`, `refinement_buffer` — the criterion
-alone, with no driver and no `regrid!` yet). Tests:
+alone, with no driver and no `regrid!` yet); and from step 7
+`src/driver.jl` (`HydroCase`, `evolve!`, `uniform_run`, `check_cfl`,
+`tracked_share`, `reduce_to_grid`, `l1_difference`), with
+`HydroCase(::SodTube)` in `sod.jl` and `HydroCase(::EntropyWave)` plus
+`entropywave_primitive` in `entropywave.jl`, and with `hydro_flags` and
+`max_signal_speed` each split into a `FieldSet` core and a
+`HydroProblem` forwarder. Tests:
 `test/precision_tests.jl`,
 `test/prerequisite_tests.jl`, `test/eos_tests.jl`,
 `test/riemann_tests.jl`, `test/evolution_tests.jl`,
 `test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
-`test/sod_tests.jl`, `test/interface_tests.jl` and
-`test/refinement_tests.jl`; CI and a `README.md`.
-The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5 and
-H3a step 6, and `PLAN.md`'s step 7 (the driver and the tracked shock tube,
-H3b) is next.
+`test/sod_tests.jl`, `test/interface_tests.jl`,
+`test/refinement_tests.jl` and `test/driver_tests.jl`; CI and a
+`README.md`.
+The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
+H3a step 6 and H3b step 7, and `PLAN.md`'s step 8 (the atmosphere reset,
+H4a) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -126,16 +133,39 @@ the smooth interior of the fan 0.0901 / 0.0400 / 0.0144 / 0.0048
 `ε = 1/100`, `ε_g = 1/1000` are the floors. All of it in `CODE.md`'s
 "Step 6 — the refinement criterion".
 
+Step 7 added the driver and the first mesh that moves. The tracked Sod
+tube's L1 error against the exact solution is **1.0004** times the uniform
+fine run's in `D = 1` and **1.0000** in `D = 2`, at 200 cells against 256
+and 1472 against 2048, with the uniform coarse control at **3.678** and
+**1.850**; reduced onto the common grid the tracked and fine runs differ
+by `1.7e-5` where the coarse and fine runs differ by `1.1e-2`.
+`tracking == 1.0` in both dimensions — every cell above `refine_tol` sat
+on a block at the cap at every chunk — and the initial-data cycle
+converges in 3 passes and 2. Through 9 and 3 mesh changes the mass and
+energy drifts are `3.3e-16` / `1.6e-15` and `4.2e-17` / `1.9e-16`, and the
+momentum equals its boundary flux to `8.6e-16` and `1.0e-16`;
+`fixup = false` leaks `4.9e8`–`7.4e9` times more on **the same step count
+and the same mesh history**. `speed_headroom = 1` throws in Sod's *first*
+chunk (a CFL number of 0.6236 against 0.4); at 2 the run completes with
+`λ` rising from 1.1832 to 2.2047. The buffer table is strictly ordered —
+derived (6–7 cells) L1 4.540016e-3 at tracking 1.0, then 2: 1.0, 1:
+0.9444, 0: 0.9048 — which is *neither* upstream finding. And `p = 1` on a
+discontinuous solution is worse in every column (L1 4.701364e-3 against
+4.540016e-3, tracking 0.9091, 216 cells against 200) with zero floor hits
+either way, so the question stays open for Sedov. All of it in `CODE.md`'s
+"Step 7 — the driver and the tracked shock tube".
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
 
 ## Commands
 
-The full suite (about 70 s after step 6 — 1 m 13 s at one thread and 59 s
-at four, most of it the entropy wave's convergence studies, of which the
-interface-order sweep in `D = 2` alone is 19 s; the refinement criterion
-adds 11 s, two thirds of it the Sod calibration's four evolutions), and
+The full suite (about 90 s after step 7 — 1 m 30 s at one thread and
+1 m 16 s at four, most of it still the entropy wave's convergence studies,
+of which the interface-order sweep in `D = 2` alone is 19 s; the
+refinement criterion adds 11 s and the driver adds 16 s, the latter being
+twelve tracked and uniform Sod evolutions and three entropy waves), and
 the same at four threads — `Pkg.test` does not inherit `-t`, so it has to
 be passed explicitly:
 
@@ -221,12 +251,45 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   boundary flux `(p_L − p_R)·t_end·A`, not a norm of the state.
 - **The boundary hook goes to three places**: `fill_ghosts!`, `regrid!`
   (it fills ghosts before its transfer) and `adapt_to_initial_data!`.
-  Forgetting the second is the bug that arrives one chunk late.
-- **Dirichlet-from-initial-data reflects once a wave arrives.** The
-  driver asserts `t_end · λ_max` against the distance to the nearest
-  physical boundary before the run. If that assertion fires, shorten
-  `t_end` or enlarge the box; do not remove it. `assert_no_arrival` in
-  `src/sod.jl` is the shock tube's copy of it, and it is written on the
+  Forgetting the second is the bug that arrives one chunk late. All three
+  are wired in `evolve!` as of step 7, and `test/driver_tests.jl` counts
+  the outward-facing ghost entries that do not hold their boundary state
+  on blocks the *cycle* created.
+- **`speed_headroom = 1` throws on any discontinuous initial data**
+  (measured in step 7). Not "may throw": Sod's first chunk ends at
+  `λ_end = 1.9486` against a step sized for 1.25, a CFL number of 0.6236
+  against the requested 0.4, and the recheck fires. Every shock case — Sod,
+  Sedov's deposition, any restart from a jump — needs a headroom above the
+  1.8522 growth step 4 measured, which is why `HydroCase(::SodTube)` uses
+  2. A smooth case may use 1, and the entropy wave does; the recheck is
+  what makes that a measurement rather than a hope.
+- **The regrid cadence is bounded by the level cap, and the bound is
+  tighter than it looks.** The derived margin covers
+  `speed_headroom · λ · chunk` at the *cap's* spacing, and TreeAMR's
+  recruitment reaches one ring of neighbours, so `refinement_buffer`
+  throws once that travel exceeds one finest-level **block** width,
+  `(L/roots)/2^cap` — which for the tracked tube at a cap of 2 is 1/32,
+  and which the headroom doubles the demand on. `chunk = 1/50` is refused
+  on Sod at `roots = 8, cap = 2`; `1/200` is what fits. Deepening the
+  hierarchy by one level halves the admissible chunk, so a cap raised
+  without shortening the chunk fails at the *buffer* rather than at the
+  physics, which is a confusing place to meet it.
+- **The tracking measure is taken before the regrid, and that is the
+  point.** `tracked_share` asks what fraction of the strongly firing cells
+  sit on blocks already at the cap, on the state at the *end* of a chunk —
+  so it is a question about the mesh the *previous* regrid built. Taking it
+  after the regrid would measure the criterion against itself and return 1
+  always.
+- **Dirichlet-from-initial-data reflects once a wave arrives**, and
+  **`evolve!` does not check it — the case does** (settled in step 7,
+  amending the first draft of this note). The check compares `t_end · λ`
+  against the distance from the *feature* to the nearest physical
+  boundary, and both of those are case knowledge: the driver knows neither
+  where the feature is nor what the supremum of `λ` over all time will be,
+  and the `λ` it can measure is the one that is not a bound. So
+  `assert_no_arrival` stays in `src/sod.jl`, the tests call it beside the
+  run, and every later case owes itself the same. If it fires, shorten
+  `t_end` or enlarge the box; do not remove it. It is written on the
   *characteristic* speed rather than on the shock's own travel, which is
   conservative by about 25% on Sod's data and conservative in the right
   direction.
@@ -237,8 +300,8 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   of **1.8522**. So a `λ_max` measured at the start of a chunk can be
   exceeded *within* that chunk, and the end-of-chunk recheck is a detector
   rather than a guard — it fires after the damage. The driver therefore
-  needs a headroom factor as a case parameter beside the recheck, and
-  Sod's 1.8522 is the number that sizes it. `sod_errors` sidesteps this by
+  carries `speed_headroom` as a case parameter beside the recheck (step 7),
+  and Sod's 1.8522 is the number that sizes it. `sod_errors` sidesteps this by
   taking `λ` from the exact solution, which no driver can do. A second,
   smaller term: the *discrete* state sits above the exact supremum at a
   discontinuity by about half a percent at `N = 16`, falling with `h`.

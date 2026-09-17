@@ -30,17 +30,17 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the scheme conserves across coarse-fine faces and the
-refinement criterion is calibrated — milestones H1 and H2 are done and
-H3's indicator is measured; the driver is next.** What exists is
+**Status: the mesh now follows the solution — milestones H1, H2 and H3
+are done; the atmosphere reset is next.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
 state, the conversions between the conserved and primitive states, the two
 floor rules, the MUSCL reconstruction with its three slope limiters, the
 LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
-its three kernels, SSPRK33 in time, and two cases on a static two-level
-mesh. The entropy wave is an exact solution of the nonlinear system, and it
+its three kernels, SSPRK33 in time, the Löhner refinement criterion, the
+one chunked evolve-and-regrid driver, and two cases on it. The entropy
+wave is an exact solution of the nonlinear system, and it
 measures second order in L1 and L∞ in one and two dimensions. Sod's shock
 tube runs against Toro's exact Riemann solution through a Dirichlet
 boundary — the first use of TreeAMR's physical-boundary hook by any
@@ -63,8 +63,23 @@ so the criterion never resolves a discontinuity, and the level cap is
 what stops it — while the shear layer's smooth ramp falls by more than a
 factor of two per halving, which is what picks the thresholds. An
 atmosphere six orders below the data scores 0.0020 with the indicator's
-global floor term and 0.97 without it. Still missing: the driver, the
-atmosphere reset, and the Sedov and Kelvin–Helmholtz cases.
+global floor term and 0.97 without it.
+
+**And the mesh follows the shock.** There is exactly one time-stepping
+loop, `evolve!`, and a case is data it takes: the tracked shock tube
+matches the uniformly fine reference's L1 error to within 0.04% in one
+dimension and 0.00% in two, at 200 cells against 256 and 1472 against
+2048, with the uniform coarse mesh as the control at 3.68 and 1.85 times
+the error. Every cell the indicator fires strongly on sits on a
+finest-level block at every chunk, and all `D + 2` integrals hold to
+roundoff across the regrids while the same run without the interface
+fixup leaks by a factor of `1e9`. A time step sized from the signal speed
+at the *start* of a chunk is not safe on a shock tube — a Riemann
+problem's fastest signal is not in its initial data — so the driver carries
+a per-case headroom factor and rechecks the condition at the end of every
+chunk, loudly: with the headroom at 1, Sod throws in its first chunk.
+Still missing: the atmosphere reset, and the Sedov and Kelvin–Helmholtz
+cases.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
