@@ -28,4 +28,9 @@ using TreeHydro
     include("interface_tests.jl")
     include("refinement_tests.jl")
     include("driver_tests.jl")
+    # Sedov last, because the order is the dependency order and the blast is
+    # the only case that uses *both* the chunked driver and a static
+    # `hydro_solve!` run — the one to say what a tracked mesh measures and the
+    # other to say what it cannot.
+    include("sedov_tests.jl")
 end
