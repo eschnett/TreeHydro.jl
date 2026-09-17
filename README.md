@@ -30,8 +30,9 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the scheme conserves across coarse-fine faces — milestones H1
-and H2 are done, and the refinement criterion is next.** What exists is
+**Status: the scheme conserves across coarse-fine faces and the
+refinement criterion is calibrated — milestones H1 and H2 are done and
+H3's indicator is measured; the driver is next.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
@@ -53,7 +54,16 @@ TreeAMR's interface flux restriction switched off, one line of the
 right-hand side, leaks by **a factor of `1e8` to `1e9`**. The prolongation
 order behaves as the interface-order rule predicts for a flux divergence:
 L∞ rates of 0.96, 2.03 and 2.04 at orders 1, 3 and 5 against an unrefined
-control of 2.02. Still missing: the refinement criterion, the driver, the
+control of 2.02.
+
+**The refinement criterion is a Löhner indicator on `ρ` and `p`**, and it
+is calibrated rather than guessed: max `τ` on uniform meshes at four
+spacings says that a captured shock scores 0.57 at every one of them —
+so the criterion never resolves a discontinuity, and the level cap is
+what stops it — while the shear layer's smooth ramp falls by more than a
+factor of two per halving, which is what picks the thresholds. An
+atmosphere six orders below the data scores 0.0020 with the indicator's
+global floor term and 0.97 without it. Still missing: the driver, the
 atmosphere reset, and the Sedov and Kelvin–Helmholtz cases.
 
 ```bash

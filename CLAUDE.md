@@ -34,7 +34,8 @@ Two rules follow from `CODE.md` and govern every change here:
 ## Current state
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1) and the coarse-fine
-faces on a static mesh (H2) are done.**
+faces on a static mesh (H2) are done, and H3's refinement criterion is
+implemented and calibrated (step 6); the driver is step 7.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -63,13 +64,18 @@ non-allocating and inferred; from step 3 `src/evolution.jl`
 `sod_errors`); and from step 5 almost nothing — `sod_forest` gained
 `refined = :middle | :left` and `forest_levels(forest)` was added to
 `src/evolution.jl`, the step being a measurement rather than a
-construction. Tests: `test/precision_tests.jl`,
+construction; and from step 6 `src/refinement.jl` (`lohner`, `cell_tau`,
+`indicator_scales`, `hydro_flags`, `refinement_buffer` — the criterion
+alone, with no driver and no `regrid!` yet). Tests:
+`test/precision_tests.jl`,
 `test/prerequisite_tests.jl`, `test/eos_tests.jl`,
 `test/riemann_tests.jl`, `test/evolution_tests.jl`,
 `test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
-`test/sod_tests.jl` and `test/interface_tests.jl`; CI and a `README.md`.
-The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4 and H2 step 5,
-and `PLAN.md`'s step 6 (the refinement criterion, H3a) is next.
+`test/sod_tests.jl`, `test/interface_tests.jl` and
+`test/refinement_tests.jl`; CI and a `README.md`.
+The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5 and
+H3a step 6, and `PLAN.md`'s step 7 (the driver and the tracked shock tube,
+H3b) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -104,17 +110,34 @@ face's), the momentum equals the boundary flux to `5e-11` relative, and at
 three are `6e3`–`8e7` times worse. The Dirichlet hook fills a *fine*
 block's outer ghosts exactly, ghost rows across the tube included.
 
+Step 6 added the criterion and its calibration. Sod's initial data fires
+in exactly the two cells straddling the diaphragm, at `τ = 0.9657` and
+`0.9847`, and at **exactly zero** everywhere else; a synthetic atmosphere
+six orders below the data with `O(1)` relative noise scores **0.0020**
+with `ε_g = 1/1000` and **0.971** with `ε_g = 0`, which is the negative
+control that pins the global floor term. Max `τ` on uniform meshes at
+`h = 1/64 … 1/512`: a captured shock **0.5413, 0.5975, 0.5722, 0.5858**
+(flat — it never resolves), the contact 0.19 / 0.22 / 0.18 / 0.13, the
+rarefaction's head 0.1736 / 0.1050 / 0.0569 / 0.0286 (first order in `h`),
+the smooth interior of the fan 0.0901 / 0.0400 / 0.0144 / 0.0048
+(approaching second order), and the McNally density ramp 0.2535 / 0.1215
+/ 0.0532 / 0.0210. The ramp picks the thresholds — **`refine_tol = 0.08`,
+`coarsen_tol = 0.02`**, mid-plateau of the depth it then reaches — and
+`ε = 1/100`, `ε_g = 1/1000` are the floors. All of it in `CODE.md`'s
+"Step 6 — the refinement criterion".
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
 
 ## Commands
 
-The full suite (about 80 s after step 5 — 1 m 18 s at one thread and 1 m
-02 s at four, most of it the entropy wave's convergence studies, of which
-the interface-order sweep in `D = 2` alone is 19 s), and the same at four
-threads — `Pkg.test` does not inherit `-t`, so it has to be passed
-explicitly:
+The full suite (about 70 s after step 6 — 1 m 13 s at one thread and 59 s
+at four, most of it the entropy wave's convergence studies, of which the
+interface-order sweep in `D = 2` alone is 19 s; the refinement criterion
+adds 11 s, two thirds of it the Sod calibration's four evolutions), and
+the same at four threads — `Pkg.test` does not inherit `-t`, so it has to
+be passed explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -231,6 +254,27 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   indicator. The box threshold is `coarsen_tol`, not `refine_tol`
   (TreeWave's lesson: keying it on `refine_tol` silently disables the
   travelling margin).
+- **A shock fires forever, and it fires at 0.57 and not at 1** (measured
+  in step 6). Two halves of one trap. A captured discontinuity's `τ` does
+  not fall with `h` — 0.5413, 0.5975, 0.5722, 0.5858 over a factor of
+  eight — so the indicator can never terminate refinement on a shock and
+  `maxlevel_cap` is what does, on *every* shock case rather than as a
+  safety net; a test that expects a shock case's depth to be an output
+  has misread the criterion. And the value is 0.57 and not the ≈ 1 a
+  *sharp* jump scores, because capture spreads the jump over three or
+  four cells: Löhner's canonical `τ > 0.8` would detect a discontinuity
+  in the initial *data* and miss the shock the scheme is carrying. The
+  thresholds are calibrated on the smooth features, which are the only
+  ones whose refinement can terminate.
+- **A kink does *not* fire forever, despite the argument that it should**
+  (measured in step 6). The slope-jump-over-slope-sum ratio really is
+  `h`-independent, but a numerically computed rarefaction head is not a
+  kink: the scheme rounds the corner over a nearly fixed *physical*
+  width, and the local `ε` term takes over the denominator once the first
+  differences `h·s` fall below `ε·4|u|` (about `h·s = 0.04` for `O(1)`
+  data). Measured head: 0.1736, 0.1050, 0.0569, 0.0286 — first order.
+  This is the good outcome, and it is the reason a rarefaction is
+  refinable to a finite depth; do not "fix" it by shrinking `ε`.
 - **Don't name a keyword `maxlevel`.** It shadows TreeAMR's exported
   `maxlevel(forest)` inside the function body. Use `maxlevel_cap`.
 - **A decimal literal in a `T` expression is a leak.** `T(7//5)`, not

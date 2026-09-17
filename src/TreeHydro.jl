@@ -30,14 +30,17 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestone H1 done. The scheme runs on a uniform mesh: the
+*Status: milestones H1 and H2 done, and H3's refinement criterion
+measured. The scheme runs and conserves on a static two-level mesh: the
 equation of state, the two state conversions and the floors, the MUSCL
 reconstruction with its three limiters, the three Riemann solvers, the
 six-step right-hand side with its three kernels, SSPRK33 in time, the
+interface flux restriction that makes a coarse-fine face conserve, the
 entropy wave, which measures second order and conservation to roundoff,
-and Sod's shock tube against the exact Riemann solution, with the
-Dirichlet boundary hook. The coarse-fine faces, the refinement criterion
-and the driver are still to come.*
+Sod's shock tube against the exact Riemann solution, with the Dirichlet
+boundary hook, and the Löhner refinement criterion with its calibrated
+thresholds. The driver that regrids, the atmosphere reset, and the Sedov
+and Kelvin–Helmholtz cases are still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work

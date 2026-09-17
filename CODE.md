@@ -1194,7 +1194,13 @@ the periodic unit square with `γ = 5/3`, `p = 5/2`, `ρ₁ = 1`, `ρ₂ = 2`,
     v_y = 0.01 sin(4πx)
 
 run to `t = 1.5`. *Transcribed from memory; the implementation checks
-every formula against the paper before any number is recorded.* Its
+every formula against the paper before any number is recorded.* Step 6
+uses the density ramp's **shape** — the four branches above, in one
+dimension, at uniform pressure — as the smooth calibration profile for
+the refinement criterion, and nothing else of the setup. Nothing there
+depends on the transcription being faithful; if step 10 finds it is not,
+the calibration table is still a table of `max τ` against `h` for an
+exponential ramp of width `1/40`, which is what picked the thresholds. Its
 diagnostics are the paper's: the **amplitude of the seeded mode**
 `M(t)`, from the projections of `v_y` onto `sin(4πx)` and `cos(4πx)`
 weighted by `e^{−4π|y − ¼|}` so that the lower interface alone is read,
@@ -1288,6 +1294,57 @@ cadence, `+1` because the margin must exceed the motion.
 **Ghosts must be filled and `P` current** when the criterion runs: the
 stencil reaches one cell past the block face. The driver runs
 `fill_ghosts!` and the `con2prim` pass before flagging, and flags on `P`.
+
+**(Implemented in step 6.)** `src/refinement.jl`: `lohner`, `cell_tau`,
+`indicator_scales`, `hydro_flags` and `refinement_buffer`, with the
+calibration in [Measured results](#step-6--the-refinement-criterion).
+What the implementation settled, and where the prediction above needed
+amending:
+
+- **The denominator, exactly as written above**, with `ε = 1//100` — the
+  literature's value, not calibrated, since it is the local floor's
+  relative weight and nothing here asked it to move — and
+  **`ε_g = 1//1000`**, which is calibrated from both sides. It is small
+  enough to mask nothing: it lowers the shear layer's `τ` by 0.8% and
+  Sod's rarefaction fan by 0.5–2.6%. It is large enough to silence an
+  atmosphere six orders below the data, which is where Sedov's sits: `O(1)`
+  relative noise there scores `τ = 0.0020` with it and **0.971** without
+  it. Five orders would be marginal (0.0196 against a `coarsen_tol` of
+  0.02) and four would fire outright, which is the statement of how far
+  the atmosphere has to be below the data for this to work.
+- **The thresholds are `refine_tol = 0.08` and `coarsen_tol = 0.02`**,
+  chosen mid-plateau in TreeWave's manner and recorded in
+  [Measured results](#step-6--the-refinement-criterion) with the table
+  that picks them. The shear layer is what decides them; the
+  discontinuities cannot, since they exceed any usable threshold forever.
+  They are *not* defaults of `hydro_flags`, which has none for either
+  threshold or for the cap.
+- **A captured shock scores ≈ 0.57, not ≈ 1, and does not fall with `h`**
+  (0.5413, 0.5975, 0.5722, 0.5858 over a factor of eight). The
+  non-falling half is the important one and was predicted: the criterion
+  never resolves a discontinuity, and `maxlevel_cap` is what binds there
+  — on every shock case, not as a safety net. The *value* is the
+  amendment. `τ ≈ 1` is what a **sharp** jump scores — Sod's initial data
+  gives 0.9657 and 0.9847 in the two cells straddling the diaphragm — and
+  capture over three or four cells takes it down to 0.57 and leaves it
+  there. So Löhner's canonical `τ > 0.8` detects a jump in the *data* and
+  would miss a shock the scheme is actually carrying.
+- **A kink does not score `O(1)` forever** (amended in step 6). The
+  expectation was that the ratio of slope jump to slope sum is
+  `h`-independent, so that a rarefaction's head — a corner against a flat
+  state — would fire at every resolution as a shock does. It does not:
+  the measured head falls almost exactly like `h` (0.1736, 0.1050,
+  0.0569, 0.0286). Two reasons, both worth keeping. The scheme rounds the
+  corner over a nearly fixed *physical* width, so what the indicator sees
+  on a fine mesh is smooth data and not a kink at all; and even for a
+  true kink the local `ε` term takes over the denominator once the first
+  differences `h·s` fall below `ε·4|u|`, which for `O(1)` data is around
+  `h·s ≈ 0.04`. The consequence is the good one: a rarefaction is
+  refinable to a finite depth, like the shear layer and unlike the shock.
+- **The contact sits in between**: 0.19, 0.22, 0.18, 0.13 — above
+  `refine_tol` at every resolution measured, and falling only slowly, as
+  the HLL diffusion spreads it over more cells the longer the run goes
+  on. It will hold the cap in practice.
 
 ## Regridding: one driver, restart per chunk
 
@@ -1575,13 +1632,44 @@ Each has an acceptance test; serial `Float64` correctness first.
   wave cannot answer (it confirms the premise — an integral norm does not
   see the interface defect — and leaves the answer to the discontinuous
   cases of steps 7 and 9).
-- **H3 — Regridding.** The criterion, the buffer, `evolve!`, the
+- **H3 — Regridding.** *(The criterion and the buffer are measured in
+  step 6; `evolve!` and the initial-data cycle remain, in step 7.)* The
+  criterion, the buffer, `evolve!`, the
   initial-data cycle. *Accept:* the cycle converges to a fixed hierarchy
   on all four initial data; the tracked Sod tube in `D = 1, 2` matches
   the uniformly fine reference at fewer cells with the uniform coarse
   mesh as control, conserves to roundoff through the regrids, and leaks
   without the fixup; the `p = 1` against `p = 3` table for Sod; the
   buffer-width table.
+
+  What step 6 measured, all of it in
+  [Measured results](#step-6--the-refinement-criterion) and all of it
+  identical at one and at four threads:
+
+  - **The indicator fires where the physics is and nowhere else.** Sod's
+    initial data fires in exactly the two cells straddling the diaphragm
+    and at exactly zero everywhere else; a top-hat pressure in a uniform
+    density fires on `p` with the density's indicator exactly zero, which
+    is Sedov's initial data and the case a criterion on `ρ` alone would
+    miss entirely; a pure contact fires with the pressure's indicator
+    exactly zero.
+  - **The global term is what silences the atmosphere.** Six orders below
+    the data, with `O(1)` relative noise: `τ = 0.0020` with
+    `ε_g = 1/1000` and **0.971** with `ε_g = 0`, every cell of it firing
+    in the second case. The negative control is the measurement.
+  - **The thresholds, calibrated against `h`**: `refine_tol = 0.08` and
+    `coarsen_tol = 0.02`, mid-plateau of the depth the shear layer's ramp
+    reaches. The ramp is what picks them because the discontinuities
+    cannot — they exceed any usable threshold at every resolution.
+  - **Two predictions amended.** A captured shock scores 0.57 rather than
+    the ≈ 1 of a sharp jump, while keeping the property that matters (it
+    does not fall with `h`, so `maxlevel_cap` binds there); and a kink
+    does *not* fire forever — a numerically computed rarefaction head
+    falls at first order in `h`.
+
+  What step 6 wrote but did not exercise: the criterion driving an actual
+  `regrid!`, which is step 7's, and with it the buffer width against a
+  real `λ_max · chunk`.
 - **H4 — Sedov.** Floors and the atmosphere reset, the `D = 2` and
   `D = 3` blasts, the similarity checks, the hook on edges and corners.
   *Accept:* the exponent and the jump; the reset idempotent and `U`/`P`
@@ -1884,6 +1972,90 @@ not a tracking claim: the refined region here is static and half the tube,
 so the shock spends most of the run outside it. The claim that refinement
 following the shock matches the uniformly fine run at fewer cells is step
 7's.
+
+### Step 6 — the refinement criterion
+
+`ε = 1/100`, `ε_g = 1/1000`, `Float64`, `D = 1` unless said otherwise, and
+every number identical at one and at four threads. Nothing here is
+regridded: these are statements about the indicator on a given mesh.
+
+**What a discontinuity scores, and what the atmosphere scores.** Sod's
+initial data on a uniform mesh, `roots = 4`, `N = 8`: exactly the two
+cells straddling the diaphragm fire, at **`τ = 0.9657`** and **`0.9847`**,
+and every other cell scores **exactly zero**. The two blocks that meet at
+`x₀` report exactly those cells as their boxes (`N:N` and `1:1`) and every
+other block is a bare `Keep`. In `D = 2` the same holds with a whole
+column of cells firing in each. Against that, a synthetic atmosphere six
+orders below the data, alternating cell by cell between `ρ_atm` and
+`2ρ_atm` and likewise in `p`:
+
+| | max τ in the noisy region |
+|---|---|
+| `ε_g = 1/1000` | **0.0020** |
+| `ε_g = 0` (the negative control) | **0.971** |
+
+Every cell of the noisy region fires with `ε_g = 0`; none of them reaches
+even `coarsen_tol` with it. This is the whole justification of the global
+term, and the two rows are one test.
+
+**Sod after a short evolution.** `t = 0.1`, `:minmod`, HLLE, `D = 1`,
+`roots = 4`, uniform, `cfl = 2/5`. Max `τ` in a ±0.03 window around each
+feature, located from the exact solution (`head` at `x = 0.38168`, `tail`
+at `0.49297`, contact at `0.59275`, shock at `0.67522`); "inside the fan"
+is the middle 40% of the interval between head and tail.
+
+| `h` | shock | contact | fan head | fan tail | inside the fan |
+|---|---|---|---|---|---|
+| 1/64  | 0.5413 | 0.1871 | 0.1736 | 0.3301 | 0.09010 |
+| 1/128 | 0.5975 | 0.2233 | 0.1050 | 0.3713 | 0.03999 |
+| 1/256 | 0.5722 | 0.1806 | 0.0569 | 0.1750 | 0.01442 |
+| 1/512 | 0.5858 | 0.1279 | 0.0286 | 0.0786 | 0.00476 |
+
+Three of the four expectations held and one did not; the amendments are
+recorded under [The refinement
+criterion](#the-refinement-criterion). **The shock does not resolve** —
+flat to within 10% over a factor of eight in `h` — which is what makes
+`maxlevel_cap` load-bearing rather than a safety net, but it scores 0.57
+and not the ≈ 1 of a sharp jump, because capture spreads it over three or
+four cells. **The fan's interior falls faster than first order and
+approaches second** (ratios 2.25, 2.77, 3.03), as the local `ε` term takes
+over the denominator. **The fan's kinks fall too**, the head at almost
+exactly first order — the prediction that a kink fires forever is wrong
+for a numerically computed rarefaction. **The contact** stays above
+`refine_tol` throughout and falls slowly.
+
+**The McNally density ramp.** `ρ` from 1 to 2 over an exponential ramp of
+width `L = 1/40` at uniform `p = 5/2`, one dimension, no evolution — the
+shape of the Kelvin–Helmholtz shear layer, which is the feature the
+criterion exists to resolve *and stop*:
+
+| `h` | max τ | ratio |
+|---|---|---|
+| 1/64  | 0.25354 | |
+| 1/128 | 0.12148 | 2.09 |
+| 1/256 | 0.05316 | 2.29 |
+| 1/512 | 0.02099 | 2.53 |
+| 1/1024 | 0.00736 | 2.85 |
+
+(The last row is measured but not asserted in the suite.) The depth this
+reaches from a `1/64` base, which is the table the thresholds are read
+off, in TreeWave's manner:
+
+| `refine_tol` | depth reached | finest `h` |
+|---|---|---|
+| 0.03, 0.05 | 3 | 1/512 |
+| 0.075, 0.08, 0.10, 0.12 | **2** | 1/256 |
+| 0.15, 0.20 | 1 | 1/128 |
+| 0.30 | 0 | 1/64 |
+
+Any `refine_tol` in `(0.053, 0.121)` terminates at two levels, so the
+defaults for the cases are **`refine_tol = 0.08`** — the geometric middle
+of that plateau — and **`coarsen_tol = 0.02`**, a quarter of it as
+TreeWave's is a quarter of its own, and ten times the atmosphere's score.
+Note what the plateau is *not* about: on Sod the shock and the contact
+exceed 0.08 at every resolution and refine to the cap, which is intended.
+The plateau is about the smooth feature, because that is the only one
+whose refinement the indicator can terminate.
 
 ## Possible extensions
 
