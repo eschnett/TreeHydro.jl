@@ -15,8 +15,8 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.threads || 1 }} thread(s)
     runs-on: ${{ matrix.os }}
-    # This job runs the **short** tier only, and the number above is a
-    # guard and not a guess. Before the tiers existed the suite took 53
+    # This job runs the short tier only, and the timeout below is a guard
+    # and not a guess. Before the tiers existed the suite took 53
     # minutes on the 4-thread entry of this matrix -- all of it in the
     # tests -- against 3 to 6 minutes on each of the four serial entries,
     # and the log's timestamps localize it: the two-dimensional physics
