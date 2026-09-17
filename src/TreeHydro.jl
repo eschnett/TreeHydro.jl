@@ -78,6 +78,10 @@ export max_signal_speed, floor_hits, hydro_dt
 export conserved_totals, conserved_scales, hydro_solve!
 export forest_levels, convergence_rate
 
+# The refinement criterion: the indicator, its two global references, the
+# flag vector `regrid!` takes, and the buffer width around what fired
+export lohner, cell_tau, indicator_scales, hydro_flags, refinement_buffer
+
 # The entropy wave: the mesh, the exact cell averages, the study
 export EntropyWave, hydro_forest
 export fill_entropywave_averages!, entropywave_reference, entropywave_errors
@@ -106,6 +110,11 @@ include("riemann.jl")
 # The right-hand side that calls all of the above over a mesh, and the
 # first case to run on it.
 include("evolution.jl")
+# The refinement criterion reads the primitive set a `HydroProblem` holds
+# and takes the problem itself, so it follows the file that defines one.
+# It is the mesh's other half of the driver, and nothing in the cases
+# below needs it.
+include("refinement.jl")
 include("entropywave.jl")
 # The shock tube and the host `Float64` reference it is judged against. The
 # solver comes first because the case reads it: `λ` and the reference both
