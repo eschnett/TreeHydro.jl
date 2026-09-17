@@ -108,6 +108,16 @@ export ExactRiemann, exact_riemann, sample
 export SodTube, sod_initial, sod_conserved, sod_boundary
 export sod_forest, sod_reference, assert_no_arrival, sod_errors
 
+# The Sedov–Taylor similarity law: the blast's reference, and not a method
+export SedovSimilarity, sedov_alpha, sedov_exponent, sedov_radius
+export sedov_profile, exponent_fit
+
+# The Sedov blast: the case, its Dirichlet boundary on every face, and the
+# three things a run of it is read for
+export SedovBlast, sedov_state, ambient_state, sedov_initial, sedov_conserved
+export sedov_boundary, sedov_forest, sedov_similarity
+export measured_E₀, shock_radius, peak_compression, sedov_static
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -142,5 +152,10 @@ include("entropywave.jl")
 # come out of one `ExactRiemann`.
 include("exact_riemann.jl")
 include("sod.jl")
+# The blast and the similarity law it is judged against, in the same order and
+# for the same reason: the case reads the reference — `λ`'s bound, the arrival
+# check and the exponent all come out of one `SedovSimilarity`.
+include("sedov_reference.jl")
+include("sedov.jl")
 
 end # module TreeHydro
