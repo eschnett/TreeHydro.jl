@@ -465,6 +465,22 @@ function hydro_solve!(p::HydroProblem{T}, u, t0::T, t1::T, nsteps::Int) where {T
 end
 
 """
+    forest_levels(forest) -> sorted Vector{Int}
+
+The refinement levels the forest's leaves actually occupy, sorted and
+without duplicates.
+
+A one-line mesh query, here because every conservation claim this package
+makes across a coarse-fine face rests on the mesh *having* one, and
+`nblocks > roots^D` does not say that on its own — a forest could have been
+refined and coarsened back. `[0, 1]` is what the static two-level
+hierarchies of [`hydro_forest`](@ref) and [`sod_forest`](@ref) must report,
+and a run that quietly produced `[0]` would pass every drift assertion for
+the wrong reason (see "Conservation at coarse-fine faces" in `CODE.md`).
+"""
+forest_levels(forest) = sort(unique(level.(forest.leaves)))
+
+"""
     convergence_rate(hs, errs)
 
 Least-squares slope of `log(err)` against `log(h)` — the measured order of

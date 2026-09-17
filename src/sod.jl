@@ -213,7 +213,8 @@ exact_riemann(w::SodTube) =
                   tofloat64(w.p_R))
 
 """
-    sod_forest(Val(D), N; direction = 1, roots = …, L = 1, T = Float64)
+    sod_forest(Val(D), N; direction = 1, roots = …, L = 1, refined = false,
+               x₀ = L/2, T = Float64)
 
 The tube's mesh: **non-periodic along `direction`, periodic across it**, a
 box of side `L` along the tube and one root block thick in every other
@@ -236,12 +237,39 @@ from the tube's root spacing `L / roots[direction]` rather than being
 given: a box of side `L` across would be `roots[direction]` times too much
 mesh for a solution that does not vary in it.
 
-Uniform in this step; the two-level Sod forest whose refined region touches
-the Dirichlet face is step 5's.
+**`refined` picks one of three static meshes** (added in step 5), all of
+them 2:1 balanced and all refining whole root blocks, selected by where
+they put the coarse-fine face relative to the two things the tube has that
+the entropy wave does not — a travelling shock and a physical boundary:
+
+- `false` (or `:none`) leaves the box uniform. The control, and what step
+  4 measured on.
+- `:middle` refines the root blocks whose center **along the tube** lies in
+  `(L/4, 3L/4)`, as [`hydro_forest`](@ref) does for the periodic box. The
+  refined region is then the middle half of the tube, the diaphragm sits
+  inside it, and the shock — which travels at 1.752 from `x₀` — *leaves* it
+  at `t ≈ 0.143`, before the standard `t_end = 0.2`. That the shock crosses
+  a coarse-fine face during the run is the whole point of the
+  configuration: a refined region the solution never leaves would make the
+  conservation claim about a mesh nothing interesting happened on.
+- `:left` refines every root block whose center along the tube is below
+  `x₀`. The **refined region then touches the Dirichlet face** at the low
+  end, and the single coarse-fine face sits at the diaphragm. This is the
+  configuration "Boundaries" in `CODE.md` asks for: the physical-boundary
+  hook has to fill the outer ghosts of *fine* blocks, and the prolongation
+  sweep runs beside a face the hook wrote. What it does not exercise is the
+  M2 ordering case in full — a prolongation reaching *tangentially* into
+  hook-filled ghosts needs two physical faces meeting, and the tube is
+  periodic across itself; that is Sedov's corner in step 9.
+
+The criterion is on the tube's axis alone, unlike `hydro_forest`'s: across
+the tube there is one root block by default and the solution does not vary,
+so a criterion that also asked about the transverse center would refine
+nothing or everything depending on the box's thickness.
 """
 function sod_forest(::Val{D}, N; direction=1,
                     roots=ntuple(d -> d == direction ? 4 : 1, D), L=1,
-                    T::Type=Float64) where {D}
+                    refined=false, x₀=nothing, T::Type=Float64) where {D}
     dir = Int(direction)
     1 ≤ dir ≤ D || throw(ArgumentError(
         "the tube's direction must be one of the $D axes, got $dir."))
@@ -254,7 +282,30 @@ function sod_forest(::Val{D}, N; direction=1,
     # Blocks are cubes, so every dimension shares the tube's root spacing.
     h = L / rs[dir]
     extents = ntuple(d -> d == dir ? (zero(T), L) : (zero(T), h * rs[d]), D)
-    return Forest(rs; N=N, periodic=ntuple(d -> d != dir, D), extents=extents)
+    forest = Forest(rs; N=N, periodic=ntuple(d -> d != dir, D), extents=extents)
+
+    (refined === false || refined === :none) && return forest
+    xd = x₀ === nothing ? L / 2 : T(x₀)
+    inside = if refined === :middle
+        x -> L / 4 < x < 3 * L / 4
+    elseif refined === :left
+        x -> x < xd
+    else
+        throw(ArgumentError(
+            "sod_forest's refined must be false, :none, :middle or :left, got " *
+            "$(repr(refined)): :middle puts the coarse-fine face where the " *
+            "shock crosses it and :left puts the refined region against the " *
+            "Dirichlet face, and those are the two static configurations step " *
+            "5 measures. A mesh that follows the solution is the driver's, in " *
+            "step 7."))
+    end
+    targets = filter(forest.leaves) do k
+        ext = block_extent(forest, k)
+        inside((ext[dir][1] + ext[dir][2]) / 2)
+    end
+    refine!(forest, targets)
+    balance!(forest)
+    return forest
 end
 
 """
@@ -347,21 +398,29 @@ end
 """
     sod_errors([T = Float64], Val(D); N, ops, …)
 
-Run the shock tube to `t_end` on a uniform mesh with the Dirichlet boundary
-in place, and return the whole claim: the volume-weighted `l1` and `linf`
+Run the shock tube to `t_end` with the Dirichlet boundary in place, and
+return the whole claim: the volume-weighted `l1` and `linf`
 errors of the state vector against [`sod_reference`](@ref), the
 per-variable `drift` of the `D + 2` conserved integrals and the `scales`
 they are measured against, the owned-cell `floor_hits`, the finest spacing
-`h`, the step count, the block count, the three signal speeds below, and
-the final state — the field set `U` and the state vector `u` — so that two
+`h`, the step count, the block count, the `levels` the mesh occupies, the
+three signal speeds below, and the final state — the field set `U` and the state vector `u` — so that two
 runs can be compared cell by cell.
 
 Keywords: `N` cells per block and `ops` the operator family are required;
 `direction = 1`, `roots` one count per dimension (four along the tube, one
 across, as [`sod_forest`](@ref) has it), `G = 2`, `limiter = :minmod`,
-`riemann = :hlle`, `fixup = true`, `cfl = 2//5`, `t_end = 1//5`,
-`nsteps = nothing`, `λ_headroom = 1//50`, `backend = CPU()`, and anything
-else goes to [`SodTube`](@ref).
+`riemann = :hlle`, `fixup = true`, `refined = false`, `cfl = 2//5`,
+`t_end = 1//5`, `nsteps = nothing`, `λ_headroom = 1//50`,
+`backend = CPU()`, and anything else goes to [`SodTube`](@ref).
+
+`refined` is [`sod_forest`](@ref)'s, and it is what step 5 measures: the
+uniform mesh is the control, `:middle` puts a coarse-fine face where the
+shock crosses it, and `:left` puts the refined region against the Dirichlet
+face. The time step follows the *finest* spacing, so a refined run takes
+twice the steps of the uniform run it is named after and half the steps of
+the uniform run at its own finest spacing — which is the run it should be
+compared against.
 
 `limiter = :minmod` is the default *here* and `:none` is the entropy wave's:
 this solution has a shock in it, and an unlimited centered slope across a
@@ -402,11 +461,12 @@ sod_errors(valD::Val; kwargs...) = sod_errors(Float64, valD; kwargs...)
 
 function sod_errors(::Type{T}, ::Val{D}; N, ops, direction=1,
                     roots=ntuple(d -> d == direction ? 4 : 1, D), G=2,
-                    limiter=:minmod, riemann=:hlle, fixup=true, cfl=2 // 5,
-                    t_end=1 // 5, nsteps=nothing, λ_headroom=1 // 50,
-                    backend=CPU(), params...) where {T,D}
+                    limiter=:minmod, riemann=:hlle, fixup=true, refined=false,
+                    cfl=2 // 5, t_end=1 // 5, nsteps=nothing,
+                    λ_headroom=1 // 50, backend=CPU(), params...) where {T,D}
     w = SodTube(T, Val(D); direction=direction, params...)
-    forest = sod_forest(Val(D), N; direction=direction, roots=roots, L=w.L, T=T)
+    forest = sod_forest(Val(D), N; direction=direction, roots=roots, L=w.L,
+                        refined=refined, x₀=w.x₀, T=T)
     U = FieldSet{T}(forest, D + 2; G=G, backend=backend)
     p = HydroProblem(U, ops; eos=w.eos, floors=w.floors, limiter=limiter,
                      riemann=riemann, fixup=fixup, boundary=sod_boundary(w))
@@ -448,6 +508,6 @@ function sod_errors(::Type{T}, ::Val{D}; N, ops, direction=1,
             drift=ntuple(v -> abs(totals1[v] - totals0[v]), Val(D + 2)),
             scales=scales, floor_hits=floor_hits(p),
             h=minimum_spacing(T, forest), nsteps=nsteps, nblocks=nleaves(forest),
-            λ=λ, λ_initial=λ_initial, λ_ratio=λ / λ_initial, λ_final=λ_final,
-            U=hostcopy(U), u=u)
+            levels=forest_levels(forest), λ=λ, λ_initial=λ_initial,
+            λ_ratio=λ / λ_initial, λ_final=λ_final, U=hostcopy(U), u=u)
 end

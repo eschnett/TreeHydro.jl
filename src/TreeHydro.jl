@@ -75,7 +75,8 @@ export physical_flux, signal_speed, riemann_flux
 # The right-hand side and what a driver needs around it
 export HydroProblem, hydro_rhs!, update_primitives!
 export max_signal_speed, floor_hits, hydro_dt
-export conserved_totals, conserved_scales, hydro_solve!, convergence_rate
+export conserved_totals, conserved_scales, hydro_solve!
+export forest_levels, convergence_rate
 
 # The entropy wave: the mesh, the exact cell averages, the study
 export EntropyWave, hydro_forest

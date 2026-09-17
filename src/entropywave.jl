@@ -132,7 +132,10 @@ is what steps 3 and 4 run on: on a single-level mesh every face is a
 same-level face, so the conserved integrals are constant to roundoff with
 the interface fixup and without it, and any difference between the two
 would be a bug in the fixup rather than a property of the mesh. The
-refined path is built here and measured in step 5.
+refined path is built here and **measured in step 5**: on the two-level
+mesh the conserved integrals hold to roundoff with the fixup and leak by
+ten orders of magnitude without it, and the prolongation order decides the
+L∞ rate (see "Measured results" in `CODE.md`).
 """
 function hydro_forest(::Val{D}, N; roots=4, L=1, refined=true,
                       T::Type=Float64) where {D}
@@ -222,7 +225,8 @@ conservation claims are made of: the volume-weighted `l1` and `linf`
 errors of the whole state vector against the exact averages, the
 per-variable `drift` of the `D + 2` conserved integrals and the `scales`
 they are roundoff against, the owned-cell `floor_hits`, the finest
-spacing `h`, the step count and the block count.
+spacing `h`, the step count, the block count and the `levels` the mesh
+actually occupies.
 
 Keywords: `N` cells per block and `ops` the operator family are required;
 `G = 2`, `roots = 4`, `limiter = :none`, `riemann = :hlle`, `fixup = true`,
@@ -232,7 +236,10 @@ anything else is passed to [`EntropyWave`](@ref).
 `limiter = :none` is the default *here* and nowhere else: this is the
 convergence study, and a limiter clips at the smooth extrema of a sine and
 would measure its own footprint instead of the scheme's order. `refined =
-false` is the uniform control; the two-level path is step 5's.
+false` is the uniform control; `refined = true` is the two-level mesh
+measured in step 5, where the fixup is the difference between conservation
+and a leak and the prolongation order is the difference between second
+order and first in L∞.
 
 The time step is `cfl · h_min / (D λ_max)` with `λ_max` measured from the
 initial data through [`max_signal_speed`](@ref), which is exact for all
@@ -273,5 +280,6 @@ function entropywave_errors(::Type{T}, ::Val{D}; N, ops, G=2, roots=4,
             linf=volume_weighted_norm(U, err; p=Inf),
             drift=ntuple(v -> abs(totals1[v] - totals0[v]), Val(D + 2)),
             scales=scales, floor_hits=floor_hits(p),
-            h=minimum_spacing(T, forest), nsteps=nsteps, nblocks=nleaves(forest))
+            h=minimum_spacing(T, forest), nsteps=nsteps, nblocks=nleaves(forest),
+            levels=forest_levels(forest))
 end

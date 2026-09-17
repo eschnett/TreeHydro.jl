@@ -16,4 +16,5 @@ using TreeHydro
     include("entropywave_tests.jl")
     include("exact_riemann_tests.jl")
     include("sod_tests.jl")
+    include("interface_tests.jl")
 end
