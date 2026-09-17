@@ -2166,26 +2166,51 @@ With coverage off the whole suite runs in **1 m 45 at four threads and
 1 m 58 at one** on the development machine — four threads faster than
 one, as it was before any of this.
 
-The rule that follows is one line of YAML:
-`coverage: ${{ (matrix.threads || 1) == 1 }}` in CI.yml, with the
-`julia-processcoverage` and `codecov-action` steps carrying the same
-condition. Coverage is wanted — there is a badge in `README.md` and a
-`CODECOV_TOKEN` in the repository's secrets — so it goes on the
-*one-thread entries*, which run the same lines the threaded entry does,
-and leaves the threaded one alone. Instrumenting only the serial cells
-therefore loses no coverage at all. What it costs is measured on the
-whole suite rather than on the sweep alone, at one thread, locally and
-back to back: **4 m 01 without coverage and 12 m 38 with it, a factor of
-3.14** — three times the 5.7× sweep figure diluted by the parts of the
-suite that are not kernel-heavy, and far from the hundred the threaded
-entry would pay. A serial CI cell therefore costs about three times what
-it did, and `timeout-minutes: 30` is now the binding constraint rather
-than a distant guard: the complete serial baseline is 7 m 26 of test
-phase on macOS, which projects to roughly 23 minutes instrumented.
-Nothing about the suite's contents has to change; a `D ≥ 2` sweep is
-seconds of arithmetic and belongs wherever the claim it makes belongs.
-This is TreeAMR's and TreeWave's arrangement, and the three packages are
-read together.
+Coverage is wanted — there is a badge in `README.md` and a
+`CODECOV_TOKEN` in the repository's secrets — so the rule is not "off"
+but **once, where it is read**. What it costs is measured on the whole
+suite rather than on the sweep alone, at one thread, locally and back to
+back: **4 m 01 without coverage and 12 m 38 with it, a factor of 3.14**,
+both green at 11609 tests — the 5.7× sweep figure diluted by the parts of
+the suite that are not kernel-heavy, and far from the hundred the
+threaded entry would pay. Three conditions follow from that number, and
+`CI.yml` spells out all three.
+
+*One cell, not four.* Every serial cell executes the same lines, so a
+second instrumented cell pays the 3.14× again to tell Codecov what the
+first already said. The `matrix` carries `coverage: true` on the
+`version: "1"`, `ubuntu-latest` entry alone and the step reads
+`matrix.coverage == true`.
+
+*Only where it is read.* The badge reflects `main`, so instrumenting a
+branch or a pull request buys nothing and spends the 3.14× on the cell
+that decides how long anyone waits for a green tick. The condition is
+`github.ref == 'refs/heads/main' || github.event_name ==
+'workflow_dispatch'`; the dispatch arm is there so the upload path can be
+exercised deliberately before it is relied on, because a reporting step
+that runs nowhere reports nothing — the same failure mode as an SSPRK
+stage limiter installed in a field nobody reads.
+
+*Never the threaded cell*, which is the whole of the history above.
+
+Two more economies come from the same measurement, since `timeout` and
+matrix size are both set by what a cell costs. The cap is now
+`${{ matrix.coverage == true && 45 || 30 }}`: the instrumented cell's
+healthy runtime is three times the others', so its guard is the same
+guard multiplied by the same factor rather than a guard given up. And the
+matrix is spelled out one cell at a time instead of as a
+`version × os` product, because the product's fourth combination —
+Julia 1.11 on macOS — covered no axis the other three did not. Three
+axes, three serial cells: the floor on Linux (which is where the
+`TRACKED_1D` collision was red while 1.13 was green), the current release
+on Linux (which carries the coverage), and the current release on macOS
+(which carries the arm64 reduction claim above). Pushes whose every path
+matches `**.md` are skipped entirely — half the commits here are
+`Record step N …` and a Markdown change cannot move a measured number —
+while pull requests carry no such filter, so a PR always ends with a
+check on it. Nothing about the suite's contents has to change; a
+`D ≥ 2` sweep is seconds of arithmetic and belongs wherever the claim it
+makes belongs.
 
 **Step 7b's diagnosis was wrong and is corrected here** (amended in step
 7c). It read the same segment table as evidence that "on GitHub's 4-vCPU

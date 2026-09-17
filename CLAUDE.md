@@ -671,18 +671,21 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   53-minute threaded one, the `D ≥ 2` segments 14–17× slower at four
   threads than at one. Step 7b read that same table as a fact about
   GitHub's 4-vCPU runners and split the suite; it was the coverage, which
-  both jobs had on. So: `CI.yml` carries
-  `coverage: ${{ (matrix.threads || 1) == 1 }}` — on for the four serial
-  cells, whose lines are the same lines, off for the one threaded cell,
-  which is where the factor of a hundred would land — with the
-  `julia-processcoverage` and Codecov upload steps under the same
-  condition, matching TreeAMR and TreeWave. Never put coverage back on
-  the threaded entry. Measured on the full suite at one thread, locally
-  and back to back: **4 m 01 without coverage and 12 m 38 with it**, a
-  factor of **3.14**, so a serial CI cell costs about three times what it
-  did and `timeout-minutes: 30` has much less room than it had. A
-  `D ≥ 2` sweep costs its local seconds and may go anywhere the claim
-  belongs. `timeout-minutes: 30` is there so that a runtime regression
+  both jobs had on. Measured since, on the **whole suite** at one thread,
+  locally and back to back: **4 m 01 without coverage and 12 m 38 with
+  it**, a factor of **3.14**, both green at 11609 tests. So coverage is
+  collected **once, where it is read**: `coverage: true` on the
+  `version: "1"` / `ubuntu-latest` matrix entry alone, and the step's
+  condition is `matrix.coverage == true && (github.ref ==
+  'refs/heads/main' || github.event_name == 'workflow_dispatch')`, with
+  `julia-processcoverage` and the Codecov upload under the same
+  condition. The other serial cells run the same lines, so a second
+  instrumented cell would pay 3.14× to say what the first said; a branch
+  or PR is not what the badge reflects; and the dispatch arm exists so
+  the upload path can be exercised on purpose, because a reporting step
+  that runs nowhere reports nothing. **Never put coverage on the threaded
+  entry.** A `D ≥ 2` sweep costs its local seconds and may go anywhere
+  the claim belongs. `timeout-minutes: 30` is there so that a runtime regression
   fails loudly rather than billing an hour.
 - **Base's reductions are not bit-identical across machines, and that is
   measured** (step 7b, kept in step 7c). On all four CI runners — macOS
@@ -741,11 +744,16 @@ Match TreeAMR's, since the three packages are read together:
   and reviewed as such; `test/references/*.toml`, which step 7b generated
   and step 7c removed, were the one exception and are gone.
 - One workflow: `.github/workflows/CI.yml` runs the whole suite on every
-  push, over the Julia 1.11/1 × Linux/macOS matrix with one 4-thread entry,
-  with **coverage on the serial cells only** — uploaded to Codecov, and
-  kept off the threaded entry because there it costs a factor of a
-  hundred, see "Things that will bite" — and a 30-minute timeout as a
-  guard against a runtime regression.
+  push that touches something other than Markdown, over **four cells
+  spelled out one at a time** rather than a product — 1.11 on Linux (the
+  floor), 1 on Linux (which carries the coverage), 1 on macOS (which
+  carries the arm64 reduction claim) and 1 on Linux at 4 threads. Julia
+  1.11 on macOS was dropped: it covered no axis the other three did not.
+  **Coverage is collected on one cell, on `main` or a manual dispatch
+  only**, and never on the threaded entry, where it costs a factor of a
+  hundred — see "Things that will bite". The timeout guard is
+  `${{ matrix.coverage == true && 45 || 30 }}` minutes, the instrumented
+  cell getting the same guard scaled by its measured 3.14×.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,
