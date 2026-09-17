@@ -15,21 +15,14 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.threads || 1 }} thread(s)
     runs-on: ${{ matrix.os }}
-    # This job runs the short tier only, and the timeout below is a guard
-    # and not a guess. Before the tiers existed the suite took 53
-    # minutes on the 4-thread entry of this matrix -- all of it in the
-    # tests -- against 3 to 6 minutes on each of the four serial entries,
-    # and the log's timestamps localize it: the two-dimensional physics
-    # sweeps are 10 to 17 times slower under 4 threads on a 4-vCPU shared
-    # runner than under 1 thread on the same kind of runner (the D = 2
-    # interface-order sweep 1m54 -> 31m05; the D = 2 entropy wave 13 s ->
-    # 2m57; p = 1 with the fixup off 34 s -> 9m27; the D = 3 two-level
-    # 15 s -> 1m17), while one-dimensional runs cost seconds either way.
-    # Locally, on twelve cores, four threads is faster than one. So the
-    # sweeps live in the long tier and run in Long.yml at one thread, and
-    # the short tier keeps every D >= 2 run at N <= 8 and a few dozen
-    # steps. A regression in runtime is then a failure and not an hour of
-    # somebody's billed minutes.
+    # A guard against a runtime regression, not a guess at the runtime.
+    # The whole suite is expected to take a few minutes per entry: the
+    # tests themselves are under two minutes locally at either thread
+    # count, a shared runner is a few times slower than that, and the rest
+    # is precompilation. So 30 minutes is far above anything a healthy run
+    # reaches and far below an hour of somebody's billed minutes, and a
+    # change that makes the suite ten times slower fails here instead of
+    # quietly costing that.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -51,9 +44,21 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
-          # `julia-runtest` turns coverage on by default and nothing here
-          # consumes it -- there is no upload step and no Codecov badge --
-          # so it is one more multiplier on the runtime for nothing.
+          # Coverage must stay off, and this is the single most important
+          # line in the file. `julia-runtest` turns it on by default, and
+          # nothing here consumes it -- there is no upload step and no
+          # Codecov badge -- so it buys nothing; what it costs is a factor
+          # of 100. Julia compiles a coverage hit into an atomic
+          # read-modify-write on one global counter per source line, and
+          # the counters of 32 neighbouring lines share a 256-byte block,
+          # so every thread running the same kernel contends on the same
+          # cache line. Measured locally on the D = 2 entropy-wave sweep:
+          # 1.83 s at one thread and 0.79 s at four without coverage,
+          # 10.35 s and 79.13 s with it. On this matrix it turned a
+          # 5-minute serial job into a 53-minute threaded one, the
+          # two-dimensional segments running 14 to 17 times slower at four
+          # threads than at one. If coverage is ever wanted, add it as a
+          # separate 1-thread entry and leave the threaded one alone.
           coverage: false
         env:
           # The suite must pass, with identical numbers, threaded as well
@@ -62,9 +67,9 @@ jobs:
           # *other* count either way, so between this job and the serial
           # ones both directions are covered. (That test arrives in step
           # 13; the entry is here from the start so that the threaded path
-          # is exercised while it is being written.) The stored reference
-          # outputs are compared at both counts and must be bit-identical
-          # at both, which is TreeAMR's invariant restated as data.
+          # is exercised while it is being written.) Every number the suite
+          # prints must be identical at both counts, which is TreeAMR's
+          # invariant restated for this package.
           JULIA_NUM_THREADS: ${{ matrix.threads || 1 }}
 
   # There is deliberately no viewer job yet. TreeWave has one because

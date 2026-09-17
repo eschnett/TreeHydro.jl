@@ -1,9 +1,3 @@
-# **Long tier.** This file runs only under `TREEHYDRO_TEST_LONG=1`; see
-# "Testing: two tiers" in `CODE.md`. It is where the physics is claimed and
-# where the numbers `CODE.md` records come from, and it may take minutes.
-# The short tier pins reduced configurations of the same studies against
-# committed references in `test/regression_tests.jl`.
-#
 # The entropy wave: the first measured numbers in the package.
 #
 # Two claims, made on the **uniform** mesh, which is the control: every
