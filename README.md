@@ -1,7 +1,7 @@
 # TreeHydro.jl
 
 [![CI](https://github.com/eschnett/TreeHydro.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/eschnett/TreeHydro.jl/actions/workflows/CI.yml)
-
+[![codecov](https://codecov.io/gh/eschnett/TreeHydro.jl/graph/badge.svg?token=Z2KD14GPU6)](https://codecov.io/gh/eschnett/TreeHydro.jl)
 `TreeHydro` solves the equations of Newtonian ideal hydrodynamics with a
 high-resolution shock-capturing finite-volume scheme, as the
 *conservative* sample application for
