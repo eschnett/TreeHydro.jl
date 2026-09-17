@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–7 and 7b are done; step 8 is next.**
+**Steps 0–7, 7b and 7c are done; step 8 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -43,15 +43,14 @@ brief a single session can carry. The order is the dependency order.
 - Testset names are claims; each opens with a comment naming the failure
   mode it guards. Convergence rates, conservation drifts and mesh
   statistics are asserted as numbers with tolerances.
-- **Every later step adds its physics claims to the long tier and a
-  reduced configuration with references to the short tier.** A convergence
-  sweep, a table, a calibration or a tracked run goes in `test/long/`; the
-  short tier gets the same study at a size the threaded CI runner cannot
-  choke on (`D ≥ 2` at `N ≤ 8`, a few dozen steps), its outputs added to
-  `reference_outputs` in `test/references.jl`, and the file created by one
-  regeneration. And whenever a step changes the numerics **on purpose**,
-  regenerate the references and say in that commit *why* the numbers
-  moved. See step 7b and "Testing: two tiers" in `CODE.md`.
+- **Every later step adds its physics claims to the suite**, which runs
+  whole on every push, at one thread and at four. A convergence sweep, a
+  table, a calibration or a tracked run goes in that case's `*_tests.jl`
+  beside its unit claims; there is no second tier to put it in and none is
+  wanted, because the arithmetic is seconds. What CI must not do is turn
+  **code coverage** on: it costs a factor of a hundred under threads, and
+  it is the whole reason the suite once looked too slow to run. See step 7c
+  and "Testing" in `CODE.md`.
 - One step at a time; the next starts from a green suite on `main`.
 
 ## Sharp edges to know before starting
@@ -278,6 +277,9 @@ synthetic numbers. Record the tables.
 
 ## Step 7b — Fast CI (no milestone; the suite itself)
 
+*(Its diagnosis was wrong and its split was undone in step 7c; see there.
+The text below is kept as it was written.)*
+
 `CODE.md`: "Testing: two tiers", "File layout".
 
 Why: GitHub CI took **53 minutes** on the last push before this step. The
@@ -326,6 +328,70 @@ Accept: `Pkg.test()` green and under a minute; the long tier green with
 every number in "Measured results" unchanged; a regeneration followed by a
 short and a long run that both compare clean; the short tier bit-identical
 at one and four threads.
+
+## Step 7c — Undo the split (no milestone; the suite itself)
+
+`CODE.md`: "Testing", "File layout".
+
+Why: step 7b's diagnosis was wrong. Both CI jobs of the step 6 push ran
+under `julia-runtest`'s defaults — `--code-coverage=@<package path>` and
+`--check-bounds=yes`, visible in each log's "Precompiling for
+configuration" line — so the runner's threading was never the variable
+between them; coverage was on in both. Julia 1.13 compiles a coverage hit
+into an **atomic read-modify-write on one global counter per source line**
+(`visitLine` in `src/codegen.cpp`), and `src/coverage.cpp` packs 32
+neighbouring lines into one 256-byte block; a KernelAbstractions CPU
+launch is one task per thread over chunks of the same kernel, so every
+thread executing a kernel line contends on the same cache line. The cost
+therefore scales with parallel kernel work, which is exactly why it fell
+on the `D ≥ 2` runs and left the `D = 1` ones alone. Reproduced locally on
+twelve cores — no shared vCPUs, no oversubscription — on the `D = 2`
+entropy-wave sweep at `N = (8, 16, 32)` with `--check-bounds=yes`: **1.83 s
+at one thread and 0.79 s at four without coverage, 10.35 s and 79.13 s
+with it**, so 5.7× at one thread and 100× at four, and the sign of
+threading inverted. Step 7b set `coverage: false` in the same push as the
+split, so the fast CI that followed did not distinguish the two changes;
+with coverage off the whole two-tier suite ran locally in 1 m 45 at four
+threads and 1 m 58 at one. The split bought nothing and cost the thing the
+suite is for — the physics no longer ran on every push — so it is undone.
+
+Changes:
+
+- `test/sod_tests.jl`, `test/interface_tests.jl`,
+  `test/refinement_tests.jl` and `test/driver_tests.jl` restored to their
+  pre-split contents verbatim, and `test/long/entropywave_tests.jl` moved
+  back to `test/entropywave_tests.jl`. The one test 7b genuinely added —
+  that `evolve!` refuses a working type the case was not built at — is
+  kept, as its own testset.
+- `test/long/`, `test/regression_tests.jl`, `test/references.jl`,
+  `test/references/*.toml` and the `TOML` dependency in
+  `test/Project.toml` removed. Every claim the regression file made —
+  conservation with the fixup, the leak without it, the momentum equal to
+  its boundary flux, no floor hits, `tracking == 1`, the calibration's
+  shape — is made at full size by the restored files.
+- `test/runtests.jl` back to a plain include list in the original order,
+  with no environment flags.
+- `.github/workflows/Long.yml` deleted. `CI.yml` keeps its matrix,
+  `coverage: false` and `timeout-minutes: 30`; the two comments now give
+  the real reason for each.
+- `CODE.md`'s "Testing: two tiers" replaced by "Testing", carrying the two
+  measured tables, the mechanism, the rule, the correction of 7b, and 7b's
+  one surviving finding: across machines Base's `@simd` reductions move
+  order-one totals by 1–4 ulp, so bit-identity holds across thread counts
+  and not across microarchitectures.
+
+Measured: the whole suite **11 149 tests in 1 m 50 (1 m 55 wall) at one
+thread and 1 m 42 (1 m 47 wall) at four** — four threads faster than one,
+which is what coverage had been hiding. Every `@info` line the suite
+prints is byte-identical to the two-tier suite's, all 75 of them; only
+their order differs, and only because the include order is the original
+one.
+
+Accept: `Pkg.test()` green at one thread and at four, with the same
+numbers; every number in "Measured results" still produced by a test that
+runs on every push; no mention of a tier, a reference file or
+`TREEHYDRO_TEST_LONG` left outside this file's history and `CODE.md`'s
+account of it.
 
 ## Step 8 — The atmosphere reset (H4a)
 

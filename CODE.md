@@ -1645,18 +1645,14 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/sedov_reference.jl` | the similarity law; later the Kamm–Timmes profile |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | per-phase timings, TreeWave's format |
-| `test/` | the **short** tier: one `*_tests.jl` per case holding its unit and structural claims, plus `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
-| `test/regression_tests.jl`, `test/references.jl` | the reduced configuration of every study and the comparison against its stored outputs; `reference_outputs`, `write_references`, `compare_references` |
-| `test/references/*.toml` | the stored outputs, one file per study, committed and reviewed like code |
-| `test/long/` | the **long** tier: the same case files' physics — convergence sweeps, tables, the calibration, the tracked runs — behind `TREEHYDRO_TEST_LONG` |
-| `.github/workflows/CI.yml`, `Long.yml` | the short tier on every push over the matrix; the long tier weekly and on request, at one thread |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
+| `.github/workflows/CI.yml` | the one workflow: the whole suite on every push, over the Julia × OS matrix, at one thread and at four |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
 | `bin/backend.jl`, `bin/benchmark.jl`, `bin/Project.toml` | as in TreeWave |
 
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
-`OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats` and the
-`TOML` stdlib; `bin/`
+`OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats`; `bin/`
 adds `CairoMakie` and `SixelTerm` in its own environment. TreeAMR is
 unregistered and is located through a `[sources]` entry, which puts the
 Julia floor at 1.11 as it does for TreeWave. **The entry pins
@@ -1667,93 +1663,107 @@ Testset names are claims, each opening with the failure mode it guards;
 measured numbers are recorded in this file when they change. Conventions
 follow TreeAMR's `CLAUDE.md`, since the three packages are read together.
 
-## Testing: two tiers
+## Testing
 
-*(Added in step 7b.)* The suite is split in two, and which one runs is an
-environment variable. The reason is a measurement: on GitHub's 4-vCPU
-shared runners the *two-dimensional* physics sweeps run **10–17× slower at
-four threads than at one** — the `D = 2` interface-order sweep 1 m 54 →
-31 m 05, the `D = 2` entropy wave 13 s → 2 m 57 — while one-dimensional
-runs cost seconds either way, and locally on twelve cores four threads is
-faster than one. The single 4-thread matrix entry therefore took **53
-minutes** where the four serial entries took 3 to 6. A suite that cannot
-run on every push is a suite that stops being run.
-
-**The long tier holds the physics.** Everything under `test/long/`, behind
-`TREEHYDRO_TEST_LONG=1`: the convergence sweeps and their rates, the
+*(Added in step 7b, rewritten in step 7c.)* **There is one suite and it
+runs whole.** Every claim in "Measured results" comes from a test that
+runs on every push, at one thread and at four, over the Julia × OS matrix
+of `.github/workflows/CI.yml`: the convergence sweeps and their rates, the
 interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
-and prolongation-order tables. **Every number in "Measured results" comes
-from a test that runs here**, with its claim and its tolerance unchanged
-by the split. It runs weekly and on request, at one thread, and before any
-number in this file is written or changed.
+and prolongation-order tables. A number recorded in this file is a number
+CI recomputes, and a regression shows up as a changed number rather than
+as a test that merely still passes. The tests take under two minutes
+locally at either thread count; a CI entry takes a few minutes, a shared
+runner being slower and the rest of it precompilation.
 
-**The short tier is a regression net, not a weaker physics suite.** It is
-every unit-level test as it was, the structural claims the expensive ones
-rest on, and `test/regression_tests.jl`: a *reduced* configuration of each
-study — coarser `N`, fewer roots, a shorter `t_end`, fewer chunks — whose
-named outputs are compared against `test/references/*.toml` **to
-roundoff**, `isapprox(…; rtol = 1e-12, atol = 1e-13)` for floats (the
-absolute floor is measured, see below) and
-exact equality for step counts, block counts, levels and each table's
-`_config`. It cannot say the scheme is second order. What it says is that
-*this* code produces *these* numbers, so a reordered sum, a limiter branch
-or an upstream change in TreeAMR's prolongation fails in seconds with the
-moved number printed beside the stored one. Every stored key is compared
-and a missing or extra key fails, so a study that gains an output cannot
-silently escape comparison. Only `Float64` is stored: a MultiFloats value's
-last bits depend on whether the platform has an `fma`. Beside the numbers
-the cheap *claims* are kept — conservation to roundoff with the fixup, the
-leak without it, the momentum equal to its closed-form boundary flux, no
-floor firing, `tracking == 1` — because a reference records what the code
-did and a claim records what it is supposed to do.
+**The one thing that must stay off is code coverage**, and the reason is
+the whole of the history below. `julia-actions/julia-runtest` turns
+coverage on by default, and nothing here consumes it — no upload step, no
+badge — so it buys nothing. What it costs is a factor of a hundred.
 
-The short tier keeps every `D ≥ 2` run at `N ≤ 8` and a few dozen steps,
-which is what makes it safe on the threaded runner, and it is about 47 s
-at one thread and the same at four, with the stored numbers identical at
-both counts (TreeAMR's bit-identity invariant, restated as data).
+Julia compiles a coverage hit into an atomic read-modify-write on one
+global 64-bit counter per source line (`visitLine` in `src/codegen.cpp`
+emits an `AtomicRMW` add at monotonic ordering), and `src/coverage.cpp`
+packs the counters of 32 neighbouring lines into one 256-byte block. A
+KernelAbstractions CPU launch is one task per thread over chunks of the
+*same* kernel, so every thread executing a given kernel line does an
+atomic add on the same cache line, and the cost scales with the parallel
+work in the kernel. That is why it fell on the `D ≥ 2` runs and left the
+one-dimensional ones alone.
 
-**Regeneration is deliberate.** `TREEHYDRO_TEST_LONG=1
-TREEHYDRO_REGENERATE=1` runs the long tier and rewrites the reference
-files *after* its physics claims pass, from the very results the
-comparison would have used; the flag is refused without the long one. So a
-long run on another machine cannot quietly move committed numbers: a
-regeneration arrives as a reviewed `git diff` whose commit says why they
-moved. Regenerating to make a red comparison green is the one thing the
-tier forbids.
+Measured locally, on twelve cores with no oversubscription, on the
+`D = 2` entropy-wave sweep at `N = (8, 16, 32)` with `--check-bounds=yes`:
 
-**Across machines the numbers are *not* bit-identical, and "to roundoff"
-has to be said in two numbers** (amended after the first CI run of the
-split; the first draft predicted bit-identity). The prediction had its
-reasons — Julia's `sin`, `cos`, `exp`, `log` and `^` are pure Julia and
-therefore platform-independent, `sqrt` is correctly rounded by IEEE 754,
-Julia does not contract `a*b + c` into an `fma` unless asked, and
-TreeAMR's reductions are order-fixed — and the measurement overruled it:
-on all four runners, macOS arm64 on the same Julia 1.13 as the generating
-machine included, the conserved totals of order one came back **1 to 4
-ulp** from the stored ones. Every output therefore differed at the
-`1e-16` level, and the five comparisons that failed were exactly the
-*drifts*, where a `1e-16` difference is the whole value (`1.1e-16` against
-`0.0`; `2.9082786759615e-5` against `2.9082786759504e-5` for a leak, which
-is `4e-12` relative and one ulp of the totals it is a difference of). The
-one dependency that differed between the runners and the generating
-machine, a patch release of `DiffEqBase`, was tested and cleared —
-upgraded on the generating machine it reproduces the stored numbers
-exactly — so what differs is the machine itself, on the same Julia, the
-same packages and the same instruction set. The mechanism is Base's
-`sum` and `mapreduce`, whose inner loops run under `@simd` and may
-therefore reassociate: the arrangement of vectorized partial sums follows
-the CPU target the code was compiled for, and TreeAMR's `block_mapreduce`
-— hence every conserved total and every volume-weighted norm here — rests
-on them. TreeAMR's bit-identity across *thread counts* is untouched by
-this; it is bit-identity across *microarchitectures* that Base's
-reductions do not offer. The tolerance is therefore
-`rtol = 1e-12` **and** `atol = 1e-13`: the relative part for a value's own
-scale, the absolute floor a few hundred ulp of the order-one totals every
-drift is a difference of. Both are roundoff and not physics — a reordered
-sum moves a total by ulps, a changed limiter branch or stencil by far more
-than `1e-13` — and the claim that a drift is *small* is made against its
-bound in `regression_tests.jl`, not against a stored number.
+| | 1 thread | 4 threads |
+|---|---|---|
+| coverage off | 1.83 s | 0.79 s |
+| coverage on | 10.35 s | 79.13 s |
+
+So coverage alone costs **5.7×** at one thread on kernel-heavy code and
+**100×** at four, and it inverts the sign of threading: without it four
+threads are 2.3× faster than one, with it 7.7× slower.
+
+On CI the same thing, at the same shape. The step 6 push ran both jobs
+under the default `--code-coverage=@<package path>` and
+`--check-bounds=yes`, and took **5 m 14 in the test phase serially against
+52 m 53 at four threads**. Per segment, from the interval between
+consecutive `@info` lines in the two logs:
+
+| segment | 1 thread | 4 threads | ratio |
+|---|---|---|---|
+| `D = 2` interface-order sweep | 1 m 53 | 31 m 06 | 16.5 |
+| `D = 2` `p = 1`, `fixup = false` | 34 s | 9 m 27 | 16.6 |
+| `D = 2` entropy wave, `:mc` | 13 s | 3 m 33 | 16.0 |
+| `D = 2` entropy wave, `:none` | 13 s | 2 m 57 | 14.0 |
+| `D = 3` entropy wave, `N = 4` | 6 s | 47 s | 8.0 |
+| `D = 3` two-level | 14 s | 76 s | 5.3 |
+| `D = 1` Sod sweep, `:minmod` | 8 s | 10 s | 1.3 |
+| first segment (compile-dominated) | 68 s | 46 s | 0.7 |
+
+With coverage off the whole suite runs in **1 m 45 at four threads and
+1 m 58 at one** on the development machine — four threads faster than
+one, as it was before any of this.
+
+The rule that follows is one line of YAML: `coverage: false` in CI.yml,
+and if coverage is ever wanted it goes on a *separate one-thread entry*
+and leaves the threaded one alone. Nothing about the suite's contents has
+to change; a `D ≥ 2` sweep is seconds of arithmetic and belongs wherever
+the claim it makes belongs.
+
+**Step 7b's diagnosis was wrong and is corrected here** (amended in step
+7c). It read the same segment table as evidence that "on GitHub's 4-vCPU
+shared runners the two-dimensional sweeps are 10–17× slower at four
+threads than at one", blamed the runner's oversubscription, and split the
+suite into a short tier and a long one to keep the sweeps off the threaded
+job; it said in as many words that coverage "cost nothing measurable". It
+was reading the right table and attributing it to the wrong cause — both
+jobs had coverage on, so the runner was never the variable — and it set
+`coverage: false` in the *same push* as the split, which is why the fast
+CI that followed did not distinguish the two changes. The split, the
+reduced configurations in `test/regression_tests.jl`, the stored
+`test/references/*.toml` and `.github/workflows/Long.yml` were all undone
+in step 7c; what step 7b is kept for is the paragraph below, which is a
+real measurement and cost a red CI run to get.
+
+**Across machines the numbers are *not* bit-identical**, which is a trap
+for any future test that compares against stored numbers. Measured when
+7b's reference files were first taken to CI: on all four runners — macOS
+arm64 on the same Julia 1.13 as the generating machine included, with the
+one differing dependency tested and cleared — the conserved totals of
+order one came back **1 to 4 ulp** from the numbers this machine produces.
+The mechanism is Base's `sum` and `mapreduce`, whose inner loops run under
+`@simd` and may therefore reassociate: the arrangement of vectorized
+partial sums follows the CPU target the code was compiled for, and
+TreeAMR's `block_mapreduce` — hence every conserved total and every
+volume-weighted norm here — rests on them. TreeAMR's bit-identity across
+*thread counts* is untouched by this and is asserted; it is bit-identity
+across *microarchitectures* that Base's reductions never offered. So a
+claim of the form "this run produces this number" needs a tolerance of a
+few hundred ulp of the quantity's own scale *and* an absolute floor, and a
+claim about a *difference* of two order-one totals — every drift in this
+package is one — cannot be made relatively at all. The claims in the suite
+are made against bounds instead, which is why they survive the move.
 
 ## Milestones
 
