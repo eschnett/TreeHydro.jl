@@ -119,6 +119,56 @@ with `x_d → x_d − v_d t` the whole of the time dependence.
 end
 
 """
+    entropywave_primitive(w::EntropyWave, x, t = 0) -> P
+
+The **primitive** state `(ρ, v₁…v_D, p)` at the *point* `x` and time `t` —
+the pure `x -> P` form a [`HydroCase`](@ref) states its initial data in.
+
+A point sample and **not** the cell average
+[`entropywave_state`](@ref) returns. The two differ by the damping factor
+`((2/(kh)) sin(kh/2))^D`, which depends on the block's own `h` and which a
+coordinate callback therefore cannot see — and the driver's initial-data
+cycle changes `h` under the data by construction, which is why the cases it
+runs state their data pointwise. The difference is `1 − (kh)²/24`, an
+`O(h²)` offset of the same order as the error a convergence study measures,
+so a run through the driver is *not* the same number as
+[`entropywave_errors`](@ref)'s at the same `N`; see "Step 7" in "Measured
+results" in `CODE.md` for how far apart they are.
+"""
+@inline function entropywave_primitive(w::EntropyWave{T,D}, x,
+                                       t=zero(T)) where {T,D}
+    k = wavenumber(w)
+    s = sum(ntuple(d -> x[d] - w.v[d] * t, Val(D)))
+    return (w.ρ₀ + w.a * sin(k * s), w.v..., w.p₀)
+end
+
+"""
+    HydroCase(w::EntropyWave; roots = 4, speed_headroom = 1)
+
+The entropy wave as a case the driver can run: periodic in every
+dimension, no boundary hook, and [`entropywave_reference`](@ref) as the
+exact solution.
+
+**`speed_headroom = 1`, and that is a claim rather than an economy.** The
+velocity and the sound speed are constant along every characteristic here
+and the density's range does not grow, so `λ_max` measured at the start of
+a chunk really is a bound within it — which is exactly what a shock tube's
+is not. The end-of-chunk recheck in [`evolve!`](@ref) is what makes the
+difference between the two cases a measurement instead of an assumption.
+
+The initial data is [`entropywave_primitive`](@ref), a point sample, not
+the exact cell average the convergence study fills; a mesh the adaptation
+cycle changes has no fixed `h` for an average to be taken over.
+"""
+HydroCase(w::EntropyWave{T,D}; roots=4, speed_headroom=1) where {T,D} =
+    HydroCase(T, Val(D); initial=x -> entropywave_primitive(w, x), eos=w.eos,
+              floors=w.floors, boundary=nothing,
+              periodic=ntuple(_ -> true, D),
+              extents=ntuple(_ -> (zero(T), w.L), D), roots=roots,
+              speed_headroom=speed_headroom,
+              reference=(U, t) -> entropywave_reference(U, w, t))
+
+"""
     hydro_forest(Val(D), N; roots = 4, L = 1, refined = true, T = Float64)
 
 TreeAMR's M3 two-level hierarchy, as `burgers_forest` and `wave_forest`

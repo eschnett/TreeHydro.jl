@@ -191,10 +191,49 @@ The hook goes to three places, and forgetting the second is the bug that
 arrives one chunk late: [`fill_ghosts!`](@ref) (through `HydroProblem`'s
 `boundary` keyword, which is what step 3 put in the signature for this
 step), `regrid!`, which fills ghosts before its transfer, and
-`adapt_to_initial_data!`. Only the first exists yet; the other two arrive
-with the driver.
+`adapt_to_initial_data!`. All three are wired in [`evolve!`](@ref) as of
+step 7, and `HydroCase(w)` is what carries this hook to them.
 """
 sod_boundary(w::SodTube) = boundary_by_coordinates(sod_conserved(w))
+
+"""
+    HydroCase(w::SodTube; roots = (4 along the tube, 1 across),
+              speed_headroom = 2)
+
+The shock tube as a case the driver can run: **Dirichlet along the tube and
+periodic across it**, with [`sod_boundary`](@ref) as the hook and
+[`sod_reference`](@ref) as the exact solution at any time.
+
+The extents are [`sod_forest`](@ref)'s and for its reason: blocks are
+cubes, so the transverse extents follow from the tube's root spacing
+`L / roots[direction]` rather than being given. Scaling every root count by
+the same factor therefore leaves the box exactly where it was, which is
+what lets [`uniform_run`](@ref) build the finer reference from this same
+case.
+
+**`speed_headroom = 2`, and the number is measured rather than chosen.**
+Sod's initial data carries nothing above `c_L = 1.18322`; the gas behind
+the shock, which does not exist until the discontinuity resolves, carries
+`u★ + c★_R = 2.19157`, a factor of **1.8522** (measured in step 4). On top
+of that the *discrete* state sits above the exact supremum at a
+discontinuity by up to 0.8%, because a reconstruction of a jump produces a
+face state the exact solution does not contain. Two covers both with
+margin, and `1` throws in the first chunk — which is the measurement that
+justifies the parameter existing at all. See "Time integration and the time
+step" in `CODE.md`.
+"""
+function HydroCase(w::SodTube{T,D,DIR}; roots=ntuple(d -> d == DIR ? 4 : 1, D),
+                   speed_headroom=2) where {T,D,DIR}
+    rs = roots isa Tuple ? ntuple(d -> Int(roots[d]), D) : ntuple(_ -> Int(roots), D)
+    # Blocks are cubes, so every dimension shares the tube's root spacing.
+    h = w.L / rs[DIR]
+    extents = ntuple(d -> d == DIR ? (zero(T), w.L) : (zero(T), h * rs[d]), D)
+    return HydroCase(T, Val(D); initial=x -> sod_state(w, x), eos=w.eos,
+                     floors=w.floors, boundary=sod_boundary(w),
+                     periodic=ntuple(d -> d != DIR, D), extents=extents,
+                     roots=rs, speed_headroom=speed_headroom,
+                     reference=(U, t) -> sod_reference(U, w, t))
+end
 
 """
     exact_riemann(w::SodTube) -> ExactRiemann

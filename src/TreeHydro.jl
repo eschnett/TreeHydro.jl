@@ -30,17 +30,18 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestones H1 and H2 done, and H3's refinement criterion
-measured. The scheme runs and conserves on a static two-level mesh: the
-equation of state, the two state conversions and the floors, the MUSCL
-reconstruction with its three limiters, the three Riemann solvers, the
-six-step right-hand side with its three kernels, SSPRK33 in time, the
-interface flux restriction that makes a coarse-fine face conserve, the
-entropy wave, which measures second order and conservation to roundoff,
-Sod's shock tube against the exact Riemann solution, with the Dirichlet
-boundary hook, and the Löhner refinement criterion with its calibrated
-thresholds. The driver that regrids, the atmosphere reset, and the Sedov
-and Kelvin–Helmholtz cases are still to come.*
+*Status: milestones H1, H2 and H3 done. The scheme runs and conserves on
+a mesh that follows the solution: the equation of state, the two state
+conversions and the floors, the MUSCL reconstruction with its three
+limiters, the three Riemann solvers, the six-step right-hand side with its
+three kernels, SSPRK33 in time, the interface flux restriction that makes
+a coarse-fine face conserve, the Löhner refinement criterion with its
+calibrated thresholds, and the one chunked evolve-and-regrid driver that a
+case is data for — with the entropy wave measuring second order and
+conservation to roundoff, and Sod's shock tube tracked against the exact
+Riemann solution through the Dirichlet boundary hook, matching the
+uniformly fine reference at fewer cells. The atmosphere reset and the
+Sedov and Kelvin–Helmholtz cases are still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -85,6 +86,11 @@ export forest_levels, convergence_rate
 # flag vector `regrid!` takes, and the buffer width around what fired
 export lohner, cell_tau, indicator_scales, hydro_flags, refinement_buffer
 
+# The driver: a case as data, the one evolve-and-regrid loop, the uniform
+# reference it is judged against, and the three measurements around them
+export HydroCase, evolve!, uniform_run
+export check_cfl, tracked_share, reduce_to_grid, l1_difference
+
 # The entropy wave: the mesh, the exact cell averages, the study
 export EntropyWave, hydro_forest
 export fill_entropywave_averages!, entropywave_reference, entropywave_errors
@@ -118,6 +124,12 @@ include("evolution.jl")
 # It is the mesh's other half of the driver, and nothing in the cases
 # below needs it.
 include("refinement.jl")
+# The one time-stepping loop, and the case struct that is its only
+# argument. It follows the criterion because it calls it, and precedes the
+# cases because each of them constructs a `HydroCase` of its own — which is
+# the direction the dependency has to run if the driver is to know nothing
+# case-specific.
+include("driver.jl")
 include("entropywave.jl")
 # The shock tube and the host `Float64` reference it is judged against. The
 # solver comes first because the case reads it: `λ` and the reference both

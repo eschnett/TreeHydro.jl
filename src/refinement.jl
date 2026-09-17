@@ -192,12 +192,21 @@ function indicator_scales(P::FieldSet{T,D}) where {T,D}
 end
 
 """
-    hydro_flags(p::HydroProblem; refine_tol, coarsen_tol, maxlevel_cap,
-                ε = T(1//100), ε_g = T(1//1000),
-                scales = indicator_scales(p.P))
+    hydro_flags(P::FieldSet; refine_tol, coarsen_tol, maxlevel_cap,
+                ε = T(1//100), ε_g = T(1//1000), scales = indicator_scales(P))
+    hydro_flags(p::HydroProblem; …)
 
 The flag vector [`regrid!`](@ref) takes, one entry per leaf, from the
-Löhner indicator on the problem's current primitives.
+Löhner indicator on a set of current primitives.
+
+**Two entry points, one implementation** (the split arrived in step 7).
+During an evolution the primitives are the ones a [`HydroProblem`](@ref)
+holds and the problem is the natural argument; during
+[`adapt_to_initial_data!`](@ref) there is no problem to hold them — the
+forest is still changing under the cycle, so a primitive set built before
+it would have the wrong number of blocks by the second pass — and the
+criterion is handed a scratch set instead. The `HydroProblem` method simply
+forwards `p.P`.
 
 **`P` must be current, ghosts included.** The stencil reads one cell past
 each block face, and those cells are ghosts; a driver makes them right by
@@ -256,9 +265,11 @@ query, which a keyword of that name would shadow inside this body.
 Everything the two predicates close over is `isbits`: the two references
 as a tuple, four scalars, and a `Val`. See [`cell_tau`](@ref).
 """
-function hydro_flags(p::HydroProblem{T,D}; refine_tol, coarsen_tol, maxlevel_cap,
+hydro_flags(p::HydroProblem; kwargs...) = hydro_flags(p.P; kwargs...)
+
+function hydro_flags(P::FieldSet{T,D}; refine_tol, coarsen_tol, maxlevel_cap,
                      ε=T(1 // 100), ε_g=T(1 // 1000),
-                     scales=indicator_scales(p.P)) where {T,D}
+                     scales=indicator_scales(P)) where {T,D}
     R = float(real(T))
     rtol, ctol = R(refine_tol), R(coarsen_tol)
     ctol < rtol || throw(ArgumentError(
@@ -270,16 +281,20 @@ function hydro_flags(p::HydroProblem{T,D}; refine_tol, coarsen_tol, maxlevel_cap
         "regrids and the hierarchy never settles."))
     length(scales) == 2 || throw(ArgumentError(
         "the indicator reads two variables, ρ and p, so it needs two global " *
-        "references; got $(length(scales)). `indicator_scales(p.P)` is the " *
+        "references; got $(length(scales)). `indicator_scales(P)` is the " *
         "pair, and it is computed once per flagging pass rather than inside " *
         "the predicate."))
+    P.nvars ≥ D + 2 || throw(ArgumentError(
+        "the indicator reads ρ from slot 1 and p from slot $(D + 2) of the " *
+        "primitive set, so it needs at least $(D + 2) variables; got " *
+        "nvars=$(P.nvars). The primitive set of a HydroProblem has $(D + 4) " *
+        "— the two diagnostic slots come after the primitives."))
 
-    P = p.P
     # Tuples and scalars in the working type, bound once here: this is what
     # the two predicates capture, and a kernel argument must be `isbits`.
     refs = (R(scales[1]), R(scales[2]))
     εR, ε_gR = R(ε), R(ε_g)
-    valD = p.valD
+    valD = Val(D)
 
     refires = firing_boxes(P) do work, idx, b, x
         cell_tau(work, idx, b, refs, εR, ε_gR, valD) > rtol

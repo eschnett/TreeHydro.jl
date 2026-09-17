@@ -343,11 +343,18 @@ function update_primitives!(p::HydroProblem{T,D}, u) where {T,D}
 end
 
 """
+    max_signal_speed(P::FieldSet)
     max_signal_speed(p::HydroProblem)
 
 `λ_max = max over owned cells of max_d (|v_d| + c_s)`, the fastest signal
 anywhere on the mesh — the number the global time step is built from (see
 [`hydro_dt`](@ref) and "Time integration and the time step" in `CODE.md`).
+
+**Two entry points, one implementation** (the split arrived in step 7, as
+[`hydro_flags`](@ref)'s did and for the same reason): the driver's
+initial-data cycle has no [`HydroProblem`](@ref) to hold a primitive set,
+because the forest is still changing under it, and measures the speed on a
+scratch set instead.
 
 **`P` must be current**: this reads diagnostic slot `D + 3`, which the
 `con2prim` kernel wrote at the last [`hydro_rhs!`](@ref) or
@@ -359,9 +366,15 @@ kernel that held all three wrote the number down.
 The per-block maxima are combined in block order, so the answer does not
 depend on the thread count.
 """
-function max_signal_speed(p::HydroProblem{T,D}) where {T,D}
+max_signal_speed(p::HydroProblem) = max_signal_speed(p.P)
+
+function max_signal_speed(P::FieldSet{T,D}) where {T,D}
     R = float(real(T))
-    return maximum(block_mapreduce(identity, max, zero(R), p.P; vars=D + 3))
+    P.nvars == D + 4 || throw(ArgumentError(
+        "the signal speed lives in diagnostic slot $(D + 3) of the primitive " *
+        "set, which the con2prim kernel writes; got nvars=$(P.nvars) where " *
+        "$(D + 4) was expected."))
+    return maximum(block_mapreduce(identity, max, zero(R), P; vars=D + 3))
 end
 
 """
