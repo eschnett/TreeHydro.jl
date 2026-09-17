@@ -34,8 +34,8 @@ Two rules follow from `CODE.md` and govern every change here:
 ## Current state
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
-faces on a static mesh (H2) and regridding (H3) are done; the atmosphere
-reset is step 8.**
+faces on a static mesh (H2), regridding (H3) and the atmosphere reset
+(H4a, step 8) are done; Sedov is step 9.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -72,18 +72,29 @@ alone, with no driver and no `regrid!` yet); and from step 7
 `HydroCase(::SodTube)` in `sod.jl` and `HydroCase(::EntropyWave)` plus
 `entropywave_primitive` in `entropywave.jl`, and with `hydro_flags` and
 `max_signal_speed` each split into a `FieldSet` core and a
-`HydroProblem` forwarder. Tests, **one suite run whole** since step 7c:
+`HydroProblem` forwarder; and from step 8 the atmosphere reset —
+`ResetAccounting` and `reset_atmosphere!(u, integrator, p, t)` in
+`floors.jl` (a `map_blocks!` launch over the owned cells of
+`statearray(u, U)`, writing back *only* where a floor fired), and in
+`evolution.jl` `ghost_floor_hits`, `check_reset`, the state-vector method
+of `conserved_totals`, `hydro_solve!`'s `reset` keyword and
+`HydroProblem`'s `accounting` one, with `evolve!` gaining `reset`
+(defaulting to `:stage`), `accounting`, the post-regrid reset and the
+three new return fields `reset_hits`, `ghost_hits` and `injection`.
+Tests, **one suite run whole** since step 7c:
 `test/precision_tests.jl`, `test/prerequisite_tests.jl`,
 `test/eos_tests.jl`, `test/riemann_tests.jl`, `test/evolution_tests.jl`,
+`test/reset_tests.jl`,
 `test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
 `test/sod_tests.jl`, `test/interface_tests.jl`,
 `test/refinement_tests.jl` and `test/driver_tests.jl`, included in that
 order by `test/runtests.jl`. One workflow, `CI.yml`, and a `README.md`.
 The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6 and H3b step 7; step 7b split the suite into a short tier and a
+H3a step 6, H3b step 7 and H4a step 8; step 7b split the suite into a
+short tier and a
 long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; and `PLAN.md`'s step 8
-(the atmosphere reset, H4a) is next.
+was code coverage under threads and not the runner; and `PLAN.md`'s step 9
+(Sedov, H4b) is next — H4 is *not* done until it lands.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -156,6 +167,24 @@ discontinuous solution is worse in every column (L1 4.701364e-3 against
 either way, so the question stays open for Sedov. All of it in `CODE.md`'s
 "Step 7 — the driver and the tracked shock tube".
 
+Step 8 added the reset, and its two headline numbers are both zeros.
+Applying it twice equals applying it once **bit for bit** at `Float64` and
+`Float32` in `D = 1, 2, 3` — which `CODE.md` had predicted only to roundoff
+— while the *flag* is not idempotent: a pressure-floored cell whose kinetic
+energy dominates recovers a pressure a fraction of an ulp below `p_floor`
+and re-fires (2 of 13 cells at `Float64` in `D = 1`, 85 of 426 in `D = 3`,
+none at `Float32`), writing the identical bits back. And where nothing
+fires the reset changes nothing at all: on the tracked tube under `:stage`
+and `:step` and on the entropy wave, `injection == (0.0, 0.0, 0.0)`
+exactly, `reset_hits == 0`, `ghost_hits == 0`, and the final state, drift,
+error, step count and mesh history are bit-identical to the `reset = :none`
+run's. One `SSPRK33` step on a half-vacuum box comes out at `ρ = ρ_atm`
+under `:stage` and `:step` and stays at `ρ_atm/100` under `:none`, which is
+what asserts the hook is wired at all. The whole suite costs **11 282 tests
+in 1 m 42.9 at four threads** against 11 149 in 1 m 42.3 before the step,
+and every one of the 75 `@info` lines it printed before is byte-identical.
+All of it in `CODE.md`'s "Step 8 — the atmosphere reset".
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
@@ -165,8 +194,9 @@ defined.
 One suite, run whole, at every thread count; `CODE.md`'s "Testing" has
 the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
-recording a number. About 1 m 50 at one thread and 1 m 42 at four
-(measured in step 7c). `Pkg.test` does not inherit `-t`, so the thread
+recording a number. About 1 m 56 at one thread and 1 m 43 at four
+(measured in step 8; it was 1 m 37 and 1 m 42 before that step's own file
+was added). `Pkg.test` does not inherit `-t`, so the thread
 count has to be passed explicitly:
 
 ```bash
@@ -221,6 +251,36 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   `U` are two mechanisms on purpose (owned cells versus prolongated
   ghosts and face states); do not merge them, and keep the floor counts
   by population — they are a measurement the design depends on.
+- **The reset writes back only where a floor fired, and everything rests
+  on that** (measured in step 8). A kernel that wrote
+  `prim2con(con2prim(U))` unconditionally would be the same physics and
+  would move every cell by a few ulp at every stage — and since `:stage`
+  is the default, *every* run in this suite would then drift, turning
+  every roundoff conservation bound in `CODE.md` into a tolerance and the
+  `:none` comparison into an approximation. The reset's own tests would
+  still pass. The claim that catches it is in `test/reset_tests.jl`: the
+  tracked tube's state, drift, error, step count and mesh history under
+  `:stage` and `:step` are **bit-identical** to the `:none` run's, and the
+  injection is `0.0` rather than `≈ 0.0`.
+- **The SSPRK limiters are `solve` keywords, not constructor arguments**
+  (amended in step 8). `SSPRK33(; stage_limiter! = f)` is what `CODE.md`
+  was written against; `OrdinaryDiffEqCore` deprecated it in favour of
+  `solve(prob, SSPRK33(); stage_limiter = f)`, it warns under
+  `--depwarn=yes` (which `Pkg.test` passes), and once the deprecation
+  completes the constructor's field would be **silently unread** — a
+  positivity correction installed nowhere, reporting nothing. So
+  `hydro_solve!` passes the keywords, and `test/reset_tests.jl` asserts
+  that a step really does come out floored under `:stage` and `:step` and
+  does not under `:none`, which is the only thing that would notice.
+- **The reset is a fixed point of the *state*, not of its own flag**
+  (measured in step 8). A pressure-floored cell whose kinetic energy
+  dominates recovers `p` a fraction of an ulp below `p_floor` through the
+  cancellation `E − ½S²/ρ`, so a second pass re-fires the rule — and
+  writes the identical bits back, because `prim2con` is handed the same
+  `ρ` and the same `v`. Idempotence of the state is bit for bit at both
+  types in `D = 1, 2, 3`; a test that asserted the *count* went to zero on
+  the second pass would fail at `Float64` in `D = 1` and `D = 3` and pass
+  in `D = 2`, for no reason worth chasing.
 - **Face-state floor hits are not counted, and that is deliberate.**
   `face_states` floors both reconstructed states and returns the states
   alone. Under `:minmod` or `:mc` the floors cannot fire on physical cell
@@ -233,9 +293,14 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   look symmetric.
 - **Conservation is claimed net of measured injection.** Where no cell is
   floored the totals before and after a reset are bit-identical and the
-  injection is *exactly* zero; a test that sees a nonzero injection on
-  Sod, the entropy wave or Kelvin–Helmholtz has found a bug, not a
-  tolerance to loosen.
+  injection is *exactly* zero (measured in step 8 on Sod and the entropy
+  wave, both hooks, `(0.0, 0.0, 0.0)`); a test that sees a nonzero
+  injection on Sod, the entropy wave or Kelvin–Helmholtz has found a bug,
+  not a tolerance to loosen. `accounting = false` returns `injection =
+  nothing` and not a tuple of zeros, so that "not measured" cannot be read
+  as "measured and zero" — and a state carrying a `NaN` has no total, so
+  its injection comes back `NaN` in that one variable, which is the honest
+  answer and not a defect.
 - **At a physical boundary the drift is not roundoff, and the momentum has
   no scale** (measured in step 5). Two traps in one place. The mass and
   energy totals of a Sod run move by the *numerical* foot of the

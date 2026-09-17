@@ -30,13 +30,16 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the mesh now follows the solution — milestones H1, H2 and H3
-are done; the atmosphere reset is next.** What exists is
+**Status: the mesh now follows the solution and the atmosphere is imposed
+on the state — milestones H1, H2 and H3 are done, and the reset with them;
+the Sedov blast is next.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
 state, the conversions between the conserved and primitive states, the two
-floor rules, the MUSCL reconstruction with its three slope limiters, the
+floor rules and the reset that imposes them on the conserved state from
+the integrator's own limiter hook, the MUSCL reconstruction with its three
+slope limiters, the
 LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
 its three kernels, SSPRK33 in time, the Löhner refinement criterion, the
 one chunked evolve-and-regrid driver, and two cases on it. The entropy
@@ -78,8 +81,20 @@ at the *start* of a chunk is not safe on a shock tube — a Riemann
 problem's fastest signal is not in its initial data — so the driver carries
 a per-case headroom factor and rechecks the condition at the end of every
 chunk, loudly: with the headroom at 1, Sod throws in its first chunk.
-Still missing: the atmosphere reset, and the Sedov and Kelvin–Helmholtz
-cases.
+
+**And where the gas runs out, the atmosphere is imposed on the state.**
+The reset is a pointwise `con2prim` / floors / `prim2con` pass run from
+`SSPRK33`'s own stage limiter and again after every regrid — GRMHD
+practice in the integrator's vocabulary, and the right-hand side still
+never mutates its state. It writes back *only* the cells a floor fired in,
+which is what lets the conservation results above stand unchanged with the
+reset on by default: on the tracked tube and the entropy wave the measured
+injection is exactly `(0, 0, 0)`, no cell is floored in either population,
+and the final state is bit-identical to a run with the reset switched off.
+Applying it twice equals applying it once bit for bit, at `Float64` and
+`Float32` in one, two and three dimensions. Still missing: the Sedov and
+Kelvin–Helmholtz cases — Sedov being the first case in which a floor
+actually fires.
 
 There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the

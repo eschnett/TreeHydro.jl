@@ -287,6 +287,16 @@ the mesh's to make, and a second application spelling out `size(fs.work)`
 would be a second copy of that statement. See
 [Upstream prerequisites](#upstream-prerequisites).
 
+**(The ghost floor count arrived in step 8.)** `ghost_floor_hits(p)` is the
+one-item-per-block kernel this section promised: it sums slot `D + 4` over
+each block's stored cells, skips the owned range, and combines the per-block
+values on the host in block order. It counts ghost *entries* and not cells,
+so a physical cell that is a ghost of two blocks counts twice — what is
+being measured is how often the recovery meets an unphysical ghost. It reads
+**zero** on the tracked shock tube and on the entropy wave (measured in step
+8), which is what says the open question above is about the Sedov blast in
+particular and not about the exchange in general.
+
 ### Reconstruction
 
 Piecewise-linear reconstruction of **primitive variables**, component by
@@ -419,7 +429,9 @@ settled:
 Burgers test uses it: conservation holds for any Runge–Kutta method
 (every stage's `du` sums to zero), but only a strong-stability-preserving
 one keeps a limited scheme's shocks monotone. Its `stage_limiter!` hook
-is also where the atmosphere reset acts (see
+is also where the atmosphere reset acts — a `solve` keyword since step 8,
+the constructor form having been deprecated upstream, with the hook, its
+signature and its cadence unchanged (see
 [Floors and the atmosphere](#floors-and-the-atmosphere)) — a second
 reason for an SSPRK method, since a positivity-preserving correction
 after each stage is what those hooks exist for.
@@ -555,6 +567,24 @@ consistently, and what each costs:
    first draft's behaviour) are switches, so that what the per-stage
    reset buys over the per-step one is a measurement on Sedov rather
    than an inheritance.
+
+   **(Amended in step 8: the hooks are `solve` keywords now, not
+   constructor arguments.)** The signature and the semantics are exactly
+   as above, but `OrdinaryDiffEqCore` has moved the two limiters into the
+   solver options: `SSPRK33(; stage_limiter! = f)` is deprecated in
+   favour of `solve(prob, SSPRK33(); stage_limiter = f)`, warns on every
+   run under `--depwarn=yes` — which is what `Pkg.test` passes — and
+   would, once the deprecation is completed, leave the constructor's
+   field silently unread. A positivity correction that is installed
+   nowhere and reports nothing is the one failure mode this must not
+   have, so `hydro_solve!` passes the keywords to `solve` and
+   `test/reset_tests.jl` asserts that a step really does come out floored
+   under `:stage` and under `:step` and does not under `:none`. Read
+   against the installed `OrdinaryDiffEqSSPRK`: `stage_limiter!` is
+   applied to every stage of `SSPRK33` *including the last*, and
+   `step_limiter!` once to the accepted step's result, which is what
+   makes `:step` the cheaper cadence of the same thing rather than a
+   different correction.
 2. **A `DiscreteCallback`** with an always-true condition, modifying
    `integrator.u` and calling `u_modified!`. Equivalent to the
    `step_limiter!` and less direct; not adopted, recorded because it is
@@ -584,6 +614,27 @@ consistently, and what each costs:
   equals applying it once to roundoff (an idempotence test; bit-for-bit
   would need the floor comparison to absorb the `prim2con`/`con2prim`
   round trip, and is not claimed).
+
+  **(Measured in step 8; the prediction is corrected in both
+  directions.)** The *state* is idempotent **bit for bit** — at `Float64`
+  and at `Float32`, in `D = 1, 2, 3`, on a synthetic state carrying all
+  six populations (healthy gas, `0 < ρ < ρ_atm`, `ρ = 0`, `ρ < 0`,
+  `ρ = NaN`, and a healthy density with a negative internal energy). The
+  *flag* is not, and the reason is the round trip the prediction named: a
+  pressure-floored cell recovers its internal energy through the
+  cancellation `E − ½S²/ρ`, so where the kinetic energy dominates, the
+  recovered pressure lands a fraction of an ulp below `p_floor` and the
+  rule fires again — writing `prim2con(eos, (ρ, v, p_floor))` from the
+  same `ρ` and the same `v`, which is the same arithmetic on the same
+  numbers and therefore the same bits. Second-pass counts on that state:
+  2 of 13 floored cells at `Float64` in `D = 1`, none in `D = 2`, 85 of
+  426 in `D = 3`, none at `Float32` in any dimension. So the reset is a
+  fixed point of the state and not of its own report, which is why the
+  counts are taken per call rather than read back off the flag slot.
+  `con2prim` of the reset `U` reproduces the floored `P` to roundoff of
+  the *data's own scale* — not of `p_floor`, for the same cancellation
+  reason — and every cell in which no floor fired is bit-identical to
+  what it was.
 - **Conservation is accounted for, not assumed.** A reset injects mass,
   momentum and energy; the injection is *measured* — the per-variable
   totals of the stage vector before and after the reset, through
@@ -596,6 +647,22 @@ consistently, and what each costs:
   runs on the drift *net of* injection. The accounting doubles the
   reductions per stage and is a keyword the tests turn on and the demos
   do not.
+
+  **(Measured in step 8, and "exactly" is the word.)** On the tracked
+  shock tube under `:stage` and under `:step`, and on the entropy wave
+  through the driver, the injection comes back `(0.0, 0.0, 0.0)`, the
+  reset hit count is `0`, the ghost floor count is `0` — and the final
+  state, the drift, the step count and the mesh history are
+  **bit-identical** to the `reset = :none` run's. That is what the
+  "written back only where `hit` is true" rule buys, and it is why every
+  roundoff drift bound recorded in this file is unchanged now that
+  `:stage` is the default and every run in the suite calls the reset three
+  times per step. The accounting is `accounting = false` by default and
+  then returns `nothing` rather than a tuple of zeros, so that "not
+  measured" cannot be read as "measured and zero". One honest exception it
+  reports rather than hides: a state carrying a `NaN` has no total, so the
+  injection into it is a `NaN` in the variable the `NaN` lived in and a
+  finite number in the others — the state is repaired all the same.
 - **The reset is a pure pointwise map**, so it is bit-identical across
   thread counts and identical on every backend, and it composes with
   the RHS's purity: the RHS reads the reset `u` and nothing else.
@@ -621,6 +688,45 @@ per-block count over the stored extent of `U` at the chunk boundary,
 combined in block order; `firing_boxes` covers owned cells only). The
 ghost count is what the Sedov milestone reports against the
 ghost-exchange decision.
+
+**(Implemented in step 8.)** `src/floors.jl` holds `ResetAccounting` and
+`reset_atmosphere!(u, integrator, p, t)` — a `map_blocks!` launch over the
+owned cells of `statearray(u, U)`, writing back only where `hit` came back
+true and writing the flag into `P`'s diagnostic slot `D + 4` as it goes;
+`src/evolution.jl` holds `ghost_floor_hits`, `check_reset`, the state-vector
+form of `conserved_totals`, and `hydro_solve!`'s `reset` keyword;
+`src/driver.jl` wires `reset` and `accounting` through `evolve!` and calls
+the reset a second time after every `regrid!`. The numbers are in
+[Measured results](#step-8--the-atmosphere-reset). What the implementation
+settled:
+
+- **The hit count is always taken and the injection is not.** The count is
+  one `block_mapreduce` over one diagnostic slot, which `floor_hits`
+  already was; the injection is two full reductions of the state per call.
+  So the count rides along with every reset and the injection is behind
+  `accounting`.
+- **`P`'s flag slot is shared between the recovery and the reset, and the
+  sharing is safe because `P` is scratch.** After `hydro_rhs!` or
+  `update_primitives!` the slot holds the `con2prim` pass's flags over
+  every stored cell, which is what `floor_hits` and `ghost_floor_hits` read
+  at a chunk boundary; immediately after a reset it holds the reset's own,
+  over owned cells only, which is what the reset reads. The two never mix
+  within one measurement, and no second field set is needed — which is the
+  alternative this rejected, since a `FieldSet` of flags handed back in
+  after every regrid would be mesh bookkeeping written downstream.
+- **The ghost count is the one reduction in the package written as a launch
+  of its own**: one work item per block, summing slot `D + 4` over that
+  block's stored cells and skipping the owned range, with the per-block
+  values combined on the host in block order. `block_mapreduce` reduces a
+  block's *interior*, which is exactly the range this count must not use.
+- **The record is host-side, mutable, and held by the problem.** A run
+  rebuilds its `HydroProblem` after every regrid, so a record the problem
+  made for itself would start again at every mesh change; `evolve!` makes
+  one per run and hands the same one to every problem it builds. No kernel
+  ever receives it.
+- **`reset = :none` skips the post-regrid reset too**, so that it is the
+  negative control it is meant to be rather than "the reset, minus the
+  hooks".
 
 ### What has a GRMHD counterpart, and what is deliberately not used
 
@@ -1482,18 +1588,20 @@ that **there is exactly one time-stepping loop** (decided):
     while t < t_end
         λ  = max_signal_speed(p)                     # block_mapreduce over P
         dt = cfl · minimum_spacing(forest) / (D · λ)
-        u  = solve(SSPRK33(stage_limiter! = reset_atmosphere!), hydro_rhs!,
-                   u, t → stop; dt)                  # the reset, per stage
+        u  = solve(SSPRK33(), hydro_rhs!, u, t → stop; dt,
+                   stage_limiter = reset_atmosphere!)   # the reset, per stage
         scatter!(U, u); fill_ghosts!(U, …; boundary); con2prim!(P, U)
         assert dt ≤ cfl · h / (D · max_signal_speed(p))      # the CFL check
         record totals of every conserved variable, the injection, floor
-            counts by population, block count
+            counts by population — floor_hits and ghost_floor_hits from
+            the recovery, reset_hits from the reset — block count
         observer(p, t, u)                            # before the regrid invalidates U
         flags = hydro_flags(P; refine_tol, coarsen_tol, cap)
         if regrid!(forest, (U => p.schedule, P => nothing, F_1 => nothing, …);
                    flags, buffer, boundary)
             p = HydroProblem(U, ops; …, prims = p.prims, fluxes = p.fluxes)
-            u = statevector(U); gather!(u, U); reset_atmosphere!(u, p)
+            u = statevector(U); gather!(u, U)
+            reset_atmosphere!(u, nothing, p, t)       # the reset, per regrid
         end
     end
 
@@ -1509,7 +1617,11 @@ is over a *loop that already exists three times upstream*, not over
 physics.
 
 The loop returns what the tests assert on: the drift of each conserved
-integral against its scale, the floor counts, the mesh statistics per
+integral against its scale, the floor counts — `floor_hits` (owned cells
+the recovery found unphysical at a chunk boundary), `reset_hits` (owned
+cells the reset changed) and `ghost_hits` (ghost entries the recovery
+floored), with `injection` beside them or `nothing` where it was not
+measured — the mesh statistics per
 chunk, the tracking measure, the final state and forest, and — through
 `observer(p, t, u)`, called with `U` scattered and `P` current — whatever
 the viewer wants, so that `bin/` contains no time-stepping of its own.
@@ -1645,7 +1757,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/sedov_reference.jl` | the similarity law; later the Kamm–Timmes profile |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | per-phase timings, TreeWave's format |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
 | `.github/workflows/CI.yml` | the one workflow: the whole suite on every push, over the Julia × OS matrix, at one thread and at four |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
@@ -1986,9 +2098,10 @@ Each has an acceptance test; serial `Float64` correctness first.
     0.9091, and no floor count to buy — which is exactly why Sod cannot
     close the question and Sedov must.
 
-  What step 7 wrote but did not exercise: the atmosphere reset, whose
-  place in the loop is a comment and whose keyword is already in the
-  signature (step 8), and every case but Sod and the entropy wave.
+  What step 7 wrote but did not exercise: every case but Sod and the
+  entropy wave. (The atmosphere reset, which was the other item on that
+  list, landed in step 8; see [Measured
+  results](#step-8--the-atmosphere-reset).)
 - **H4 — Sedov.** Floors and the atmosphere reset, the `D = 2` and
   `D = 3` blasts, the similarity checks, the hook on edges and corners.
   *Accept:* the exponent and the jump; the reset idempotent and `U`/`P`
@@ -1998,7 +2111,10 @@ Each has an acceptance test; serial `Float64` correctness first.
   uniform fine reference at fewer cells; block count rising then
   falling behind the shock; the `p = 1` / `p = 3` comparison and the
   ghost-floor count that decides the upstream question. The 3D adaptive
-  run at test size.
+  run at test size. *(The reset, its accounting and both floor counts
+  landed in step 8 and are measured there on cases where nothing fires;
+  what is left for this milestone is the blast itself, which is the case
+  where they do.)*
 - **H5 — Kelvin–Helmholtz.** The McNally setup, `M(t)` and the kinetic
   energy diagnostic, HLLC, the viewer. *Accept:* `M(t)` grows below the
   incompressible bound and converges toward the uniform fine run as the
@@ -2499,6 +2615,115 @@ case states its initial data as a pure `x -> P`, which is a **point
 sample**, where the convergence study fills the exact cell average — a
 relative difference of `(kh)²/24` in the amplitude. All `D + 2` integrals
 hold to roundoff, which here is the plain claim, the box being periodic.
+
+### Step 8 — the atmosphere reset
+
+`reset_atmosphere!` in the integrator's limiter hook and after every
+regrid, its injection accounting, and the ghost population of the floor
+count. The design is in [Floors and the
+atmosphere](#floors-and-the-atmosphere); these are the numbers, from
+`test/reset_tests.jl`. The synthetic state the first four claims are made
+on is a uniform periodic mesh whose owned cells cycle through six
+populations — healthy gas, `0 < ρ < ρ_atm`, `ρ = 0`, `ρ < 0`, `ρ = NaN`,
+and a healthy density with `E < ½S²/ρ` — so that each of the two rules is
+reached by every route it has.
+
+**Idempotence is bit for bit, and the flag is not.** Applying the reset
+twice gives a state identical to applying it once, `|twice − once|∞ = 0`
+exactly, at `Float64` and at `Float32` in `D = 1, 2, 3`. The prediction
+said "to roundoff, bit-for-bit not claimed", and the round trip it was
+worried about is real — it just does not move the state:
+
+| | cells | floored | second pass reports |
+|---|---|---|---|
+| `Float64`, `D = 1` | 16 | 13 | **2** |
+| `Float64`, `D = 2` | 256 | 213 | 0 |
+| `Float64`, `D = 3` | 512 | 426 | **85** |
+| `Float32`, `D = 1, 2, 3` | 16 / 256 / 512 | 13 / 213 / 426 | 0 |
+
+A pressure-floored cell recovers its internal energy through the
+cancellation `E − ½S²/ρ`; where the kinetic energy dominates, the
+recovered pressure lands a fraction of an ulp below `p_floor` and the rule
+fires again — and writes `prim2con(eos, (ρ, v, p_floor))` from the same
+`ρ` and `v`, which is the same arithmetic on the same numbers. So the
+reset is a fixed point of the state and not of its own report.
+
+**`U` and `P` agree, and healthy cells do not move.** `con2prim` of the
+reset `U` reproduces the floored `P` to roundoff of the data's own scale
+(not of `p_floor`, for the same cancellation reason), and every cell in
+which no floor fired is **bit-identical** to what it was — which is the
+property the next claim rests on.
+
+**The injection is the state's own change.** On the synthetic state the
+accumulated `injection` equals the hand-computed `Σ hᴰ (U_after −
+U_before)` to roundoff of `Σ hᴰ (|U_after| + |U_before|)`, per variable,
+and `reset_hits` equals the number of floored cells exactly. The momentum
+entries are nonzero only because one population keeps its momentum: the
+atmosphere rule discards it, the pressure floor does not. A state carrying
+a `NaN` has no total, so its injection comes back `NaN` in that variable
+and finite in the others — reported rather than hidden, and the state is
+repaired all the same.
+
+**Where nothing fires the reset costs exactly nothing.** On the tracked
+shock tube (`D = 1`, `t_end = 1/50`, 49 steps, 1 mesh change) and on the
+entropy wave through the driver (`D = 1`, `N = 8`, 50 steps):
+
+| | injection | reset hits | ghost hits | owned floor hits |
+|---|---|---|---|---|
+| Sod, `reset = :stage` | **(0.0, 0.0, 0.0)** | 0 | 0 | 0 |
+| Sod, `reset = :step` | **(0.0, 0.0, 0.0)** | 0 | 0 | 0 |
+| entropy wave, `:stage` | **(0.0, 0.0, 0.0)** | 0 | 0 | 0 |
+
+and the final state, the drift, the step count, the error and the mesh
+history of both hooks are **bit-identical** to the `reset = :none` run's.
+That is what makes every roundoff drift bound recorded above still the
+same number now that `:stage` is the default and every run in the suite
+calls the reset three times per step.
+
+**The hooks are wired, and that is asserted rather than read.** One
+`SSPRK33` step on a box half filled with gas and half with a vacuum a
+hundred times below `ρ_atm = 1e-4`, at both types in `D = 1, 2`: the
+minimum owned density comes out **1e-4** — the atmosphere exactly — under
+`:stage` and under `:step`, and **1e-6** under `:none`, with the raw
+recovered pressure `1.0e-5` against `-1.0`. The control matters because
+the right-hand side floors `P` internally, so a `:none` run completes and
+looks healthy from the outside while its *state* is untouched.
+
+**The ghost population is counted over the stored extent.**
+`ghost_floor_hits` equals the hand count of ghost *entries* whose
+`con2prim` fired, at both types in `D = 1, 2`, with `floor_hits` equal to
+the owned count from the same sweep — the split the Sedov milestone
+reports against the ghost-exchange decision.
+
+**What the default reset costs.** The whole suite is **11 282 tests in
+1 m 42.9 at four threads and 1 m 55.8 at one**, against 11 149 in 1 m 42.3
+and 1 m 36.8 on the same machine before the step — but most of that
+difference is the new file's own twenty-odd evolutions and the
+compilation they move earlier, and two runs of the same tree differ by
+seconds, so the reset's price is better read off a controlled comparison.
+The tracked tube of `driver_tests.jl` (`D = 1`, `t_end = 1/5`, 588 steps,
+9 mesh changes), best of three:
+
+| | 1 thread | 4 threads |
+|---|---|---|
+| `reset = :none` | 0.020 s | 0.150 s |
+| `reset = :step` | 0.020 s | 0.169 s |
+| `reset = :stage` | 0.022 s | 0.178 s |
+| `:stage` with `accounting = true` | 0.027 s | 0.381 s |
+
+So the per-stage reset costs **10% at one thread and 19% at four** of a
+run that is nothing but driver, and `:step` costs a third of that — the
+comparison Sedov will make on accuracy is cheap in either direction. The
+injection accounting costs **2.5× at four threads**, which is what six
+extra whole-state reductions per step buy and exactly why it is a keyword
+the tests turn on and the demos do not. (The four-thread column being
+slower than the one-thread column is this mesh being tiny — 25 blocks of
+8 cells — and is the launch overhead the benchmark of step 14 is for, not
+anything the reset introduced.)
+
+Every one of the 75 `@info` lines the suite printed before this step is
+printed **byte-identically** after it; the 20 new ones are identical at
+one thread and at four.
 
 ## Possible extensions
 
