@@ -18,4 +18,5 @@ using TreeHydro
     include("sod_tests.jl")
     include("interface_tests.jl")
     include("refinement_tests.jl")
+    include("driver_tests.jl")
 end
