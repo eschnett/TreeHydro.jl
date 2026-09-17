@@ -34,8 +34,9 @@ Two rules follow from `CODE.md` and govern every change here:
 ## Current state
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
-faces on a static mesh (H2), regridding (H3) and Sedov with the atmosphere
-reset (H4) are done; Kelvin–Helmholtz is step 10.**
+faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
+reset (H4) and the Kelvin–Helmholtz physics (H5a) are done; the viewers
+and the figure job (H5b) are step 11, and H5 is *not* done until they are.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -90,24 +91,35 @@ from step 9 `src/sedov_reference.jl` (`SedovSimilarity`, `sedov_alpha`,
 `sedov_boundary`, `HydroCase(::SedovBlast)`, `sedov_forest` with
 `refined = :center | :corner | :edge`, `sedov_similarity`, `measured_E₀`,
 `shock_radius`, `peak_compression`, `assert_no_arrival(::SedovBlast, …)`
-and `sedov_static`).
+and `sedov_static`); and from step 10 `src/kelvinhelmholtz.jl`
+(`KelvinHelmholtz` — `D = 2` only, and it refuses any other — `kh_state`,
+`kh_initial`, `kh_conserved`, `HydroCase(::KelvinHelmholtz)`,
+`mode_amplitude` and `max_y_kinetic_energy` (McNally's two diagnostics,
+host loops in block order read once per chunk through the observer),
+`growth_rate`, and the two measurement drivers `kh_run` and `kh_uniform`,
+which install that observer and are the only place either diagnostic can
+be taken).
 Tests, **one suite run whole** since step 7c:
 `test/precision_tests.jl`, `test/prerequisite_tests.jl`,
 `test/eos_tests.jl`, `test/riemann_tests.jl`, `test/evolution_tests.jl`,
 `test/reset_tests.jl`,
 `test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
 `test/sod_tests.jl`, `test/interface_tests.jl`,
-`test/refinement_tests.jl`, `test/driver_tests.jl` and
-`test/sedov_tests.jl`, included in that
-order by `test/runtests.jl` — Sedov last, because the order is the
+`test/refinement_tests.jl`, `test/driver_tests.jl`,
+`test/sedov_tests.jl` and `test/kelvinhelmholtz_tests.jl`, included in that
+order by `test/runtests.jl` — Sedov late, because the order is the
 dependency order and the blast uses both the chunked driver and a static
-`hydro_solve!` run. One workflow, `CI.yml`, and a `README.md`.
+`hydro_solve!` run, and Kelvin–Helmholtz last, being the only case whose
+reference is a uniform fine run of this code rather than a closed form.
+One workflow, `CI.yml`, and a `README.md`.
 The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6, H3b step 7, H4a step 8 and H4b step 9; step 7b split the suite
+H3a step 6, H3b step 7, H4a step 8, H4b step 9 and H5a step 10; step 7b
+split the suite
 into a short tier and a
 long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; and `PLAN.md`'s step 10
-(Kelvin–Helmholtz and HLLC, H5a) is next.
+was code coverage under threads and not the runner; and `PLAN.md`'s step 11
+(the viewers and the figure job, H5b — which is what H5 still waits on) is
+next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -228,6 +240,31 @@ M2 ordering case is finally exercised: zero mismatched entries out of 1664,
 72000 and 59360 outward-facing ghost entries on a 2D corner, a 3D edge and
 a 3D corner. All of it in `CODE.md`'s "Step 9 — the Sedov blast".
 
+Step 10 added the shear layer, and its headline is a flux. The setup is
+McNally, Lyra & Passy's **term for term** — the test re-evaluates equations
+(1)–(5) from the paper's literals and the worst difference is *exactly
+zero* — and the one transcription error was in `CODE.md`'s description of
+the `M(t)` weighting, which read "the lower interface alone" and is in fact
+mirrored over both. `M` grows from the seeded 0.0100 to **0.12346** at
+`t = 1.5` at a fitted rate of **2.58036** over `2a ≤ M ≤ 6a`, below both
+the `4.384` and the `5.9238` bounds, with the kinetic energy's rate
+**2.1021** times it; the curve has **not saturated** by `t = 1.5` but is
+decelerating, 3.349 → 2.580 → 1.844. Every one of the four integrals holds
+at roundoff through three regrids, and `fixup = false` leaks by
+`9.1e4`–`2.2e6` — this being the tracked mesh Sedov could not provide,
+because the whole domain is in motion — while `S_y` alone does *not* leak,
+being protected by the zero mean of `sin(4πx)` over the coarse-fine faces.
+The cap sweep falls monotonically, L1 `5.98e-2 / 2.59e-2 / 4.24e-4` at
+1024 / 4096 / 14848 cells against 16384 uniformly fine. **HLLE against
+HLLC is not close**: `M(1.5)` on uniform meshes is `0.0116 / 0.0755 /
+0.1240` under HLLC at 32²/64²/128² and `0.00066 / 0.0066 / 0.0357` under
+HLLE, so **HLLC at half the linear resolution is ahead of HLLE at full
+resolution**, and the growth *rates* are 2.5804 against 1.1712. HLLC
+becomes this case's default (`kh_run`'s `riemann` keyword); the
+package-wide default stays HLLE. `Float32` to `t = 2/5` reproduces the
+mesh, the step count and the tracking exactly and `M(t)` to **156 ulp**.
+All of it in `CODE.md`'s "Step 10 — Kelvin–Helmholtz".
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
@@ -237,11 +274,17 @@ defined.
 One suite, run whole, at every thread count; `CODE.md`'s "Testing" has
 the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
-recording a number. About **2 m 43 at one thread and 2 m 09 at four**
-(measured in step 9; it was 1 m 56 and 1 m 43 before the blast, which
-costs roughly 50 s and 30 s and is the price of a 3D adaptive run and
-eleven two-dimensional evolutions — this machine moves by about ten
-percent run to run at four threads). `Pkg.test` does not inherit `-t`, so the thread
+recording a number. About **3 m 44 at one thread and 2 m 38 at four**
+(measured in step 10 on a quiet machine; it was 2 m 43 and
+2 m 09 before the shear layer, which costs roughly a minute at one thread
+and thirty seconds at four — twelve two-dimensional evolutions, four
+of them 2700 steps on 128²-equivalent meshes, and the most parallel work
+any one file holds, which is why the two thread counts diverge as much as
+they do. The blast before it cost 50 s and 30 s). **This machine is
+shared**, and runs taken while something else was on it came back at 4 m 10
+and 3 m 12 — a fifth slower — so a timing is worth comparing only against
+another taken under the same load.
+`Pkg.test` does not inherit `-t`, so the thread
 count has to be passed explicitly:
 
 ```bash
@@ -537,13 +580,55 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   accumulate into shared state in a loop of your own: bit-identity across
   thread counts is the invariant, and `test/threading_tests.jl` is the
   only thing that will report a violation.
-- **The Kelvin–Helmholtz formulas in `CODE.md` were transcribed from
-  memory** of McNally, Lyra & Passy (2012), ApJS 201:18. Check every one
-  against the paper before recording a number. Also: a `Float32`
+- **The Kelvin–Helmholtz formulas were transcribed from memory and the
+  check found exactly one error** (step 10, closing the note that used to
+  say "check every one before recording a number"). The *profiles* — the
+  four branches, `ρ_m`, `v_m`, the parameters, the perturbation, `γ`, `p`
+  and `t_end` — are McNally, Lyra & Passy (2012), ApJS 201:18
+  (arXiv:1111.1764), equations (1)–(5), **term for term**; the test
+  re-evaluates them from the paper's own literals and the worst difference
+  is *exactly zero*. What was wrong was the **weighting of `M(t)`**:
+  `CODE.md` said `e^{−4π|y − ¼|}` "so that the lower interface alone is
+  read", and equations (6)–(8) use that for `y < ½` and
+  `e^{−4π|(1−y) − ¼|}` for `y ≥ ½`, so **both** interfaces are read,
+  mirrored. Reading one alone would have halved the signal and picked up
+  the other interface's mode with the wrong sign. And a second omission
+  rather than an error: on a mesh of unequal cells the sums are the
+  **area-weighted** (14)–(17), `w_i = h_b²`, or `M` jumps at every regrid.
+  Also, unchanged: a `Float32`
   Kelvin–Helmholtz run diverges from the `Float64` one late in the run
   by design (the instability amplifies roundoff), so assert the growth
-  rate and the early chunks, not the final state; and MultiFloats cannot
+  rate and the early chunks, not the final state — measured, to `t = 2/5`
+  the mesh, the step count and the tracking are *equal* and `M(t)` agrees
+  to 156 ulp of `Float32`; and MultiFloats cannot
   run it at all (`sin`, `exp` are not implemented), only Sod and Sedov.
+- **A feature that *grows* gets nothing from a travelling margin, and the
+  margin is what decides how much of the box is refined** (measured in step
+  10). On the tube and the blast the chunk is bounded from above by
+  `refinement_buffer` *throwing*; on the shear layer it is bounded well
+  below that, quietly, by the saving going away. `chunk = 1/200` derives a
+  3-cell margin and refines 128 of the 256 possible finest blocks;
+  `chunk = 1/64` derives 7 and refines **all 256**, which is the uniform
+  fine mesh under another name and passes every test in the file. So a
+  Kelvin–Helmholtz-like case has to be checked for what fraction of the box
+  it refines, not merely for whether the buffer was accepted.
+- **HLLE is not a neutral baseline on a contact-dominated flow, and the
+  factor is two in linear resolution** (measured in step 10). `M(1.5)` on
+  uniform meshes: HLLC `0.0116 / 0.0755 / 0.1240` at 32²/64²/128², HLLE
+  `0.00066 / 0.0066 / 0.0357` — so HLLC at 64² is ahead of HLLE at 128²,
+  and the two differ in the growth *rate* (2.5804 against 1.1712) and not
+  merely in the amplitude. `kh_run`'s `riemann` defaults to `:hllc` and is
+  the only place in the package that overrides `:hlle`; do not "tidy" it
+  away, and do not change the package-wide default, which is HLLE because
+  that is *the* GRMHD flux.
+- **A tracked run measured against a uniform fine run *with the same flux*
+  measures the mesh, not the flux** (measured in step 10, and it is how the
+  HLLE/HLLC criterion written before the runs failed to decide). Both
+  fluxes reproduce their own fine reference to under a percent — 0.42% and
+  0.29% — while the two fine references themselves differ by 247%. What
+  decides a flux is a **resolution sweep** under each, which is what the
+  record now carries. Any later "which method is better" comparison on an
+  adaptive mesh has the same trap in it.
 - **The exact Riemann solver is a reference, not a flux.** It and the
   Sedov similarity code are host `Float64`, converted once at the
   comparison. For the Sedov law, `E₀` is the *measured* energy deposited

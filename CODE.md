@@ -423,6 +423,50 @@ settled:
   contact speed — is written to with `Base.setindex`. One method serves
   every `d` and every `D`, which a cyclic-permutation test asserts.
 
+**(Measured in step 10: HLLC becomes the Kelvin–Helmholtz case's default
+and the package-wide default stays HLLE.)** The comparison was made on the
+shear layer, which is where it belongs, and it is not close. `M(t = 1.5)`
+on uniform meshes:
+
+| | 32² | 64² | 128² |
+|---|---|---|---|
+| HLLC | 0.011608 | 0.075489 | 0.123981 |
+| HLLE | 0.000662 | 0.006599 | 0.035717 |
+| ratio | 17.53 | 11.44 | 3.471 |
+
+**HLLC at half the linear resolution is further along than HLLE at full
+resolution** — 0.075489 at 64² against 0.035717 at 128², and 0.011608 at
+32² against 0.006599 at 64². On this flow HLLE therefore costs at least a
+factor of two in linear resolution, which is four in cells and eight in
+work; and it costs it in the *growth rate* and not merely in the amplitude
+(2.5803 against 1.1712 over the same window). The ratio narrows with
+resolution, as two consistent fluxes must, which is what says this is
+diffusion and not a defect. The shear layer *is* a contact, HLLE's
+two-wave average is what smears it, and that is the whole of the
+difference between the two solvers — the stationary-contact unit test says
+the same thing in closed form on one pair of states, and this says it on a
+flow.
+
+What is **not** measured by any of this is the shock cases. HLLE remains
+the package-wide default of `HydroProblem` and `evolve!` because it is
+*the* GRMHD flux — it needs only the fastest and slowest signal speeds,
+which in GRMHD are the fast magnetosonic ones — and because the baseline a
+comparison is made against should be the one every result before this
+milestone was taken with. `kh_run`'s `riemann` keyword defaults to `:hllc`
+and nothing else in the package does.
+
+The criterion this decision was made by was written down **before** the
+HLLE runs were made, and two of its three clauses failed to decide;
+recording that is the point of writing it first. It asked (1) that the two
+uniform fine references agree in `M(t_end)` to within 5%, and they differ
+by 247%; (2) that HLLC's *tracked* run be closer to its own fine reference
+than HLLE's is, and both are within a percent — 0.42% against 0.29%, HLLE
+nominally closer — because a tracked run measured against a fine run *with
+the same flux* measures the **mesh** and not the flux, and the mesh is
+equally good under either. Clause (3), the difference between the two fine
+references, was overwhelming, and the resolution sweep above is the
+amendment that turns it into a decision.
+
 ### Time integration and the time step
 
 `SSPRK33` from `OrdinaryDiffEqSSPRK`, fixed step, the way TreeAMR's
@@ -1622,25 +1666,58 @@ the periodic unit square with `γ = 5/3`, `p = 5/2`, `ρ₁ = 1`, `ρ₂ = 2`,
     y ∈ [¾, 1):   ρ = ρ₁ − ρ_m e^{(¾ − y)/L}       v_x = v₁ − v_m e^{(¾ − y)/L}
     v_y = 0.01 sin(4πx)
 
-run to `t = 1.5`. *Transcribed from memory; the implementation checks
-every formula against the paper before any number is recorded.* Step 6
+run to `t = 1.5`. **(Checked against the paper in step 10.)** Every line
+above — the four branches and their signs, `ρ_m`, `v_m`, the parameter
+values, the perturbation, `γ`, `p` and `t_end` — is equations (1)–(5) of
+arXiv:1111.1764 term for term; `test/kelvinhelmholtz_tests.jl` re-evaluates
+them independently from the paper's own literals and the two agree **bit
+for bit** over a grid of sample points. One thing below was wrong and is
+corrected in place; it is flagged where it was. Step 6
 uses the density ramp's **shape** — the four branches above, in one
 dimension, at uniform pressure — as the smooth calibration profile for
 the refinement criterion, and nothing else of the setup. Nothing there
-depends on the transcription being faithful; if step 10 finds it is not,
-the calibration table is still a table of `max τ` against `h` for an
-exponential ramp of width `1/40`, which is what picked the thresholds. Its
-diagnostics are the paper's: the **amplitude of the seeded mode**
+depended on the transcription being faithful, and the one error was not in
+the profile in any case, so the calibration table stands unamended.
+
+Its diagnostics are the paper's: the **amplitude of the seeded mode**
 `M(t)`, from the projections of `v_y` onto `sin(4πx)` and `cos(4πx)`
-weighted by `e^{−4π|y − ¼|}` so that the lower interface alone is read,
-and the **maximum `y`-kinetic energy** `max ½ ρ v_y²` over the domain
-against time. `M(t)` grows exponentially through the linear phase and
-saturates; the incompressible sharp-interface growth rate
-`k Δv √(ρ₁ρ₂)/(ρ₁+ρ₂) ≈ 5.9` for `k = 4π` is an upper bound the measured
-rate must stay below, since the ramp and compressibility both slow it.
+weighted by `e^{−4π|y − ¼|}` for `y < ½` and by `e^{−4π|(1−y) − ¼|}` for
+`y ≥ ½`, so that **both interfaces are read, mirrored onto one another**
+(equations (6)–(8); the first draft of this paragraph said "so that the
+lower interface alone is read", which is wrong — **corrected in step 10**.
+The two interfaces carry the same mode with opposite sign of `∂_y v_x`, and
+the mirrored weight is what lets them add rather than cancel), and the
+**maximum `y`-kinetic energy** `max ½ ρ v_y²` over the domain against time.
+
+On a mesh whose cells are not all the same size the sums are
+**area-weighted**, the paper's equations (14)–(17) rather than its
+uniform-grid (6)–(9):
+
+    s_i = V_y w_i sin(4πx_i) e_i     c_i = V_y w_i cos(4πx_i) e_i
+    d_i = w_i e_i                    M   = 2 √((Σs_i/Σd_i)² + (Σc_i/Σd_i)²)
+
+with `w_i` the cell's area. That is the form this package uses (decided in
+step 10), because an adaptive mesh has cells of two sizes by construction:
+the uniform sums would weight a coarse cell as though it were a fine one
+and `M` would jump at every regrid. The two forms agree exactly on a
+uniform mesh, where `w_i` cancels between numerator and denominator.
+
+`M(t)` grows exponentially through the linear phase and eventually
+saturates. Two upper bounds are quoted and the measured rate must stay
+below both, neither being this problem's own: the paper's loose guide for
+the **infinite-domain incompressible** flow is `M ∝ e^{4.384 t}` (Wang et
+al. 2010, Eq. 18), with `max ½ρv_y² ∝ e^{2 × 4.384 t}` since that quantity
+is quadratic in `v_y`; and the **sharp-interface** incompressible rate
+`k Δv √(ρ₁ρ₂)/(ρ₁+ρ₂) = 4π √2/3 = 5.9238` for `k = 4π`. The ramp and the
+compressibility both slow the real thing.
 The quantitative reference is a **uniform fine run of this code**, as
 for the shock cases; the paper's curves are the sanity check on their
-shape, since the setup is theirs.
+shape, since the setup is theirs. Their Figure 4 is the Pencil Code
+reference at 4096² and their Figure 7 puts every code's `M(t)` at 128²,
+256² and 512² beside it: `M` starts at `0.01`, **dips and then plateaus
+until `t ≈ 0.45`** before it takes off, and reaches a few tenths at
+`t = 1.5` without a plateau at the end. That is the shape to match and not
+a number.
 
 **What it measures:**
 
@@ -1655,11 +1732,39 @@ shape, since the setup is theirs.
   are visibly sharper and its `M(t)` closer to the fine reference,
   because the shear layer *is* a contact. This is the measurement that
   decides whether HLLC becomes the default or stays a switch.
+  **(Measured in step 10: HLLC wins by a factor of two in linear
+  resolution, and it becomes this case's default; the package-wide default
+  stays HLLE. See "Riemann solver" and "Step 10" below.)**
 - **The picture**: a filmstrip of `ρ` at four times, one heatmap per
   block with the block boundaries drawn and coloured by level, in the
   manner of TreeWave's `visualize2d.jl`; `M(t)` and the maximum
   `y`-kinetic energy against time with the uniform reference over them;
-  block count against time.
+  block count against time. *(Step 11; the diagnostics it plots are
+  recorded through the observer by `kh_run`, which step 10 wrote.)*
+
+**What step 10 decided, beside the flux** — each measured rather than
+assumed, and each recorded with its number under "Step 10" below:
+
+- **`speed_headroom = 1`.** The flow is smooth and subsonic and carries no
+  Riemann problem whose star region could outrun the initial data's
+  `λ_max`, which is the mechanism that forces `2` on Sod and on Sedov.
+  Measured worst growth over 300 chunks: **1.00031**. The entropy wave is
+  the only other case at `1`.
+- **`chunk = 1/200`, and it is the *margin* that sets it, not the CFL
+  condition.** The derived buffer is `ceil(headroom·λ·chunk/h_cap) + 1`,
+  and on this case the buffer is what decides how much of the box is
+  refined: a 3-cell margin (`chunk = 1/200`) refines 128 of the 256
+  possible finest blocks and a 7-cell one (`chunk = 1/64`) refines all 256,
+  which is the uniform fine mesh under another name. **A feature that grows
+  rather than travels gets nothing from a travelling margin** and pays the
+  whole saving for it — which is new, the tube and the blast both having
+  features that travel.
+- **The growth window is a range of `M`, not of `t`**: from twice the
+  seeded amplitude to six times it, `2a ≤ M ≤ 6a`. Stated that way it means
+  the same thing at every resolution and under either flux, because the
+  phase a run is in is a property of how far the mode has grown and not of
+  the clock. `M` first *decays* while the ramp sheds the transient, so a
+  window opened at `t = 0` would measure that instead.
 
 A note on what it is *not*: a `Float32` Kelvin–Helmholtz run will not
 reproduce the `Float64` one late in the run. The instability amplifies
@@ -2001,13 +2106,17 @@ interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
 and prolongation-order tables. A number recorded in this file is a number
 CI recomputes, and a regression shows up as a changed number rather than
-as a test that merely still passes. The tests take **2 m 43 at one thread
-and 2 m 09 at four** locally as of step 9 — the Sedov blast added roughly
-50 s and 30 s to step 8's 1 m 50 and 1 m 42, which is what a case with a
-3D adaptive run and eleven two-dimensional evolutions costs — and a CI
+as a test that merely still passes. The tests take **3 m 44 at one thread
+and 2 m 38 at four** locally as of step 10, on a quiet machine — the shear
+layer added roughly a minute at one thread and thirty seconds at four to
+step 9's 2 m 43 and 2 m 09, and the blast had
+added 50 s and 30 s to step 8's 1 m 50 and 1 m 42 — and a CI
 entry takes a few times that, a shared runner being slower and the rest of
 it precompilation. `CI.yml`'s `timeout-minutes: 30` is the guard against a
-runtime regression and has room.
+runtime regression and has room, though less of it than before: the
+one-thread entry is the one to watch, the Kelvin–Helmholtz file being the
+most parallel work any one file holds and therefore the one that gains
+least from a serial runner.
 
 **The one thing that must stay off is code coverage**, and the reason is
 the whole of the history below. `julia-actions/julia-runtest` turns
@@ -2396,6 +2505,20 @@ Each has an acceptance test; serial `Float64` correctness first.
   incompressible bound and converges toward the uniform fine run as the
   cap rises; conservation through regrids; HLLE against HLLC measured and
   the default chosen; the filmstrip rendered in CI.
+
+  **Step 10 did the physics; the picture is what is left.** Done: the setup
+  checked against the paper term for term, `mode_amplitude` in the
+  area-weighted form, `max_y_kinetic_energy`, `growth_rate` and its window,
+  the case and `kh_run`/`kh_uniform`, the measured growth rate 2.58036
+  below both the `4.384` and the `5.9238` bounds, conservation to roundoff
+  through the regrids with a five-to-six-order leak without the fixup, the
+  cap sweep converging onto the uniform fine run, the `Float32` claim, and
+  the HLLE/HLLC measurement with HLLC chosen as this case's default. Not
+  done, and what the milestone still waits on: the **viewer and the
+  filmstrip in CI** — `bin/visualize2d.jl --case=kh`, its `bin/Project.toml`
+  and the CI figure job — which is step 11. The diagnostics the figure plots
+  are already recorded through the observer by `kh_run`, so the viewer adds
+  no time stepping of its own.
 - **H6 — Precision, threads, device.** `T` and `backend` on every
   driver, the type table above, the thread workload, device tests, the
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
@@ -3197,6 +3320,185 @@ machine moves by about ten percent at four threads, so the delta is worth
 one significant figure and no more. Every one of the 95 `@info`
 lines the suite printed before this step is printed **byte-identically**
 after it, and the 28 new ones are identical at one thread and at four.
+
+### Step 10 — Kelvin–Helmholtz
+
+The configuration everything below is measured on: `roots = 4`, `N = 8`,
+`cap = 2` on the unit square (so 128² at the finest level),
+`chunk = 1/200`, `t_end = 3/2` as the paper runs it, `limiter = :minmod`,
+`p = 3`, `cfl = 2/5`, `speed_headroom = 1`, the step 6 thresholds
+`refine_tol = 0.08` and `coarsen_tol = 0.02`, and — decided by the flux
+measurement below — `riemann = :hllc`. 2700 steps in 300 chunks. The
+controls (`fixup = false`, `Float32`) run to `t = 2/5` instead, which is
+still inside the transient and is where their claims are visible; the
+cap sweep and the flux comparison run to `3/2` with the headline pair.
+
+**The transcription check.** `CODE.md`'s profiles, parameters,
+perturbation, `γ = 5/3`, `p = 5/2` and `t = 1.5` are
+McNally, Lyra & Passy's equations (1)–(5) **term for term**: the test
+re-evaluates them from the paper's own literals and the worst difference
+over 38 × 132 sample points is **exactly zero**. The one thing that was
+wrong is the weighting of `M(t)`, which read "the lower interface alone"
+and is in fact mirrored over both interfaces; it is corrected above, as is
+the absence of the area-weighted form (14)–(17) that an adaptive mesh
+needs. The initial data's closed-form integrals check the branch *signs*,
+the `ρ_m` terms of the four branches cancelling exactly:
+
+| | closed form | discrete, on the adapted mesh |
+|---|---|---|
+| `Σ h² ρ` | `(ρ₁+ρ₂)/2 = 3/2` | 1.4999999999999996 (1.3 ulp) |
+| `Σ h² S_x` | −0.2125022699707237 | −0.2125079781452482 (2.69e-5 relative) |
+| `Σ h² S_y` | 0 | −1.4e-19 |
+
+The `S_x` difference is the midpoint rule's own error and not a defect: the
+`e²` term of `ρ v_x` has width `L/2 = 1/80` against `h = 1/128`, where `ρ`
+alone has width `L` and integrates to roundoff.
+
+**The instability.** Measured on the tracked run, with the uniform fine
+run beside it:
+
+| | tracked, cap 2 | uniform fine 128² |
+|---|---|---|
+| cells | 14848 | 16384 |
+| `M(0)` | 0.010000 (the seed, exactly) | 0.010000 |
+| `M` minimum | 0.008063 at `t = 0.335` | — |
+| `M(1.5)` | 0.1234566 (×12.346) | 0.1239814 |
+| `max ½ρv_y²` at `t = 1.5` | 0.0373349 (×375.0) | 0.0375488 |
+| growth rate over `2a ≤ M ≤ 6a` | **2.58036** | 2.58324 |
+| kinetic-energy rate, same window | 5.42416 | 5.42662 |
+
+The window is `t ∈ [0.735, 1.150]`, 84 of the 301 samples. The rate
+**2.58036** lies below both bounds — Wang et al.'s `4.384` and the
+sharp-interface `5.9238` — as it must, and the kinetic energy's rate is
+**2.1021** times the mode's, which is the factor of two that says the two
+diagnostics are measuring the same thing. The mesh does not set the rate:
+the uniform fine run agrees to 0.1%.
+
+**`M(t)` has not saturated by `t = 1.5`, and it is decelerating.** The
+local logarithmic derivative falls from **3.349** at `t ≈ 0.5`, through the
+window's 2.580, to **1.844** over the last twenty chunks, and `M` is still
+at its maximum at `t_end`. So the run ends on the shoulder of the curve
+rather than on its plateau, which is the reason the prediction above now
+says "eventually saturates" rather than "saturates by `t_end`".
+
+**Against the paper's curves, the first half of the shape is reproduced and
+the second half is under-resolved.** The reference in their Figure 7 starts
+at `0.01`, dips and plateaus until `t ≈ 0.45`, then takes off; this run
+does the same, with its minimum of 0.008063 at `t = 0.335` and its take-off
+at `t ≈ 0.45`, which is a corroboration and not a coincidence — the
+transient is the seeded mode not being the eigenmode, and it is the paper's
+too. What does **not** reproduce is the late curve: the reference reaches a
+few tenths at `t = 1.5` and its local rate does not fall, while this run
+reaches **0.1235** and its rate does. That is under-resolution rather than
+saturation, and it is the expected place for it: 128² is the lowest
+resolution the paper runs, the codes that sit on the reference there are
+piecewise-parabolic (Enzo, Athena) or sixth-order (Pencil), and this scheme
+is second-order MUSCL. The honest statement is that this package's
+Kelvin–Helmholtz run has the right shape, the right bounds and the right
+convergence with the cap, and an amplitude at `t = 1.5` below the published
+reference's by something like a factor of two at its finest affordable
+mesh.
+
+**The mesh.** The initial-data cycle converges in **4 passes** onto 160
+blocks — 128 at the cap and 32 at level 1, 10240 cells against the uniform
+fine mesh's 16384 — and **every edge of every block at the cap lies within
+`1/8` of `y = ¼` or `y = ¾`**, which is five ramp widths and a quarter of
+the box in each strip. So the prediction's "two strips at `t = 0`" is
+exactly right. The count then rises **160 → 196 (`t = 0.915`) → 220
+(`t = 1.355`) → 232 (`t = 1.390`)**, monotonically, in 3 mesh changes, and
+at `t_end` 224 of the 256 possible finest blocks are at the cap: the rolls
+thicken the layer until the refined region reaches the middle of each slab,
+and the run still never refines the whole box. `tracking == 1.0`
+throughout, and the margin is **3 cells** at every regrid.
+
+**The margin is what sizes the chunk here, and that is new.** The derived
+buffer covers `speed_headroom · λ · chunk` at the cap's spacing; with
+`λ = 2.5412` and `h_cap = 1/128`, `chunk = 1/200` gives 3 cells and
+`chunk = 1/64` gives 7 — and 7 cells refines **all 256** finest blocks,
+which is the uniform fine mesh under another name. A feature that *grows*
+rather than travels gets nothing from a travelling margin and pays the
+whole saving for it. On the tube and the blast the chunk was bounded from
+above by `refinement_buffer` throwing; here it is bounded well below that,
+by the saving going away quietly.
+
+**The headroom.** Worst `λ_end/λ` over 300 chunks: **1.00031**, against
+`speed_headroom = 1`. `λ` itself moves from 2.5412 to 2.6209 over the whole
+run. This is the second case at `1` — the entropy wave is the other — and
+for the same reason: there is no jump in the initial data, so there is no
+star region absent from it.
+
+**Conservation, and the leak.** There is no physical boundary here, so the
+claim is the plain one; and unlike the blast, the coarse-fine faces carry
+real flux, because the *whole domain* is in motion and the strips' edges
+lie across the flow from `t = 0`:
+
+| | mass | `S_x` | `S_y` | `E` |
+|---|---|---|---|---|
+| drift, 2700 steps, 3 regrids | 8.88e-16 | 2.78e-16 | 4.45e-18 | 1.78e-15 |
+| roundoff bound | 7.19e-12 | 3.24e-12 | 4.01e-13 | 1.88e-11 |
+| `fixup = false` (720 steps, `t = 2/5`) | 1.75e-7 | 1.93e-6 | 6.32e-18 | 9.14e-7 |
+| its bound | 1.92e-12 | 8.64e-13 | 1.22e-14 | 5.00e-12 |
+| ratio to the bound | **9.1e4** | **2.2e6** | 5.2e-4 | **1.8e5** |
+
+with `floor_hits == reset_hits == ghost_hits == 0` and
+`injection == (0, 0, 0, 0)` **exactly**, in both runs. So this is the case
+step 9 wanted and could not have: a tracked mesh on which the interface
+flux restriction is the difference between conservation and a leak.
+
+**`S_y` does not leak, and that is measured rather than assumed.** Its
+drift without the fixup is 6.32e-18 against a bound of 1.22e-14 — half a
+thousandth of it, where the other three are five and six orders above
+theirs. The coarse-fine faces are the horizontal edges of the two strips
+and they span the whole of `x`; the `S_y` structure is the single mode
+`sin(4πx)`, whose integral over `x` is zero, so the flux mismatch inherits
+that zero mean. The other three integrals have no such symmetry protecting
+them.
+
+**The cap sweep**, reduced onto the 32² grid the four meshes share:
+
+| | cells | L1 against the fine run | `\|ΔM\|/M` at `t_end` | mean `\|M − M_fine\|` |
+|---|---|---|---|---|
+| cap 0 (uniform coarse) | 1024 | 5.982e-2 | 0.9064 | 2.846e-2 |
+| cap 1 | 4096 | 2.590e-2 | 0.3911 | 1.143e-2 |
+| cap 2 | 14848 | **4.244e-4** | **0.004233** | 1.714e-4 |
+| uniform fine 128² | 16384 | 0 | 0 | 0 |
+
+All three columns fall monotonically with the cap, and the last step is a
+factor of 60 in L1 and 90 in `M`. The adaptive run reaches the fine run's
+answer at 91% of its cells — a smaller saving than Sedov's 77%, because a
+shear layer occupies a band rather than a shell's neighbourhood, and the
+honest statement is that this case is the one where adaptivity buys least.
+
+**HLLE against HLLC** is in "Riemann solver" above, with the table and the
+decision. The two numbers to keep here: the growth *rate* is **2.5804**
+under HLLC and **1.1712** under HLLE at the same resolution, and HLLC at
+64² is ahead of HLLE at 128².
+
+**`Float32`**, to `t = 2/5` (720 steps), against the `Float64` run of the
+same configuration: the **same** 160 blocks at levels `[1, 2]` at every one
+of the 81 samples, the same step count, the same `tracking = 1.0` and the
+same 4 cycle passes; `max |M₃₂ − M₆₄|/M = 1.857e-5`, which is **156 ulp of
+`Float32`**, and `max |K₃₂ − K₆₄|/K = 2.552e-4`. The final state is *not*
+claimed and is not asserted, for the reason the case description gives.
+MultiFloats is skipped entirely: `sin` and `exp` are not implemented there,
+so this case cannot run at `Float32x2` at all, and Sod and Sedov carry that
+half of the precision study.
+
+**The suite.** 11609 tests in **3 m 44 at one thread and 2 m 38 at four**
+on a quiet machine, against step 9's 11507 in 2 m 43 and 2 m 09 — so the
+shear layer adds roughly a minute at one thread and thirty seconds at four.
+Runs taken while this (shared) machine was busy with other work reached
+4 m 10 and 3 m 12, so the number carries one significant figure and the
+comparison is only fair between measurements taken under the same load. The
+gap between the two
+thread counts is the largest in the package's history and is the case's
+own shape: twelve two-dimensional evolutions, of which four run 2700 steps
+on 128²-equivalent meshes, is the most parallel work any one file has held.
+Every one of the 123 `@info` lines the suite printed before this step is
+printed **byte-identically** after it, and the 11 new ones are identical at
+one thread and at four. The clean-checkout check — a `git archive` tree
+with no `Manifest.toml`, resolving TreeAMR from GitHub `main`, which is
+what CI does and what the `[sources]` pin exists for — passes.
 
 ## Possible extensions
 

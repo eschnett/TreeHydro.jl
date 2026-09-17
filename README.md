@@ -17,21 +17,22 @@ milestone added — per-field-set ghost widths, ghost-free face-centered
 flux fields, the conservative operator family, and the interface flux
 restriction that makes the scheme conserve across refinement boundaries.
 
-Four cases are planned, each measuring something the others cannot: a
+Four cases run, each measuring something the others cannot: a
 smooth entropy wave (an exact solution, so the convergence order and the
 interface-order rule can be measured), Sod's shock tube (against an exact
 Riemann solver), the Sedov blast (a strong shock through the floors and
 the atmosphere reset, in 3D), and the Kelvin–Helmholtz instability (a
 contact-dominated flow, refinement following a structure that grows, and
-the picture).
+the picture — which is the one part still to come).
 
 Every numerical method is chosen to have a direct counterpart in a
 relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the blast runs — milestones H1, H2, H3 and H4 are done; the
-Kelvin–Helmholtz instability is next.** What exists is
+**Status: all four cases run — milestones H1, H2, H3 and H4 are done and
+H5 has its physics; the viewers and the figure job are what is left of
+it.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
@@ -41,7 +42,7 @@ the integrator's own limiter hook, the MUSCL reconstruction with its three
 slope limiters, the
 LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
 its three kernels, SSPRK33 in time, the Löhner refinement criterion, the
-one chunked evolve-and-regrid driver, and three cases on it. The entropy
+one chunked evolve-and-regrid driver, and four cases on it. The entropy
 wave is an exact solution of the nonlinear system, and it
 measures second order in L1 and L∞ in one and two dimensions. Sod's shock
 tube runs against Toro's exact Riemann solution through a Dirichlet
@@ -111,13 +112,30 @@ which buys exact positivity for 0.47% of the L1 error. Every outward-facing
 ghost entry of a fine block wedged into a corner of the box holds its
 boundary state exactly — 1664, 72000 and 59360 of them across a 2D corner,
 a 3D edge and a 3D corner — which is the one exchange path no downstream
-package had run. Still missing: Kelvin–Helmholtz.
+package had run.
+
+**And the Kelvin–Helmholtz shear layer chooses the flux.** McNally, Lyra &
+Passy's smooth-ramp setup — checked against the paper term for term — is
+the one case with no closed form, and the one whose feature *grows* rather
+than travels: the refined region starts as two strips within five ramp
+widths of the interfaces and thickens with the rolls, monotonically, at
+91% of the uniform fine mesh's cells and the same answer. The seeded mode
+grows from 0.0100 to 0.1235 at a fitted rate of 2.58, below both the
+incompressible bounds of 4.38 and 5.92; every conserved integral holds to
+roundoff through the regrids while the same run without the interface
+fixup leaks by five to six orders of magnitude — this being the tracked
+mesh the blast could not provide, since here the whole domain is in motion.
+And HLLE against HLLC is not close: the shear layer *is* a contact, HLLE's
+two-wave average is what smears it, and HLLC at half the linear resolution
+is further along than HLLE at full resolution. HLLC becomes this case's
+default; the package-wide default stays HLLE, which is *the* GRMHD flux.
+Still missing: the picture.
 
 There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the
 convergence sweeps, the interface-order tables, the refinement
-calibration, the tracked shock tube, the blast and its similarity law.
-About three minutes.
+calibration, the tracked shock tube, the blast and its similarity law, the
+shear layer and its growth rate. About four minutes.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
