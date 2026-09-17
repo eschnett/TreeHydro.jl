@@ -12,17 +12,19 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: milestones H0 (scaffolding) and H1 (the scheme on a uniform mesh)
-done — the equation of state, the two state conversions and the floors
-(step 1), the reconstruction and the three Riemann fluxes (step 2), the
-six-step right-hand side, the time integration and the entropy wave (step
-3), and the exact Riemann solver, Sod's shock tube and the Dirichlet
-boundary hook (step 4).* The measured numbers are in
+*Status: milestones H0 (scaffolding), H1 (the scheme on a uniform mesh) and
+H2 (coarse-fine faces on a static mesh) done — the equation of state, the
+two state conversions and the floors (step 1), the reconstruction and the
+three Riemann fluxes (step 2), the six-step right-hand side, the time
+integration and the entropy wave (step 3), the exact Riemann solver, Sod's
+shock tube and the Dirichlet boundary hook (step 4), and the static
+two-level mesh (step 5).* The measured numbers are in
 [Measured results](#measured-results): the scheme's order on smooth data,
 its L1 rate against the exact Riemann solution, the conservation of all
-`D + 2` integrals on the uniform mesh, and the boundary flux that replaces
-that claim where a boundary is physical. Everything from the coarse-fine
-faces on is still unmeasured.
+`D + 2` integrals with the interface fixup and the ten-order leak without
+it, the interface-order table for the system, and the boundary flux that
+replaces the conservation claim where a boundary is physical. Everything
+from the refinement criterion on is still unmeasured.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
 one this document makes and still wants confirmed; **(predicted)** is a
 number a milestone will measure and the "Measured results" section will
@@ -694,22 +696,32 @@ area-weighted average of the fine ones. What this package adds is that
 there are now **`D + 2` conserved quantities**, each with its own domain
 integral, and the claim is made for all of them:
 
-- **(predicted)** Total mass, each momentum component and total energy
-  are conserved to a few ulp of their own scale `Σ hᴰ |U_v|` over a run
-  with a shock crossing a refined region that follows it, regrids in
-  between, in `D = 1, 2, 3`; the drift does not grow with the step count.
-  The negative control — `fixup = false`, the single difference — leaks
-  by orders of magnitude more, and a uniform mesh conserves either way.
-  This is TreeAMR's M8b table, repeated for a system. The last clause —
-  the **uniform control** — is **(measured in step 3)** and is in
-  [Measured results](#measured-results): on a single-level mesh the two
-  runs agree bit for bit, since `restrict_interfaces!` has no coarse-fine
-  face to act on, and all `D + 2` integrals hold to a few ulp of their
-  own scale in `D = 1, 2, 3`. The refined half of the claim is step 5's.
+- **(measured in step 5)** Total mass, each momentum component and total
+  energy are conserved to a few ulp of their own scale `Σ hᴰ |U_v|` over a
+  run on the static two-level mesh in `D = 1, 2, 3`; the drift does not
+  grow with the step count — the worst of the `D + 2` integrals moves by
+  **0.003 to 0.011 ulp of its own scale per step**. The negative control —
+  `fixup = false`, the single difference, same mesh and same step count —
+  leaks by `1e-4 … 3e-5` of the scale, which is **1e8 to 1e9 times** the
+  bound the fixup run meets. The **uniform control** is
+  **(measured in step 3)**: on a single-level mesh the two runs agree bit
+  for bit, since `restrict_interfaces!` has no coarse-fine face to act on.
+  All three are in [Measured results](#measured-results). This is TreeAMR's
+  M8b table, repeated for a system. What step 5 does *not* cover, because
+  it has no driver yet, is a refined region that *follows* a shock with
+  regrids in between; that is step 7's, and the static mesh is the sharper
+  measurement of the two because nothing but the fixup differs between the
+  runs.
 - The **momentum** is the new case: for a momentum component whose total
   is zero by symmetry (the Kelvin–Helmholtz `S_y`, the Sedov `S_d`), the
   drift is measured against the maximum of that component's `Σ hᴰ |S_d|`
-  over the run, not against its total, which may be zero.
+  over the run, not against its total, which may be zero. **(Amended in
+  step 5: the scale can be zero too.)** On Sod the initial state is at
+  rest, so `Σ hᴰ |S|` is *exactly* zero at `t = 0` and the momentum has no
+  scale of its own at all. There the drift is measured against the
+  closed-form boundary flux `(p_L − p_R)·t_end·A` it is claimed to equal,
+  which is a better yardstick than any norm of the state — see
+  [Sod shock tube](#sod-shock-tube).
 - The **atmosphere reset** does touch `U`, and what it injects is
   measured rather than lost in the drift (see
   [Floors and the atmosphere](#floors-and-the-atmosphere)): the claim is
@@ -729,11 +741,26 @@ Burgers in M8b — says `p` must exceed the scheme's order by *one*, so a
 second-order scheme wants **`p = 3`**, and `p = 5` buys nothing further.
 Two things this package expects to add to that finding:
 
-- **(predicted)** The rule holds for the system as it did for the scalar:
-  on the smooth entropy wave (below) over the static two-level mesh,
-  L∞ rates 1, 2, 2 for `p = 1, 3, 5` and L1 rates 2, 2, 2, with the
-  `p = 3` refined run landing on the unrefined control's rate. Predicted
-  before it is run, as the Burgers rates were.
+- **(measured in step 5)** The rule holds for the system as it did for the
+  scalar, and the prediction — L∞ rates 1, 2, 2 for `p = 1, 3, 5` and L1
+  rates 2, 2, 2, with the refined `p = 3` run landing on the unrefined
+  control's rate — is met without amendment in both dimensions. The table
+  is in [Measured results](#measured-results): L∞ **0.963 / 2.034 / 2.037**
+  in `D = 1` against a control of 2.024, and **0.925 / 2.041 / 2.037** in
+  `D = 2` against 2.029, with every L1 rate between 1.90 and 2.02. The
+  norm is part of the result here as it was on Burgers, and for the same
+  reason: the defect an order-`p` prolongation leaves sits on the
+  coarse-fine face and nowhere else, so a volume-weighted norm multiplies
+  its `O(h^p)` by the shrinking measure of the region it occupies and sees
+  the scheme's own order whatever `p` is. The **negative control on the
+  rate** reproduces TreeAMR's finding closely — with `fixup = false` at
+  `p = 1` the L1 rate falls from 1.966 to **1.111** in `D = 1` and from
+  1.900 to **1.192** in `D = 2`, against Burgers' 1.98 → 1.12 and
+  1.80 → 1.25, while L∞ stays at 1.0 either way — which is what pins the
+  locality of the defect on *conservation* and not on the flux-divergence
+  form: without the fixup the residual has net mass and the equation
+  carries it downstream as an `O(h)` plateau, which an integral norm does
+  see.
 - **The `p = 1` question is a real one here, and open.** Piecewise-constant
   prolongation is the only linear prolongation that is
   positivity-preserving for every field, and Burgers measured that an
@@ -748,6 +775,20 @@ Two things this package expects to add to that finding:
   actually want, is not a fixed-weight tensor-product stencil, and is
   therefore the one upstream request this package is most likely to
   make. It is not made in advance of the measurement.
+
+  **What the entropy wave says about it (measured in step 5), and why the
+  question stays open.** On a smooth solution `p = 1` costs exactly what
+  the rule says: a full order in L∞ (0.963 and 0.925 against a control of
+  2.024 and 2.029) and *nothing at all* in L1 (1.966 and 1.900, inside the
+  spread of the `p = 3` and `p = 5` runs). So the smooth case reproduces
+  the Burgers finding and decides nothing: it confirms that an integral
+  norm cannot see the interface defect, which is the premise of the
+  question rather than its answer. The question is what happens in L1 on a
+  *discontinuous* solution, where the scheme's own rate is about 0.9 rather
+  than 2 and where positivity is a live concern — and that is Sod in step 7
+  and Sedov in step 9, run at `p = 1` beside `p = 3` with the floor counts
+  beside the errors. Until then `p = 3` remains the default and the
+  upstream request remains unmade.
 
 ## Boundaries
 
@@ -795,7 +836,8 @@ sweep, as TreeAMR's M2 amendment describes, because prolongation at a
 domain edge reads tangentially into the source's outer ghosts. A two-level
 mesh whose refined region touches a Dirichlet boundary is the
 configuration that would show a mistake there; the Sod tests include one
-on a face, and the Sedov tests include one on an edge and a corner.
+on a face **(implemented in step 5)**, and the Sedov tests include one on
+an edge and a corner.
 
 **(Implemented in step 4.)** The shock tube is the first downstream use of
 the physical-boundary path, and `src/sod.jl` uses it through
@@ -828,9 +870,36 @@ signature for this. What the exercise showed:
   array including the ghosts the hook wrote: see
   [Measured results](#measured-results).
 
+**(Implemented in step 5: a refined region touching the Dirichlet face.)**
+`sod_forest(…; refined = :left)` refines every root block whose center
+along the tube is below `x₀`, so the low physical face is covered by
+*fine* blocks and the single coarse-fine face sits at the diaphragm. What
+that measured:
+
+- **The hook reaches a fine block's outer ghosts, and reaches all of
+  them.** After the run every stored entry of the outward-facing ghost
+  region of every boundary block holds the conserved left or right state
+  *exactly* — the level-1 blocks on the low face included, and the ghost
+  rows *across* the tube included, which TreeAMR fills unconditionally.
+  Asserted after the run and not before it, for the reason step 4 gives.
+- **A coarse-fine face beside a physical one conserves.** Mass and energy
+  drift by no more than the uniform mesh of the same coarse spacing does,
+  and the momentum by the boundary flux; without the fixup all three leak
+  by four to seven orders of magnitude more. At `N = 32` in `D = 1`, where
+  the boundary's own numerical flux has itself reached roundoff, the drift
+  is `1.1e-16`, `6.7e-16` and `2.8e-17` against bounds of `2.8e-13`,
+  `6.9e-13` and `9.0e-14`.
+- **What it does *not* exercise, and it is worth being explicit.** The M2
+  ordering case in full is a prolongation reaching *tangentially* into
+  hook-filled ghosts, and that needs two physical faces meeting at an edge
+  or a corner. The tube is periodic across itself, so its only physical
+  faces are its two ends and they never meet. That case is Sedov's, in
+  step 9, where every face is Dirichlet. What `:left` exercises is the
+  hook on a fine block and a coarse-fine face with the boundary state on
+  one side of the refined region.
+
 Not yet exercised: the hook in `regrid!` and in `adapt_to_initial_data!`,
-which arrive with the driver, and a refined region touching a Dirichlet
-face, which is step 5's.
+which arrive with the driver in step 7.
 
 ## The cases
 
@@ -884,9 +953,13 @@ not, and the HLLE/HLLC comparison has its first number here.
 
 Not a demo: it lives in the tests and the viewer does not draw it.
 
-**(Implemented in step 3.)** `src/entropywave.jl`, measured on the
-*uniform* mesh (`refined = false`); the two-level runs are step 5's. The
-rates and the drifts are in [Measured results](#measured-results). What
+**(Implemented in step 3; the two-level runs measured in step 5.)**
+`src/entropywave.jl`. Step 3 measured it on the *uniform* mesh
+(`refined = false`), which is the control; step 5 ran the same study on the
+M3 two-level hierarchy and it is where the package's two central numbers
+come from — conservation of all `D + 2` integrals with the fixup against a
+ten-order leak without it, and the interface-order table at `p = 1, 3, 5`.
+The rates and the drifts are in [Measured results](#measured-results). What
 the writing settled:
 
 - **The parameters are a struct**, `EntropyWave(T, Val(D); ρ₀ = 1,
@@ -956,8 +1029,7 @@ right, not a claim of order.
 nothing the 2D one does not, except cost.
 
 **(Implemented in step 4.)** `src/exact_riemann.jl` and `src/sod.jl`,
-measured on the *uniform* mesh; the two-level Sod forest whose refined
-region touches the Dirichlet face is step 5's. The numbers are in
+measured on the *uniform* mesh. The numbers are in
 [Measured results](#measured-results). What the writing settled:
 
 - **The `t ≈ 0.29` above is the shock's travel time, and the assertion is
@@ -1000,6 +1072,53 @@ region touches the Dirichlet face is step 5's. The numbers are in
   a wave to arrive. The roundoff conservation claim proper is made for Sod
   on a refined mesh in step 5, as the *difference* between two runs sharing
   this same boundary flux.
+
+**(Implemented in step 5: the two static two-level configurations.)**
+`sod_forest` gains `refined`, which is `false`/`:none`, `:middle` or
+`:left`. Both refined meshes are still non-periodic along the tube and
+periodic across it, both are 2:1 balanced, and both refine whole root
+blocks on a criterion that reads the tube's axis *alone* — across the tube
+there is one root block and the solution does not vary, so a criterion that
+also asked about the transverse center would refine nothing or everything
+depending on the box's thickness. What step 5 settled about the case:
+
+- **`:middle` exists so that the shock crosses a coarse-fine face.** It
+  refines the root blocks whose center along the tube lies in
+  `(L/4, 3L/4)`, as `hydro_forest` does for the periodic box, so the
+  diaphragm starts *inside* the refined region and the shock — travelling
+  at 1.752156 — leaves it at `t = 0.14268`, before the standard
+  `t_end = 0.2`, ending at `x = 0.85043`. A refined region the solution
+  never left would make every conservation assertion pass for the wrong
+  reason, so the crossing is asserted from the exact solution rather than
+  assumed.
+- **`:left` puts the refined region against the Dirichlet face**, with the
+  single coarse-fine face at `x₀`; see the step-5 note under
+  [Boundaries](#boundaries) for what it does and does not exercise.
+- **The mass and energy drift here is the boundary's, not the coarse-fine
+  face's, and it is a discretization error rather than roundoff.** The
+  numerical foot of the rarefaction and of the shock reaches the Dirichlet
+  faces and lets a little mass and energy across: `2.1e-11` of the mass at
+  `N = 16` in `D = 1`, falling by about four orders of magnitude per
+  halving of `h` and gone by `N = 32` (`D = 2` needs `N = 32` too). So the
+  claim made with the fixup is the larger of roundoff and *ten times what
+  the uniform mesh at the same coarse spacing drifts by* — the refined runs
+  come in at 0.15 to 2.8 times the uniform ones, so a coarse-fine face adds
+  nothing — and at the resolution where the boundary is itself clean the
+  plain roundoff bound holds on a mesh with a coarse-fine face in it. The
+  negative control is compared against the run *with* the fixup and not
+  against that bound, since the leak is what is being measured and
+  inflating the yardstick would measure the yardstick.
+- **The momentum's yardstick is the boundary flux and not a norm.** Sod's
+  initial state is at rest, so `Σ hᴰ |S|` is *exactly* zero and
+  `conserved_scales` gives the momentum no scale at all. The closed form
+  `(p_L − p_R)·t_end·A` is the better yardstick anyway: it is an equality
+  rather than a bound. The refined runs meet it to `5e-11` relative and
+  the runs without the fixup miss it by `2e-3` to `4e-3`.
+- **The two-level tube's error is 1.338 times the uniform run's at the same
+  finest spacing**, in `D = 1` and in `D = 2` alike, and below the uniform
+  run's at the coarse spacing. That is a sanity bound and not the
+  tracked-shock claim, which needs a mesh that follows the shock and is
+  step 7's.
 
 ### Sedov blast wave
 
@@ -1402,13 +1521,60 @@ Each has an acceptance test; serial `Float64` correctness first.
   comparison; the two-level `hydro_forest`, which is H2's; and the boundary
   hook's other two call sites, `regrid!` and `adapt_to_initial_data!`, which
   are H3's.
-- **H2 — Coarse-fine faces, static mesh.** The two-level `hydro_forest`,
-  the fixup, the boundary hook. *Accept:* conservation of all `D + 2`
-  integrals to roundoff with the fixup and a leak without, in
+- **H2 — Coarse-fine faces, static mesh.** *(Done.)* The two-level
+  `hydro_forest`, the two two-level `sod_forest` configurations, the
+  fixup, the boundary hook on a fine block. *Accept:* conservation of all
+  `D + 2` integrals to roundoff with the fixup and a leak without, in
   `D = 1, 2, 3`, on the entropy wave and on Sod; the interface-order
   table for the system (predicted L∞ 1, 2, 2 at `p = 1, 3, 5`; L1 2, 2,
   2); a two-level Sod whose refined region touches the Dirichlet
   boundary.
+
+  What H2 measured, all of it in
+  [Measured results](#measured-results) and all of it identical at one and
+  at four threads. Step 5 added almost no code — `sod_forest`'s `refined`
+  option and a one-line `forest_levels` — and the whole of it is
+  `test/interface_tests.jl`:
+
+  - **The fixup is what conserves.** On the static two-level mesh, with
+    the fixup every one of the `D + 2` integrals holds to a *hundredth* of
+    one ulp of its own scale per step in `D = 1, 2, 3`; without it — the
+    same mesh, the same block count, the same step count, one line
+    different — every one of them leaks by `1e8` to `1e9` times that
+    bound. This is TreeAMR's M8b claim for a system, and the 3D entry is
+    where a coarse-fine face carries four fine faces.
+  - **The interface-order rule carries over to the system unamended.** L∞
+    rates **0.963 / 2.034 / 2.037** in `D = 1` and **0.925 / 2.041 /
+    2.037** in `D = 2` for `p = 1, 3, 5`, against unrefined controls of
+    2.024 and 2.029, with `p = 3` landing within 0.013 of the control and
+    `p = 5` buying nothing further; every L1 rate is the scheme's own,
+    `p = 1` included. Predicted before it was run.
+  - **The norm is part of the result, and the reason is conservation.**
+    With `fixup = false` at `p = 1` the L1 rate falls from 1.966 to
+    **1.111** in `D = 1` and from 1.900 to **1.192** in `D = 2`, while L∞
+    is 1.0 either way. TreeAMR measured 1.98 → 1.12 and 1.80 → 1.25 on
+    Burgers.
+  - **Sod conserves across a coarse-fine face its shock crosses.** The
+    shock leaves the refined box at `t = 0.14268` of a `t_end = 0.2` run.
+    With the fixup the mass and energy drift is 0.15 to 2.8 times the
+    uniform mesh's at the same coarse spacing — the coarse-fine face adds
+    nothing to the boundary's own numerical flux — and the momentum total
+    moves by the closed-form boundary flux to `5e-11` relative; without it
+    all three are `6.3e3` to `7.7e7` times worse. At `N = 32` in `D = 1`,
+    where the boundary's own flux has itself reached roundoff, the claim
+    is the plain one: `0.0`, `2.2e-16` and `2.8e-17` against bounds of
+    `2.8e-13`, `6.9e-13` and `9.0e-14`.
+  - **The Dirichlet hook fills a fine block's outer ghosts**, all of them,
+    including the ghost rows across the tube, with zero mismatches after
+    the run.
+  - **The two-level tube costs 1.338 times the uniform fine run's L1
+    error** at the same finest spacing, in both dimensions — a sanity
+    bound, since the refined region here is static.
+
+  What H2 wrote but did not decide: the `p = 1` question, which the smooth
+  wave cannot answer (it confirms the premise — an integral norm does not
+  see the interface defect — and leaves the answer to the discontinuous
+  cases of steps 7 and 9).
 - **H3 — Regridding.** The criterion, the buffer, `evolve!`, the
   initial-data cycle. *Accept:* the cycle converges to a fixed hierarchy
   on all four initial data; the tracked Sod tube in `D = 1, 2` matches
@@ -1587,6 +1753,137 @@ rarefaction's foot having diffused a little way toward the left boundary by
 `t = 1/5`, and it is roundoff from `N = 32` on. The transverse momentum
 drifts by *exactly* zero. **No floor fired in any run**, in any dimension,
 at any resolution.
+
+### Step 5 — the static two-level mesh
+
+The M3 two-level box for the entropy wave (`roots = 4`, the middle
+sub-box refined once, 2:1 balanced, held fixed in physical space) and the
+two static two-level tubes for Sod. `Float64`, HLLE, `cfl = 2/5`;
+everything below is identical at one and at four threads.
+
+**Conservation, all `D + 2` integrals, and the negative control.** The
+entropy wave with `:none` and `p = 3` to `t = 1/4` (`t = 1/8` in `D = 3`).
+The two runs differ in the single line `p.fixup && restrict_interfaces!(…)`
+and agree on the mesh, the block count and the step count:
+
+| `D` | `N` | blocks | steps | worst drift with the fixup | worst drift without |
+|---|---|---|---|---|---|
+| 1 | 8 | 6 | 93 | **0.011** ulp of the scale per step | **1.02e-4** of the scale |
+| 2 | 8 | 28 | 186 | **0.0031** | **3.21e-5** |
+| 3 | 4 | 120 | 70 | **0.0071** | **2.98e-5** |
+
+"Worst" is over the `D + 2` integrals, each against its own scale
+`Σ hᴰ |U_v|`. With the fixup every one of them sits at a *hundredth* of
+one ulp of its scale per step; without it every one of them leaks by
+`1e8` to `1e9` times the `8 eps · scale · nsteps` bound the fixup run
+meets, and by `1e-5` to `1e-4` of the scale. No floor fired in any run.
+The 3D entry is the one where a coarse-fine face carries four fine faces
+and the fixup's tangential average is a 2×2 rather than a single cell.
+
+**The interface-order rule for the system.** The same wave, `:none`, over
+`N = 8 … 64` in `D = 1` and `N = 8 … 32` in `D = 2`, conservative
+restriction (exact, and therefore never entering), prolongation order
+varied:
+
+| prolongation | L∞, `D = 1` | L∞, `D = 2` | L1, `D = 1` | L1, `D = 2` |
+|---|---|---|---|---|
+| 1 | **0.963** | **0.925** | 1.966 | 1.900 |
+| 3 | 2.034 | 2.041 | 1.971 | 2.009 |
+| 5 | 2.037 | 2.037 | 1.976 | 2.009 |
+| *unrefined control, `p = 3`* | 2.024 | 2.029 | 2.015 | 2.021 |
+
+The prediction — 1, 2, 2 in L∞ and 2, 2, 2 in L1 — holds, in both
+dimensions, without amendment. Order 1 costs a full order in L∞; order 3
+recovers the scheme's own rate, landing within **0.013** of the unrefined
+control in `D = 1` and **0.012** in `D = 2`, which is the sharper statement
+that the interface has stopped being what limits it; order 5 buys nothing
+further, and in `D = 2` is fractionally *worse* than order 3 in the third
+digit. Every L1 rate is the scheme's own, `p = 1` included.
+
+**The negative control on the rate**, which is what pins the locality of
+the interface defect on conservation rather than on the flux-divergence
+form:
+
+| | L1, `D = 1` | L1, `D = 2` | L∞, `D = 1` | L∞, `D = 2` |
+|---|---|---|---|---|
+| `p = 1`, fixup | 1.966 | 1.900 | 0.963 | 0.925 |
+| `p = 1`, **no fixup** | **1.111** | **1.192** | 1.021 | 1.042 |
+
+TreeAMR measured 1.98 → 1.12 and 1.80 → 1.25 on Burgers; the system
+reproduces it. With the fixup the defect is a dipole — the fine cell loses
+exactly what the coarse cell gains — and a first-order hyperbolic operator
+carries a zero-mean residual nowhere; without it the residual has net mass
+`O(h)` per unit time and is transported downstream as an `O(h)` plateau,
+which an integral norm does see. L∞ never depended on the fixup at all.
+
+**Sod across a coarse-fine face.** `:minmod`, `p = 3`, `N = 16`,
+`roots = 4` along the tube and one across, to `t = 1/5`, with the
+Dirichlet boundary in place. The shock leaves the `:middle` box at
+`t = 0.14268` and ends at `x = 0.85043`, so it crosses the coarse-fine
+face at `x = 3/4` during the run. Drifts, against the closed-form
+boundary flux `(p_L − p_R)·t_end·A` for the momentum (0.18 in `D = 1`,
+0.045 in `D = 2`, since `Σ hᴰ |S|` is exactly zero at `t = 0`):
+
+| run | blocks | steps | mass | energy | \|ΔS − flux\| |
+|---|---|---|---|---|---|
+| `D = 1` `:middle` | 6 | 141 | 8.6e-12 | 2.4e-11 | 9.1e-12 |
+| `D = 1` `:left` | 6 | 141 | 4.7e-11 | 1.3e-10 | 5.0e-11 |
+| `D = 1` uniform, same coarse `h` | 4 | 71 | 2.1e-11 | 4.7e-11 | 6.0e-11 |
+| `D = 1` `:middle`, **no fixup** | 6 | 141 | **3.3e-4** | **1.5e-3** | **7.0e-4** |
+| `D = 1` `:left`, **no fixup** | 6 | 141 | **2.2e-3** | **5.8e-3** | **3.1e-4** |
+| `D = 2` `:middle` | 10 | 281 | 2.2e-12 | 6.1e-12 | 2.3e-12 |
+| `D = 2` `:left` | 10 | 281 | 1.2e-11 | 3.3e-11 | 1.3e-11 |
+| `D = 2` uniform, same coarse `h` | 4 | 141 | 5.8e-12 | 1.3e-11 | 1.6e-11 |
+| `D = 2` `:middle`, **no fixup** | 10 | 281 | **8.3e-5** | **3.8e-4** | **1.8e-4** |
+| `D = 2` `:left`, **no fixup** | 10 | 281 | **5.4e-4** | **1.4e-3** | **7.9e-5** |
+
+The refined runs with the fixup drift by **0.15 to 2.8 times** what the
+uniform mesh of the same coarse spacing drifts by, so the coarse-fine face
+adds nothing to the boundary's own numerical flux; the runs without it
+leak by **6.3e3 to 7.7e7 times** more, and miss the momentum's closed form
+by `1.7e-3` to `3.9e-3` relative where the runs with it meet it to
+`5.2e-11` … `2.8e-10`. No floor fired in any of them, and the transverse
+momentum drifts by *exactly* zero in `D = 2` with the fixup and without it.
+
+**And it is roundoff where the boundary's own flux is.** The residual
+above is not roundoff: it is the numerical foot of the rarefaction and the
+shock reaching the Dirichlet faces, and it falls by four orders of
+magnitude per halving of `h` — `2.1e-11`, `1.1e-16`, `0.0` for the mass on
+the uniform `D = 1` mesh at `N = 16, 32, 64`. At `N = 32` in `D = 1` the
+two-level tube therefore obeys the entropy wave's plain bound on a mesh
+with a coarse-fine face in it:
+
+| run | mass | energy | \|ΔS − flux\| |
+|---|---|---|---|
+| `:middle`, `N = 32`, 281 steps | **0.0** | **2.2e-16** | **2.8e-17** |
+| `:left`, `N = 32`, 281 steps | **1.1e-16** | **6.7e-16** | **2.8e-17** |
+| `8 eps · scale · nsteps` | 2.8e-13 | 6.9e-13 | 9.0e-14 |
+| the same runs **without the fixup** | 1.8e-4 … 1.1e-3 | 8.0e-4 … 2.9e-3 | 1.5e-4 … 3.4e-4 |
+
+`D = 2` reaches the same point at `N = 32` and costs eight times as much
+to say it, so it is recorded here rather than run in the suite.
+
+**The boundary hook on a fine block.** With `refined = :left` the low
+physical face is covered by level-1 blocks (one in `D = 1`, two in
+`D = 2`), and after the run **every** stored entry of the outward-facing
+ghost regions along the tube holds the conserved left or right state
+exactly — the rows across the tube included — with zero mismatches out of
+the whole slab.
+
+**The error the refinement buys.** The two-level `:middle` tube against the
+exact Riemann solution, in the volume-weighted L1 norm, beside the two
+uniform runs that bracket it:
+
+| `D` | two-level `:middle` | uniform, same coarse `h` | uniform, same finest `h` | ratio to the fine one |
+|---|---|---|---|---|
+| 1 | 1.1372e-2 | 1.6678e-2 | 8.5013e-3 | **1.338** |
+| 2 | 8.5295e-3 | 1.2517e-2 | 6.3769e-3 | **1.338** |
+
+The same ratio in both dimensions, to four digits. It is a sanity bound and
+not a tracking claim: the refined region here is static and half the tube,
+so the shock spends most of the run outside it. The claim that refinement
+following the shock matches the uniformly fine run at fewer cells is step
+7's.
 
 ## Possible extensions
 

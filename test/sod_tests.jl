@@ -25,10 +25,10 @@
 const SOD_NS = (16, 32, 64, 128)
 
 # The conservative family with prolongation of order 3, as everywhere else
-# in the suite. Nothing here refines — the two-level Sod forest whose
-# refined region touches the Dirichlet face is step 5's — so only the family
-# is exercised, and it is named so that step 5's runs differ in the mesh and
-# in nothing else.
+# in the suite. Nothing here refines — the two two-level Sod forests are
+# measured next door, in `interface_tests.jl` — so only the family is
+# exercised, and it is named so that those runs differ in the mesh and in
+# nothing else.
 sod_ops() = Operators(family=Conservative, prolongation=3, restriction=2)
 
 sod_study(::Type{T}; Ns, limiter=:minmod) where {T} =
@@ -328,8 +328,8 @@ end
     #
     # The conservation claim proper — all `D + 2` integrals to roundoff,
     # with the fixup and not without it — is made for Sod on a *refined*
-    # mesh in step 5, as the difference between two runs sharing this same
-    # boundary flux.
+    # mesh in `interface_tests.jl`, as the difference between two runs
+    # sharing this same boundary flux.
     T = Float64
     t_end = 1 // 5
     for (D, roots, area) in ((1, (4,), 1.0), (2, (4, 1), 0.25))

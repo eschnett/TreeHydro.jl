@@ -33,7 +33,8 @@ Two rules follow from `CODE.md` and govern every change here:
 
 ## Current state
 
-**Scaffolding (H0) and the scheme on a uniform mesh (H1) are done.**
+**Scaffolding (H0), the scheme on a uniform mesh (H1) and the coarse-fine
+faces on a static mesh (H2) are done.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -59,13 +60,16 @@ non-allocating and inferred; from step 3 `src/evolution.jl`
 — host `Float64`, Toro ch. 4, a *reference* and not a flux) and
 `src/sod.jl` (`SodTube`, `sod_state`, `sod_initial`, `sod_conserved`,
 `sod_boundary`, `sod_forest`, `sod_reference`, `assert_no_arrival`,
-`sod_errors`). Tests: `test/precision_tests.jl`,
+`sod_errors`); and from step 5 almost nothing — `sod_forest` gained
+`refined = :middle | :left` and `forest_levels(forest)` was added to
+`src/evolution.jl`, the step being a measurement rather than a
+construction. Tests: `test/precision_tests.jl`,
 `test/prerequisite_tests.jl`, `test/eos_tests.jl`,
 `test/riemann_tests.jl`, `test/evolution_tests.jl`,
-`test/entropywave_tests.jl`, `test/exact_riemann_tests.jl` and
-`test/sod_tests.jl`; CI and a `README.md`. The milestones are
-H0–H6 in `CODE.md`; H1 covered steps 1–4, and `PLAN.md`'s step 5 (the
-static two-level mesh, H2) is next.
+`test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
+`test/sod_tests.jl` and `test/interface_tests.jl`; CI and a `README.md`.
+The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4 and H2 step 5,
+and `PLAN.md`'s step 6 (the refinement criterion, H3a) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -83,16 +87,34 @@ boundary is physical the drift *is* the boundary flux, the momentum total
 moving by exactly `(p_L − p_R)·t_end·A` while mass and energy do not move.
 No floor has fired in any run of any case yet.
 
+Step 5 added the two-level numbers, which are the ones the package exists
+for. On the static two-level mesh every one of the `D + 2` integrals holds
+to **0.003–0.011 ulp of its own scale per step** in `D = 1, 2, 3`, and the
+identical run with `fixup = false` leaks by **`1e8`–`1e9` times** that
+bound. The interface-order rule holds for the system unamended: L∞ rates
+**0.963 / 2.034 / 2.037** at `p = 1, 3, 5` in `D = 1` and **0.925 / 2.041 /
+2.037** in `D = 2`, against unrefined controls of 2.024 and 2.029, with
+every L1 rate the scheme's own — and the negative control on the *rate*
+reproduces Burgers': `p = 1` without the fixup falls from 1.966 to **1.111**
+in L1 (1.900 to **1.192** in `D = 2`). On the two-level Sod tube the mass
+and energy drift is 0.15–2.8 times the uniform mesh's at the same coarse
+spacing (it is the *boundary's* numerical flux, not the coarse-fine
+face's), the momentum equals the boundary flux to `5e-11` relative, and at
+`N = 32` in `D = 1` all three are at true roundoff; without the fixup the
+three are `6e3`–`8e7` times worse. The Dirichlet hook fills a *fine*
+block's outer ghosts exactly, ghost rows across the tube included.
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
 
 ## Commands
 
-The full suite (about 50 s after step 4 — 45 s at one thread and 41 s at
-four, most of it the entropy wave's and Sod's convergence studies), and
-the same at four threads — `Pkg.test` does not inherit `-t`, so it has to
-be passed explicitly:
+The full suite (about 80 s after step 5 — 1 m 16 s at one thread and 1 m
+01 s at four, most of it the entropy wave's convergence studies, of which
+the interface-order sweep in `D = 2` alone is 19 s), and the same at four
+threads — `Pkg.test` does not inherit `-t`, so it has to be passed
+explicitly:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -161,6 +183,19 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   injection is *exactly* zero; a test that sees a nonzero injection on
   Sod, the entropy wave or Kelvin–Helmholtz has found a bug, not a
   tolerance to loosen.
+- **At a physical boundary the drift is not roundoff, and the momentum has
+  no scale** (measured in step 5). Two traps in one place. The mass and
+  energy totals of a Sod run move by the *numerical* foot of the
+  rarefaction and the shock reaching the Dirichlet faces — `2.1e-11` of the
+  mass at `N = 16` in `D = 1`, falling by four orders of magnitude per
+  halving of `h` and reaching roundoff only at `N = 32` (`N = 32` in
+  `D = 2` as well). So a conservation test written at `8 eps · scale ·
+  nsteps` will fail on a coarse tube for a reason that has nothing to do
+  with the coarse-fine face; compare against the *uniform* mesh of the same
+  coarse spacing instead, or run fine enough that the boundary is clean.
+  And `conserved_scales` gives the momentum **exactly zero** on Sod,
+  because the initial state is at rest: its yardstick is the closed-form
+  boundary flux `(p_L − p_R)·t_end·A`, not a norm of the state.
 - **The boundary hook goes to three places**: `fill_ghosts!`, `regrid!`
   (it fills ghosts before its transfer) and `adapt_to_initial_data!`.
   Forgetting the second is the bug that arrives one chunk late.

@@ -4,7 +4,8 @@
 # face is a same-level face, so the interface fixup has nothing to do and
 # the conserved integrals must be constant whether it runs or not. The
 # two-level hierarchy `hydro_forest` also builds — where the fixup is the
-# difference between conservation and a leak — is step 5's.
+# difference between conservation and a leak — is measured next door, in
+# `interface_tests.jl`.
 #
 #   * **Order.** The wave is an exact solution of the nonlinear system, the
 #     initial data and the reference are exact cell averages, and the
@@ -24,8 +25,9 @@ const ENTROPY_NS = Dict(1 => (8, 16, 32, 64), 2 => (8, 16, 32))
 
 # The conservative family with prolongation of order 3 — one more than the
 # scheme's order, which is TreeAMR's interface-order rule. Nothing here
-# refines, so only the family is exercised; it is named so that step 5's
-# refined runs differ in the mesh and in nothing else.
+# refines, so only the family is exercised; it is named so that
+# `interface_tests.jl`'s refined runs differ in the mesh and in nothing
+# else.
 entropy_ops() = Operators(family=Conservative, prolongation=3, restriction=2)
 
 entropy_study(::Type{T}, ::Val{D}; Ns, limiter, fixup=true) where {T,D} =
@@ -115,7 +117,8 @@ end
 
 @testset "Conservation does not depend on the fixup on a uniform mesh: D=$D" for
         D in (1, 2)
-    # The control that gives the coarse-fine claim of step 5 its meaning.
+    # The control that gives `interface_tests.jl`'s coarse-fine claim its
+    # meaning.
     # `restrict_interfaces!` replaces a coarse flux by the average of the
     # fine fluxes across a coarse-fine face; on a single-level mesh there
     # is no such face, so switching it off must change *nothing*. If a
