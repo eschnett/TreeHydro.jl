@@ -183,17 +183,22 @@ end
 
 # The runs, computed once. About thirty seconds between them, and every
 # testset below reads these rather than running its own, so that the tables
-# really are the same runs compared against each other.
-const TRACKED_1D = tracked_sedov(Val(1), SEDOV1D)
+# really are the same runs compared against each other. The names carry the
+# case because every test file is `include`d into the same `Main`:
+# `driver_tests.jl` has a `TRACKED_1D` of its own, and a second `const` of
+# that name is a `LoadError` on Julia 1.11 (and a silent redefinition on
+# 1.12 and later, which is how it reached CI unseen — see "Things that will
+# bite" in `CLAUDE.md`).
+const TRACKED_SEDOV_1D = tracked_sedov(Val(1), SEDOV1D)
 
-const TRACKED_2D = tracked_sedov(Val(2), SEDOV2D)
-const FINE_2D = uniform_sedov(Val(2), SEDOV2D; scale=2^SEDOV2D.cap)
-const COARSE_2D = uniform_sedov(Val(2), SEDOV2D)
-const NOFIX_2D = tracked_sedov(Val(2), SEDOV2D; fixup=false)
-const ORDER1_2D = tracked_sedov(Val(2), SEDOV2D; p=1)
-const STEP_2D = tracked_sedov(Val(2), SEDOV2D; reset=:step)
+const TRACKED_SEDOV_2D = tracked_sedov(Val(2), SEDOV2D)
+const FINE_SEDOV_2D = uniform_sedov(Val(2), SEDOV2D; scale=2^SEDOV2D.cap)
+const COARSE_SEDOV_2D = uniform_sedov(Val(2), SEDOV2D)
+const NOFIX_SEDOV_2D = tracked_sedov(Val(2), SEDOV2D; fixup=false)
+const ORDER1_SEDOV_2D = tracked_sedov(Val(2), SEDOV2D; p=1)
+const STEP_SEDOV_2D = tracked_sedov(Val(2), SEDOV2D; reset=:step)
 
-const TRACKED_3D = tracked_sedov(Val(3), SEDOV3D; from=2)
+const TRACKED_SEDOV_3D = tracked_sedov(Val(3), SEDOV3D; from=2)
 
 # The static two-level runs. Every control takes the *same* step count as the
 # run it is a control for, or the difference between them would not be the
@@ -333,8 +338,8 @@ end
     # sits at the cap; measured E₀ / nominal is 1.00000 in D = 1 (the planar
     # top hat is a whole number of cells), 1.03451 in D = 2 and 1.04445 in
     # D = 3.
-    for (D, run, expected) in ((1, TRACKED_1D, 1.0), (2, TRACKED_2D, 1.03451),
-                               (3, TRACKED_3D, 1.04445))
+    for (D, run, expected) in ((1, TRACKED_SEDOV_1D, 1.0), (2, TRACKED_SEDOV_2D, 1.03451),
+                               (3, TRACKED_SEDOV_3D, 1.04445))
         r, w = run.r, run.w
         @test r.converged
         @test 1 ≤ r.passes ≤ 8
@@ -366,9 +371,9 @@ end
 end
 
 @testset "The tracked blast follows the similarity law: D=$D" for (D, run, tol) in
-                                                                  ((1, TRACKED_1D, 0.08),
-                                                                   (2, TRACKED_2D, 0.05),
-                                                                   (3, TRACKED_3D, 0.08))
+                                                                  ((1, TRACKED_SEDOV_1D, 0.08),
+                                                                   (2, TRACKED_SEDOV_2D, 0.05),
+                                                                   (3, TRACKED_SEDOV_3D, 0.08))
     # The failure mode is a blast that expands at the wrong rate, which a
     # profile plot does not show and which a conservation test cannot see at
     # all. The exponent is the check that needs no constant: `log r_s` against
@@ -429,7 +434,7 @@ end
     #                                       D = 3  1.10396
     # and the largest growth over the whole run, against the headroom of 2:
     #   D = 1  1.32100   D = 2  1.44736   D = 3  1.28618
-    for (D, run) in ((1, TRACKED_1D), (2, TRACKED_2D), (3, TRACKED_3D))
+    for (D, run) in ((1, TRACKED_SEDOV_1D), (2, TRACKED_SEDOV_2D), (3, TRACKED_SEDOV_3D))
         r = run.r
         growth = r.λ_end_history ./ r.λ_history
         @test growth[1] > 1                    # it grows, and CODE.md said not
@@ -458,29 +463,29 @@ end
     # refined region the gas is undisturbed, so the coarse blocks hold the
     # ambient exactly and there is nothing for them to get wrong.
     M = SEDOV2D.roots * SEDOV2D.N
-    gt = reduce_to_grid(TRACKED_2D.r.U, M)
-    gf = reduce_to_grid(FINE_2D.r.U, M)
-    gc = reduce_to_grid(COARSE_2D.r.U, M)
+    gt = reduce_to_grid(TRACKED_SEDOV_2D.r.U, M)
+    gf = reduce_to_grid(FINE_SEDOV_2D.r.U, M)
+    gc = reduce_to_grid(COARSE_SEDOV_2D.r.U, M)
     tracked_fine = l1_difference(gt, gf)
     coarse_fine = l1_difference(gc, gf)
 
-    @test TRACKED_2D.r.cells < FINE_2D.r.cells
+    @test TRACKED_SEDOV_2D.r.cells < FINE_SEDOV_2D.r.cells
     @test tracked_fine < coarse_fine / 1e6
     @test tracked_fine ≤ 1e-12
     # And the two agree on what they are measuring, not merely on the state.
-    @test TRACKED_2D.peak ≈ FINE_2D.peak rtol = 1e-3
+    @test TRACKED_SEDOV_2D.peak ≈ FINE_SEDOV_2D.peak rtol = 1e-3
     # The radius is quantized at the cell spacing the two runs share, so the
     # comparison carries one cell. Measured, they are equal.
-    @test TRACKED_2D.r_s ≈ FINE_2D.r_s atol = TRACKED_2D.r.h
-    @test COARSE_2D.peak < TRACKED_2D.peak      # the control is worse
+    @test TRACKED_SEDOV_2D.r_s ≈ FINE_SEDOV_2D.r_s atol = TRACKED_SEDOV_2D.r.h
+    @test COARSE_SEDOV_2D.peak < TRACKED_SEDOV_2D.peak      # the control is worse
 
-    @info "Sedov tracked, D = 2: $(TRACKED_2D.r.cells) cells against " *
-          "$(FINE_2D.r.cells) uniformly fine and $(COARSE_2D.r.cells) " *
+    @info "Sedov tracked, D = 2: $(TRACKED_SEDOV_2D.r.cells) cells against " *
+          "$(FINE_SEDOV_2D.r.cells) uniformly fine and $(COARSE_SEDOV_2D.r.cells) " *
           "uniformly coarse; reduced onto the common $(M)² grid " *
           "|tracked − fine| = $tracked_fine against |coarse − fine| = " *
-          "$coarse_fine; peak $(TRACKED_2D.peak), $(FINE_2D.peak) and " *
-          "$(COARSE_2D.peak); exponent $(TRACKED_2D.exponent), " *
-          "$(FINE_2D.exponent) and $(COARSE_2D.exponent)"
+          "$coarse_fine; peak $(TRACKED_SEDOV_2D.peak), $(FINE_SEDOV_2D.peak) and " *
+          "$(COARSE_SEDOV_2D.peak); exponent $(TRACKED_SEDOV_2D.exponent), " *
+          "$(FINE_SEDOV_2D.exponent) and $(COARSE_SEDOV_2D.exponent)"
 end
 
 @testset "The tracked mesh keeps its coarse-fine faces in undisturbed gas: D=2" begin
@@ -497,14 +502,14 @@ end
     # Measured: `fixup = false`, `p = 1` and `reset = :step` give the *same*
     # exponent, peak, cell count, mesh history and tracking as the run they
     # are controls for, and the two reset cadences agree **bit for bit**.
-    for (tag, run) in (("fixup = false", NOFIX_2D), ("p = 1", ORDER1_2D),
-                       ("reset = :step", STEP_2D))
-        @test run.r.cells == TRACKED_2D.r.cells
-        @test run.r.nsteps == TRACKED_2D.r.nsteps
-        @test run.r.nblocks_history == TRACKED_2D.r.nblocks_history
-        @test run.r.tracking == TRACKED_2D.r.tracking
-        @test run.exponent ≈ TRACKED_2D.exponent rtol = 1e-9
-        @test run.peak ≈ TRACKED_2D.peak rtol = 1e-9
+    for (tag, run) in (("fixup = false", NOFIX_SEDOV_2D), ("p = 1", ORDER1_SEDOV_2D),
+                       ("reset = :step", STEP_SEDOV_2D))
+        @test run.r.cells == TRACKED_SEDOV_2D.r.cells
+        @test run.r.nsteps == TRACKED_SEDOV_2D.r.nsteps
+        @test run.r.nblocks_history == TRACKED_SEDOV_2D.r.nblocks_history
+        @test run.r.tracking == TRACKED_SEDOV_2D.r.tracking
+        @test run.exponent ≈ TRACKED_SEDOV_2D.exponent rtol = 1e-9
+        @test run.peak ≈ TRACKED_SEDOV_2D.peak rtol = 1e-9
         @test (run.r.floor_hits, run.r.reset_hits, run.r.ghost_hits) == (0, 0, 0)
         @test run.r.injection == ntuple(_ -> 0.0, 4)
         @info "Sedov tracked, D = 2, $tag: exponent $(run.exponent), peak " *
@@ -514,8 +519,8 @@ end
     end
     # The reset cadence is not merely equivalent here, it is the same bits:
     # the reset writes back only the cells a floor fired in, and none did.
-    @test STEP_2D.r.u == TRACKED_2D.r.u
-    @test STEP_2D.r.drift == TRACKED_2D.r.drift
+    @test STEP_SEDOV_2D.r.u == TRACKED_SEDOV_2D.r.u
+    @test STEP_SEDOV_2D.r.drift == TRACKED_SEDOV_2D.r.drift
     # Conservation on the tracked mesh is therefore the plain claim, with the
     # injection exactly zero rather than zero to a tolerance. The ambient is
     # at rest and the two faces of each axis carry the same pressure flux, so
@@ -524,13 +529,13 @@ end
     # Sod's mass and energy drifts at the same stage were the boundary's own
     # numerical flux and were not.
     for v in 1:4
-        @test TRACKED_2D.r.drift[v] ≤
-              8 * eps(Float64) * TRACKED_2D.r.scales[v] * TRACKED_2D.r.nsteps
+        @test TRACKED_SEDOV_2D.r.drift[v] ≤
+              8 * eps(Float64) * TRACKED_SEDOV_2D.r.scales[v] * TRACKED_SEDOV_2D.r.nsteps
     end
-    @info "Sedov tracked, D = 2: drift $(TRACKED_2D.r.drift) against roundoff " *
-          "bounds $(ntuple(v -> 8 * eps(Float64) * TRACKED_2D.r.scales[v] * TRACKED_2D.r.nsteps, 4)) " *
-          "over $(TRACKED_2D.r.nsteps) steps and $(TRACKED_2D.r.nregrids) mesh " *
-          "changes, injection $(TRACKED_2D.r.injection)"
+    @info "Sedov tracked, D = 2: drift $(TRACKED_SEDOV_2D.r.drift) against roundoff " *
+          "bounds $(ntuple(v -> 8 * eps(Float64) * TRACKED_SEDOV_2D.r.scales[v] * TRACKED_SEDOV_2D.r.nsteps, 4)) " *
+          "over $(TRACKED_SEDOV_2D.r.nsteps) steps and $(TRACKED_SEDOV_2D.r.nregrids) mesh " *
+          "changes, injection $(TRACKED_SEDOV_2D.r.injection)"
 end
 
 @testset "The refined region follows the blast as a disk, not as a shell: D=2" begin
@@ -546,10 +551,10 @@ end
     # Measured block history: 40 → 88 → 112 → … → 196, monotone, over 40
     # chunks; at t_end the blocks within r < 0.06 report Coarsen and those
     # between 0.06 and 0.42 fire.
-    r = TRACKED_2D.r
+    r = TRACKED_SEDOV_2D.r
     @test issorted(r.nblocks_history)           # rising, and never falling
     @test r.nblocks_history[end] > r.nblocks_history[1]
-    @test r.cells < FINE_2D.r.cells             # it is still a saving
+    @test r.cells < FINE_SEDOV_2D.r.cells             # it is still a saving
 
     # It is still a hierarchy at the end and not a uniform mesh: some blocks
     # are below the cap, and they are the ones the blast has not reached.
@@ -777,9 +782,9 @@ end
     #   tracked D = 3      0/  288/1152
     #   :center D = 2      0/ 4096/  40
     #   :center D = 3     75/24504/4703
-    @test (TRACKED_2D.r.floor_hits, TRACKED_2D.r.reset_hits,
-           TRACKED_2D.r.ghost_hits) == (0, 0, 0)
-    @test (FINE_2D.r.floor_hits, FINE_2D.r.reset_hits, FINE_2D.r.ghost_hits) ==
+    @test (TRACKED_SEDOV_2D.r.floor_hits, TRACKED_SEDOV_2D.r.reset_hits,
+           TRACKED_SEDOV_2D.r.ghost_hits) == (0, 0, 0)
+    @test (FINE_SEDOV_2D.r.floor_hits, FINE_SEDOV_2D.r.reset_hits, FINE_SEDOV_2D.r.ghost_hits) ==
           (0, 0, 0)
     @test (STATIC_2D_COARSE.reset_hits, STATIC_2D_COARSE.ghost_hits) == (0, 0)
     # Where there *is* a coarse-fine face with a shock on it, all three
@@ -787,7 +792,7 @@ end
     # prolongation question was waiting for.
     @test CENTER_2D.ghost_hits > 0
     @test CENTER_3D.ghost_hits > 0
-    @test TRACKED_3D.r.ghost_hits > 0
+    @test TRACKED_SEDOV_3D.r.ghost_hits > 0
     # And no mass is ever injected, because the atmosphere rule never fires:
     # only the pressure floor does, and it changes `E` alone. The momentum
     # injection is roundoff rather than exactly zero, for the `ρ (S/ρ)` round
@@ -798,17 +803,17 @@ end
         @test all(v -> abs(r.injection[v]) ≤
                        8 * eps(Float64) * r.scales[v] * r.nsteps, 2:(n - 1))
     end
-    @test TRACKED_3D.r.injection[1] == 0
-    @test all(v -> abs(TRACKED_3D.r.injection[v]) ≤
-                   8 * eps(Float64) * TRACKED_3D.r.scales[v] *
-                   TRACKED_3D.r.nsteps, 2:4)
+    @test TRACKED_SEDOV_3D.r.injection[1] == 0
+    @test all(v -> abs(TRACKED_SEDOV_3D.r.injection[v]) ≤
+                   8 * eps(Float64) * TRACKED_SEDOV_3D.r.scales[v] *
+                   TRACKED_SEDOV_3D.r.nsteps, 2:4)
 
     @info "Sedov floor counts (owned recovery / reset / ghost): tracked D = 2 " *
-          "$(TRACKED_2D.r.floor_hits)/$(TRACKED_2D.r.reset_hits)/$(TRACKED_2D.r.ghost_hits), " *
-          "tracked D = 3 $(TRACKED_3D.r.floor_hits)/$(TRACKED_3D.r.reset_hits)/$(TRACKED_3D.r.ghost_hits), " *
+          "$(TRACKED_SEDOV_2D.r.floor_hits)/$(TRACKED_SEDOV_2D.r.reset_hits)/$(TRACKED_SEDOV_2D.r.ghost_hits), " *
+          "tracked D = 3 $(TRACKED_SEDOV_3D.r.floor_hits)/$(TRACKED_SEDOV_3D.r.reset_hits)/$(TRACKED_SEDOV_3D.r.ghost_hits), " *
           ":center D = 2 $(CENTER_2D.floor_hits)/$(CENTER_2D.reset_hits)/$(CENTER_2D.ghost_hits), " *
           ":center D = 3 $(CENTER_3D.floor_hits)/$(CENTER_3D.reset_hits)/$(CENTER_3D.ghost_hits), " *
-          "uniform D = 2 $(FINE_2D.r.floor_hits)/$(FINE_2D.r.reset_hits)/$(FINE_2D.r.ghost_hits); " *
+          "uniform D = 2 $(FINE_SEDOV_2D.r.floor_hits)/$(FINE_SEDOV_2D.r.reset_hits)/$(FINE_SEDOV_2D.r.ghost_hits); " *
           "the atmosphere rule never fires — every mass injection is exactly " *
           "zero and every momentum injection is roundoff"
 end
@@ -863,7 +868,7 @@ end
     #
     # Measured (D = 1, 222 steps, 25 chunks, 2 mesh changes, 112 cells):
     #   exponent 0.64150 against 2/3, peak 4.11090, r_s 0.23830, E₀ exactly 1
-    r = TRACKED_1D.r
+    r = TRACKED_SEDOV_1D.r
     @test r.converged
     @test maxlevel(r.forest) == SEDOV1D.cap
     @test (r.floor_hits, r.reset_hits, r.ghost_hits) == (0, 0, 0)
@@ -877,13 +882,13 @@ end
     # ambient share of the top hat itself, `p_amb·2r₀/(γ−1) = 3.125e-6`, which
     # `measured_E₀` subtracts along with the rest of the box. Measured:
     # 0.999996875.
-    @test TRACKED_1D.E₀ ≈ 1 - Float64(TRACKED_1D.w.p_amb) * 2 *
-                              Float64(TRACKED_1D.w.r₀) /
-                              (Float64(TRACKED_1D.w.eos.γ) - 1) rtol = 1e-12
+    @test TRACKED_SEDOV_1D.E₀ ≈ 1 - Float64(TRACKED_SEDOV_1D.w.p_amb) * 2 *
+                              Float64(TRACKED_SEDOV_1D.w.r₀) /
+                              (Float64(TRACKED_SEDOV_1D.w.eos.γ) - 1) rtol = 1e-12
 
-    @info "Sedov tracked, D = 1: exponent $(TRACKED_1D.exponent) against " *
-          "$(2/3), peak $(TRACKED_1D.peak), r_s $(TRACKED_1D.r_s), E₀ " *
-          "$(TRACKED_1D.E₀), $(r.nsteps) steps in $(r.nchunks) chunks with " *
+    @info "Sedov tracked, D = 1: exponent $(TRACKED_SEDOV_1D.exponent) against " *
+          "$(2/3), peak $(TRACKED_SEDOV_1D.peak), r_s $(TRACKED_SEDOV_1D.r_s), E₀ " *
+          "$(TRACKED_SEDOV_1D.E₀), $(r.nsteps) steps in $(r.nchunks) chunks with " *
           "$(r.nregrids) mesh changes, $(r.cells) cells, drift $(r.drift)"
 
     # The arrival check: a `t_end` at which the law puts the shock at the box's
@@ -910,6 +915,6 @@ end
         SedovBlast(Float64, Val(2)); roots=(4, 2))
     @test_throws "deposition radius must be inside the box" SedovBlast(
         Float64, Val(2); r₀=1)
-    @test_throws "threshold above 1" shock_radius(TRACKED_1D.r.U,
-                                                  TRACKED_1D.w; threshold=1)
+    @test_throws "threshold above 1" shock_radius(TRACKED_SEDOV_1D.r.U,
+                                                  TRACKED_SEDOV_1D.w; threshold=1)
 end

@@ -304,6 +304,17 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
   julia --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
+The same check **under the floor version**, before a step is merged. CI
+runs Julia 1.11 as well as the current release, and 1.11 is stricter in at
+least one way that matters here — it refuses to redefine a `const`, which
+1.12 and later allow — so a suite that is green at 1.13 can be red at 1.11
+(see "Things that will bite"). With `juliaup`:
+
+```bash
+d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
+  julia +1.11 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+```
+
 Not yet real, and listed so the section can be filled in rather than
 rewritten: the viewer (`julia --project=bin bin/visualize2d.jl --case=kh`)
 arrives in step 11, the thread-independence test — which spawns its own
@@ -566,6 +577,20 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   deposition tiles `2r₀` exactly and the ratio is 0.999996875, the missing
   `3.125e-6` being the ambient share of the top hat that `measured_E₀`
   subtracts along with the rest of the box.
+- **Every test file is `include`d into the same `Main`, so a top-level
+  `const` name must be unique across files — and only Julia 1.11 will tell
+  you** (found in step 10b, when the merge of steps 8–10 went red on the
+  two 1.11 entries of CI and green on the two 1.13 ones). `driver_tests.jl`
+  and `sedov_tests.jl` both defined `TRACKED_1D`, `TRACKED_2D`, `FINE_2D`,
+  `COARSE_2D` and `NOFIX_2D`. Julia 1.12 and later quietly allow a `const`
+  to be redefined, so every local run at 1.13 and the clean-checkout check
+  passed; 1.11 throws `invalid redefinition of constant`, five minutes into
+  otherwise green output. Name a file's shared runs with their case
+  (`TRACKED_SEDOV_1D`, `TRACKED_KH`); `runtests.jl` now fails on any
+  duplicate, from the source text, before anything is included; and a step
+  that adds a test file runs once under the floor version before it is
+  merged — the "Commands" section has the line. The floor is 1.11 because
+  of the `[sources]` pin, and 1.11 is the version that checks this.
 - **Don't name a keyword `maxlevel`.** It shadows TreeAMR's exported
   `maxlevel(forest)` inside the function body. Use `maxlevel_cap`.
 - **A decimal literal in a `T` expression is a leak.** `T(7//5)`, not

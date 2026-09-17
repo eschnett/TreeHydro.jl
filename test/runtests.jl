@@ -16,6 +16,26 @@ using TreeHydro
 @info "Running the tests on $(Threads.nthreads()) thread(s)"
 
 @testset "TreeHydro.jl" begin
+    # Every test file below is `include`d into this one module, so a top-level
+    # name defined in two of them is one name. Julia 1.11 refuses to redefine
+    # a `const` and 1.12 and later quietly allow it, so a collision passes
+    # every local run at the newer version and fails only the 1.11 entries of
+    # CI — which is how the blast's `TRACKED_1D` reached `main` in step 10.
+    # Checked from the source text, once, before anything is included, so
+    # that it fails at every version and not only at the floor.
+    @testset "No two test files define the same top-level constant" begin
+        files = filter(f -> endswith(f, "_tests.jl"), readdir(@__DIR__))
+        defined = Dict{String,Vector{String}}()
+        for f in files, line in eachline(joinpath(@__DIR__, f))
+            m = match(r"^const\s+([^\s=]+)", line)
+            m === nothing && continue
+            push!(get!(defined, m.captures[1], String[]), f)
+        end
+        duplicates = sort([name => fs for (name, fs) in defined if length(fs) > 1])
+        @test isempty(duplicates)
+        isempty(duplicates) || @info "duplicated top-level constants" duplicates
+    end
+
     include("precision_tests.jl")
     include("prerequisite_tests.jl")
     include("eos_tests.jl")
