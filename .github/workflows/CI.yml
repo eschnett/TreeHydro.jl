@@ -32,11 +32,14 @@ jobs:
     # is 28 s of it (measured: 447 s of test phase in a 477 s job), so an
     # uninstrumented cell has no business anywhere near 30 minutes and a
     # change that makes the suite ten times slower fails here instead of
-    # quietly costing an hour. The instrumented cell pays a measured
-    # 3.14x, which would put a healthy run at roughly 23 minutes against
-    # that same cap -- so it gets 45, which is the same guard multiplied
-    # by the same factor rather than the guard given up.
-    timeout-minutes: ${{ matrix.coverage == true && 45 || 30 }}
+    # quietly costing an hour. The instrumented cell's healthy runtime is
+    # a measured 18 m 08 against the uninstrumented 13 m 24 beside it, so
+    # it gets 40: the same ratio of guard to healthy run that 30 gives the
+    # others, rather than the guard given up. This is not slack -- the
+    # first arrangement of this put coverage on Linux at the current
+    # release, where a healthy run measured 42 m 45 and would have
+    # timed out red under a flat 30.
+    timeout-minutes: ${{ matrix.coverage == true && 40 || 30 }}
     strategy:
       fail-fast: false
       # Spelled out one cell at a time rather than as a product, because
@@ -49,16 +52,24 @@ jobs:
           # and it is a real axis rather than a formality: 1.12 made
           # redefining a `const` legal, so the `TRACKED_1D` collision
           # between two test files was invisible on 1.13 and red here.
+          #
+          # This is also the cell that carries coverage, and it is the
+          # cheapest host for it by a factor of two -- measured
+          # instrumented, whole suite: 18 m 08 here, 23 m 22 on macOS at
+          # the current release, 42 m 02 on Linux at the current release.
+          # Instrumentation costs far less on 1.11 than on 1.13 (1.35x
+          # against better than 5x), and since no file here contains a
+          # `VERSION` check or an `@static`, the lines it reports are the
+          # same lines either way. Coverage on the floor is the same
+          # coverage, for less than half the wait.
           - version: "1.11"
             os: ubuntu-latest
-          # The current release on Linux, and the one cell that carries
-          # coverage. The others execute the same lines, so instrumenting
-          # them too would merge identical reports into the same numbers
-          # at four times the cost. See the `coverage:` key below for
-          # when it is on.
+            coverage: true
+          # The current release on Linux. The others execute the same
+          # lines, so instrumenting a second cell would merge an identical
+          # report into the same numbers at more than twice the cost.
           - version: "1"
             os: ubuntu-latest
-            coverage: true
           # The second operating system, on the current release. This is
           # also the arm64 cell, and "Testing" in `CODE.md` rests on it:
           # Base's `@simd` reductions arrange their partial sums by CPU

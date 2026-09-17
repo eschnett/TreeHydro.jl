@@ -674,9 +674,13 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   both jobs had on. Measured since, on the **whole suite** at one thread,
   locally and back to back: **4 m 01 without coverage and 12 m 38 with
   it**, a factor of **3.14**, both green at 11609 tests. So coverage is
-  collected **once, where it is read**: `coverage: true` on the
-  `version: "1"` / `ubuntu-latest` matrix entry alone, and the step's
-  condition is `matrix.coverage == true && (github.ref ==
+  collected **once, where it is read, on the cheapest host**:
+  `coverage: true` on the `version: "1.11"` / `ubuntu-latest` matrix
+  entry alone — instrumented, that cell measures **18 m 08** against
+  **42 m 02** for the same suite on `version: "1"`, because coverage
+  costs ~1.35× on 1.11 and better than 5× on 1.13, and with no `VERSION`
+  check anywhere in `src/` or `test/` the lines reported are identical.
+  The step's condition is `matrix.coverage == true && (github.ref ==
   'refs/heads/main' || github.event_name == 'workflow_dispatch')`, with
   `julia-processcoverage` and the Codecov upload under the same
   condition. The other serial cells run the same lines, so a second
@@ -752,8 +756,10 @@ Match TreeAMR's, since the three packages are read together:
   **Coverage is collected on one cell, on `main` or a manual dispatch
   only**, and never on the threaded entry, where it costs a factor of a
   hundred — see "Things that will bite". The timeout guard is
-  `${{ matrix.coverage == true && 45 || 30 }}` minutes, the instrumented
-  cell getting the same guard scaled by its measured 3.14×.
+  `${{ matrix.coverage == true && 40 || 30 }}` minutes, the instrumented
+  cell getting the same ratio of guard to healthy run as the others. Do
+  not flatten it back to one number: coverage on `version: "1"` measured
+  42 m 45 and would have gone red under a flat 30.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

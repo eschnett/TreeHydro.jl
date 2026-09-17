@@ -2176,10 +2176,17 @@ the suite that are not kernel-heavy, and far from the hundred the
 threaded entry would pay. Three conditions follow from that number, and
 `CI.yml` spells out all three.
 
-*One cell, not four.* Every serial cell executes the same lines, so a
-second instrumented cell pays the 3.14× again to tell Codecov what the
-first already said. The `matrix` carries `coverage: true` on the
-`version: "1"`, `ubuntu-latest` entry alone and the step reads
+*One cell, not four, and the cheapest one.* Every serial cell executes
+the same lines, so a second instrumented cell pays again to tell Codecov
+what the first already said. Which cell, though, turned out to matter far
+more than expected: measured instrumented on the whole suite, the same
+work costs **18 m 08 on Linux at 1.11, 23 m 22 on macOS at the current
+release and 42 m 02 on Linux at the current release**. Instrumentation
+costs about 1.35× on 1.11 and better than 5× on 1.13, so the version
+under test dominates the choice. No file here contains a `VERSION` check
+or an `@static`, so the lines reported are the same lines whichever cell
+carries it; the `matrix` therefore puts `coverage: true` on the
+`version: "1.11"`, `ubuntu-latest` entry and the step reads
 `matrix.coverage == true`.
 
 *Only where it is read.* The badge reflects `main`, so instrumenting a
@@ -2195,9 +2202,14 @@ stage limiter installed in a field nobody reads.
 
 Two more economies come from the same measurement, since `timeout` and
 matrix size are both set by what a cell costs. The cap is now
-`${{ matrix.coverage == true && 45 || 30 }}`: the instrumented cell's
-healthy runtime is three times the others', so its guard is the same
-guard multiplied by the same factor rather than a guard given up. And the
+`${{ matrix.coverage == true && 40 || 30 }}`, which keeps the
+instrumented cell the same ratio of guard to healthy run that 30 gives
+the others (18 m 08 against 13 m 24). That is not slack: the first
+arrangement of this put coverage on Linux at the current release, where a
+healthy run measured **42 m 45** and would have timed out red under a
+flat 30 — the guard had to be scaled per cell before it could be trusted
+at all, and scaling it is what made the cost visible enough to move.
+And the
 matrix is spelled out one cell at a time instead of as a
 `version × os` product, because the product's fourth combination —
 Julia 1.11 on macOS — covered no axis the other three did not. Three
