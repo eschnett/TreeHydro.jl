@@ -2316,7 +2316,12 @@ Each has an acceptance test; serial `Float64` correctness first.
   - **The first discontinuous row of the `p = 1` question**, and it goes
     against `p = 1`: 3.6% worse in L1, 8% more cells, tracking lost to
     0.9091, and no floor count to buy — which is exactly why Sod cannot
-    close the question and Sedov must.
+    close the question and Sedov must. *(It did, in step 9, and with the
+    opposite sign: on a strong shock crossing a coarse-fine face `p = 1`
+    floors nothing where `p = 3` floors 4096 owned cells, for 0.47% of L1.
+    The two rows measure different things — whether a prolongation ever
+    spans a shock — and `p = 3` stays the default. See
+    [Operator order](#operator-order).)*
 
   What step 7 wrote but did not exercise: every case but Sod and the
   entropy wave. (The atmosphere reset, which was the other item on that
@@ -2984,7 +2989,11 @@ The tracked tube of `driver_tests.jl` (`D = 1`, `t_end = 1/5`, 588 steps,
 
 So the per-stage reset costs **10% at one thread and 19% at four** of a
 run that is nothing but driver, and `:step` costs a third of that — the
-comparison Sedov will make on accuracy is cheap in either direction. The
+comparison Sedov will make on accuracy is cheap in either direction. (It
+made it in step 9, and the answer is that the two give the same state to
+roundoff, `:stage` making three times the repairs and reporting a bound
+where `:step` reports an equality; see
+[Step 9](#step-9--the-sedov-blast).) The
 injection accounting costs **2.5× at four threads**, which is what six
 extra whole-state reductions per step buy and exactly why it is a keyword
 the tests turn on and the demos do not. (The four-thread column being
