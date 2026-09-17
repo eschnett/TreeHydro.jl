@@ -453,6 +453,14 @@ an instability a few chunks later. For the three test problems the speed
 is constant (Sod), nearly constant (Kelvin–Helmholtz) or decreasing
 (Sedov, after the deposition), so the per-chunk value is a bound in
 practice; the check is what makes that a fact rather than a hope.
+**(Amended in step 9: "decreasing after the deposition" is right and the
+first chunk is not covered by it.** Sedov's jump at `r₀` is a Riemann
+problem like Sod's, and its star region is not present at `t = 0`, so
+`λ_max` grows within the first chunk by **1.16537, 1.25164 and 1.10396** in
+`D = 1, 2, 3` — smaller than Sod's 1.8522 because the blast's initial sound
+speed is already large, and still a growth. `HydroCase(::SedovBlast)` uses
+`speed_headroom = 2`, and those are also the largest growths over each
+run.)
 
 **(Amended in step 4: "constant for Sod" is wrong, and the driver needs a
 headroom factor beside the recheck.)** A Riemann problem's fastest signal
@@ -728,6 +736,72 @@ settled:
   negative control it is meant to be rather than "the reset, minus the
   hooks".
 
+**(Measured in step 9, on the case where the floors finally fire — and the
+design was wrong about which rule fires and about where.)** The numbers are
+in [Measured results](#step-9--the-sedov-blast).
+
+- **The atmosphere rule never fires on Sedov, at any size the tests can
+  afford.** The prediction above put the firing in the evacuated interior,
+  where the similarity solution's density falls six orders of magnitude:
+  `G(λ) ∼ λ^{D/(γ−1)}` passes `10⁻⁶` at `λ ≈ 0.06` in `D = 2`. The
+  *discrete* bubble never gets there — numerical diffusion refills it, and
+  the measured minimum density is **6.7e-2** on the tracked `D = 2` run at
+  `h = 1/128` — so `ρ < ρ_atm` is not reached, no velocity is ever zeroed,
+  and every mass injection in this package is still **exactly zero**. The
+  remedy is not a shallower atmosphere: `ρ_atm` is set six orders below the
+  data by the refinement criterion's global floor term, and raising it to
+  make the rule fire would be tuning a measurement into existence.
+- **What fires is the pressure floor, and what makes it fire is the
+  coarse-fine face.** The interface flux restriction replaces a coarse
+  cell's flux with the average of its fine neighbours', and in gas whose
+  internal energy is `p_amb/(γ−1) = 2.5e-5` that correction can take it
+  below `p_floor`. On the static two-level mesh: **4096** owned cells and
+  **40** ghost entries in `D = 2`, **24504** and **4703** in `D = 3`. On
+  every *uniform* mesh, and on the tracked mesh — whose coarse-fine faces
+  stand in undisturbed gas — nothing fires at all. This is the interaction
+  the fourth option above named in the abstract ("an average of limited
+  fine fluxes need not keep the coarse cell positive"), met in the concrete
+  and from the other direction.
+- **The injection is energy only, and it is exactly energy only.** The
+  pressure floor keeps `ρ` and `v`, so `prim2con` writes `ρ` back bit for
+  bit and the mass injection is exactly zero; the momentum injection is
+  *roundoff* rather than zero, because the same round trip recomputes
+  `S = ρ (S/ρ)`, which is not the bits it started from — measured
+  `-1.65e-24` in `D = 3` against a bound of `2.2e-14`.
+- **The accumulated injection is an upper bound under `:stage` and an
+  equality under `:step`** (amended). The accounting adds the raw
+  `Σ hᴰ ΔU` of every call, but `SSPRK33`'s three stage vectors enter the
+  step's result with weights `1/6`, `2/3` and `1`, so an injection into a
+  stage reaches the state scaled by that stage's weight. Measured ratio of
+  drift to accumulated injection: **0.51984** in `D = 2` and **0.52203** in
+  `D = 3`. Under `:step`, which resets once on the step's own result, the
+  drift **equals** the injection — to `4.4e-16` and `2.2e-16` against
+  roundoff bounds of `8.0e-13` and `2.5e-13`. Step 8 could not see this,
+  because on Sod and the entropy wave the injection was exactly zero and
+  every weighting of zero is zero. The fix is not to weight the
+  accounting — the hook is not told which stage it is in, and a
+  `DiscreteCallback` would not be either — but to say what the number is:
+  a bound with `:stage`, an equality with `:step`.
+- **So what does `:stage` buy over `:step`?** On this case: three times the
+  repairs (4096 against 1384 owned cells in `D = 2`, 24504 against 8232 in
+  `D = 3`) for the same final state to roundoff, and a strictly less
+  informative injection. What it buys is what it was adopted for and this
+  case cannot show — a stage vector that is never seen in an unphysical
+  state by the *next* stage's right-hand side — and the case where that
+  matters is a star in a vacuum, not a blast in an ambient. `:stage` stays
+  the default, GRMHD practice being the reason, and the measurement
+  recorded here is that on a blast the cheaper cadence is indistinguishable
+  in the answer and better in the bookkeeping.
+- **The ghost floor count answers the upstream question, and the answer is
+  "not on the exchange in general".** `ghost_floor_hits` is zero on the
+  entropy wave, on Sod, on every uniform mesh and on the tracked Sedov
+  mesh; it is nonzero exactly where a `p = 3` prolongation spans a strong
+  shock, and there a `p = 1` prolongation takes it to zero as well (see
+  [Operator order](#operator-order)). So a limited, positivity-preserving
+  prolongation is not needed to make the ghost exchange work; it is what
+  one would ask for to keep `p = 3` accuracy *and* the `p = 1` floor count,
+  and the trade is now measured rather than assumed.
+
 ### What has a GRMHD counterpart, and what is deliberately not used
 
 | here | GRMHD counterpart |
@@ -958,6 +1032,39 @@ Two things this package expects to add to that finding:
   and whose bubble sits at the atmosphere, is where the floor count becomes
   a real column, and it completes the table in step 9.
 
+  **The question is closed in step 9, and the answer is a trade with a
+  price on it.** It took two measurements, and the first was that the
+  *tracked* blast cannot answer it either: `tracking == 1` puts the refined
+  region's boundary ahead of the shock by construction, so a tracked run's
+  prolongation only ever acts on undisturbed ambient gas, and `p = 1` there
+  is indistinguishable from `p = 3` in every column — same exponent, same
+  peak, same cells, same mesh history, no floor hit either way. The
+  question needs a prolongation acting **across a strong shock**, which is
+  the static two-level mesh `sedov_forest(refined = :center)`, where the
+  blast leaves the refined region. There, in `D = 2` over 433 steps:
+
+  | `p` | L1 against the uniform fine run | reset hits | ghost hits | energy drift |
+  |---|---|---|---|---|
+  | 1 | 4.427249e-2 | **0** | **0** | 2.0e-15 |
+  | 3 | **4.406604e-2** | 4096 | 40 | 1.24659e-5 |
+
+  So `p = 1` buys **exact positivity** — nothing floored, nothing injected,
+  conservation at roundoff — for **0.47%** of L1. That is the argument
+  `p = 1` was proposed for, measured, and it is the opposite sign from
+  Sod's row, where `p = 1` was 3.6% worse and bought nothing. The two rows
+  do not disagree: they measure different things, and which one a case is
+  in depends on whether its prolongation ever spans a shock.
+
+  **`p = 3` stays the default (decided, unchanged).** The interface-order
+  rule is what it is there for, it is better in L1 on both discontinuous
+  cases that can tell the difference, and it is strictly better on the
+  smooth ones. What the table changes is the *upstream request*: a limited,
+  positivity-preserving prolongation would buy `p = 3`'s 0.47% and `p = 1`'s
+  zero floor count together, and that is now a request with a number on it
+  rather than a guess. It is still not made, because the floor count it
+  would remove is a count of repairs the reset already makes correctly and
+  accounts for exactly.
+
 ## Boundaries
 
 **Dirichlet wherever the physics does not require periodicity; periodic
@@ -1074,6 +1181,34 @@ state exactly — ghost rows across the tube included — on blocks that did
 not exist when the run started, and it stays that way through nine
 regrids. What is still not exercised is the M2 ordering case in full,
 which needs two physical faces meeting; that is Sedov's corner, in step 9.
+
+**(Implemented in step 9: the M2 ordering case in full.)** The blast is
+Dirichlet on every face, so `sedov_forest(refined = :corner)` puts a *fine*
+block where every physical face meets — two in `D = 2`, three in `D = 3` —
+and `refined = :edge` puts a line of them along a 3D edge, where two do.
+The blast sits at the centre and these meshes are run for a few tens of
+steps, so the corner is undisturbed throughout and the claim is about the
+exchange and nothing else. What it showed:
+
+- **The hook fills the corner and edge regions, and fills all of them.**
+  Zero mismatched entries out of **1664**, **72000** and **59360** stored
+  outward-facing entries on the 2D corner, the 3D edge and the 3D corner —
+  counting an entry as outward-facing if it lies in the outer ghost range
+  of *any* dimension whose block sits against a physical face, so the
+  regions reachable by neither face alone are included.
+- **The prolongation sweep that runs after the hook reads what the hook
+  wrote.** The fine corner block's interior is untouched: its density and
+  its energy are **bit-identical** to the ambient, and its momenta — which
+  start at exactly zero, so any nonzero value is a change — move by at most
+  `1.5e-54`, which is `1e-33` of one ulp of the ambient energy density. A
+  tangential prolongation reading unfilled ghosts would put the *blast's*
+  numbers there, not a `1e-54`.
+- **The momenta are exactly zero in `D = 2` and are not in `D = 3`**, and
+  the difference is the pressure flux failing to cancel in the last bit
+  through one more tensor factor. It is recorded because "bit-identical"
+  was the natural claim to write and is true only of `ρ` and `E`.
+- **A coarse-fine face beside two physical ones conserves.** Every drift is
+  at or below its roundoff bound on all three meshes.
 
 ## The cases
 
@@ -1388,6 +1523,87 @@ that runs the boundary hook on edges and corners, see
 [Boundaries](#boundaries); the run stops before `r_s` reaches `L/2`,
 which the similarity law predicts in advance and the driver's arrival
 check enforces.
+
+**(Implemented in step 9.)** `src/sedov_reference.jl` holds the similarity
+law and `src/sedov.jl` the case; the numbers are in
+[Measured results](#step-9--the-sedov-blast). What the case decided, and
+where the paragraphs above needed amending:
+
+- **The parameters.** `p_amb = 1/10⁵`, `r₀ = 1/16` in `D = 1, 2` and `1/8`
+  in `D = 3`, `ρ_atm = p_atm = 1/10⁶` and `p_floor = 1/10⁸`. The
+  atmosphere sits **six orders below `ρ₀`**, which is what the refinement
+  criterion's global floor term needs (`CODE.md` measures it silencing
+  `O(1)` noise six orders down at `τ = 0.0020` and five orders down at a
+  marginal 0.0196); `p_atm` sits *below* `p_amb` so that a reset in
+  undisturbed gas could never raise its energy, and `p_floor` two orders
+  below `p_amb` so that the pressure floor can only fire on a state the
+  initial data does not contain.
+- **`r₀` spans eight cells at the cap and not three or four**, in `D = 1`
+  and `D = 2`. The hot spot's sound speed goes as `r₀^{-D/2}`, so halving
+  `r₀` doubles `λ` and halves the chunk the travelling margin admits — 100
+  chunks instead of 40 — and the wider top hat is also what lets the centre
+  flatten within an affordable `t_end`. `D = 3` uses four, where the cap is
+  one level.
+- **`speed_headroom = 2`, and the sentence about `λ_max` above is wrong.**
+  "The early phase … is *also* where `λ_max` only decreases" is right about
+  the blast and wrong about the first chunk, for the same reason it was
+  wrong on Sod: the jump at `r₀` is a Riemann problem and the gas on the
+  hot side of its contact moves, so `|v| + c_s` there exceeds the hot
+  spot's own `c_s` before the discontinuity has resolved. Measured
+  first-chunk growth **1.16537, 1.25164, 1.10396** in `D = 1, 2, 3`, and
+  those are also the largest growths over each run. See
+  [Time integration and the time step](#time-integration-and-the-time-step).
+- **The measured `E₀` is what the law takes, and the ratios are
+  1.00000, 1.03451, 1.04445.** In `D = 1` the cells that receive the
+  deposition tile `V_1(r₀) = 2r₀` exactly, so the only difference from the
+  nominal value is the ambient share of the top hat itself, `3.125e-6`.
+- **`shock_radius` reads a density threshold of `3/2 · ρ₀` and is a host
+  loop**, not the `firing_boxes` sweep this design first reached for. A
+  per-block bounding box loses the correlation between dimensions: the
+  shell crosses a block diagonally, so the box's outermost corner sits
+  about `w²/(2 r_s)` beyond the outermost firing cell — 22% at the start of
+  the `D = 2` fit range and 8% at its end — and a bias that *shrinks as the
+  shock grows* lands directly on the slope being measured, costing about
+  0.13 of the exponent. The loop is an oracle in the spirit of
+  `reduce_to_grid` and runs once per chunk against hundreds of steps.
+- **The planar `α` is twice the literature's, and that is a convention.**
+  `α = σ_D ∫ …` with `σ_1 = 2`, matching the deposition volume `V_1 = 2r₀`
+  this case uses, so `E₀` is the energy on *both* sides of a planar blast;
+  Kamm & Timmes count one side. The cylindrical and spherical values agree
+  with the recalled ones in every digit.
+- **The refined region is a growing *disk*, not a shell** (amended). The
+  prediction above — "a refined shell that grows while the interior
+  coarsens", and `PLAN.md`'s "block count rising then falling behind the
+  shock" — assumes the evacuated bubble is flat. It is not: the similarity
+  solution's `G(λ) ∼ λ^{D/(γ−1)}` is a **steep density ramp**, and a
+  Löhner indicator on `ρ` fires throughout it, correctly, because the ramp
+  is under-resolved. Measured block history in `D = 2`: 40 → 88 → 112 → …
+  → 196 over 40 chunks, **monotone**. Only at the very centre, where the
+  ramp has flattened, does the criterion fall silent — at `t_end` the
+  blocks within `r < 0.06` report `Coarsen` while those from 0.06 to 0.42
+  fire — so the hollow opens from the inside out and opens late. The mesh
+  still follows the blast (`tracking == 1`) and still saves cells (12544
+  against 16384), which is what the milestone was for; what is corrected is
+  the shape. A criterion that produced a shell would have to know that a
+  monotone ramp behind a shock is not a feature, which is not something a
+  second-difference indicator can be told.
+- **The tracked mesh cannot measure the coarse-fine face at all, and that
+  is a consequence of tracking rather than a defect.** `tracking == 1`
+  means every strongly firing cell sits on a block at the cap, and the
+  travelling margin then puts the refined region's boundary *ahead* of the
+  shock by construction — so every coarse-fine face of a tracked run stands
+  in gas the blast has not reached. Measured: `fixup = false`, `p = 1` and
+  `reset = :step` give the same exponent, peak, cell count, mesh history
+  and tracking as the run they are controls for, and the two reset cadences
+  agree bit for bit. Every claim about the interface flux restriction, the
+  prolongation order and the floor counts is therefore made on a **static**
+  two-level mesh, `sedov_forest(refined = :center)`, where the blast starts
+  inside the refined region and leaves it at `|x_d| = L/4`. That is the
+  blast's `sod_forest(:middle)`.
+- **`sedov_static` replaces the planned `uniform_sedov`.** What the case
+  needed was a static-mesh driver, which `uniform_run` — the driver with
+  the cap at zero — cannot be; the uniform control is `sedov_static` with
+  `refined = false`.
 
 ### Kelvin–Helmholtz instability
 
@@ -1754,7 +1970,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
-| `src/sedov_reference.jl` | the similarity law; later the Kamm–Timmes profile |
+| `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | per-phase timings, TreeWave's format |
 | `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
@@ -1785,9 +2001,13 @@ interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
 and prolongation-order tables. A number recorded in this file is a number
 CI recomputes, and a regression shows up as a changed number rather than
-as a test that merely still passes. The tests take under two minutes
-locally at either thread count; a CI entry takes a few minutes, a shared
-runner being slower and the rest of it precompilation.
+as a test that merely still passes. The tests take **2 m 43 at one thread
+and 2 m 09 at four** locally as of step 9 — the Sedov blast added roughly
+50 s and 30 s to step 8's 1 m 50 and 1 m 42, which is what a case with a
+3D adaptive run and eleven two-dimensional evolutions costs — and a CI
+entry takes a few times that, a shared runner being slower and the rest of
+it precompilation. `CI.yml`'s `timeout-minutes: 30` is the guard against a
+runtime regression and has room.
 
 **The one thing that must stay off is code coverage**, and the reason is
 the whole of the history below. `julia-actions/julia-runtest` turns
@@ -2102,8 +2322,8 @@ Each has an acceptance test; serial `Float64` correctness first.
   entropy wave. (The atmosphere reset, which was the other item on that
   list, landed in step 8; see [Measured
   results](#step-8--the-atmosphere-reset).)
-- **H4 — Sedov.** Floors and the atmosphere reset, the `D = 2` and
-  `D = 3` blasts, the similarity checks, the hook on edges and corners.
+- **H4 — Sedov.** *(Done.)* Floors and the atmosphere reset, the `D = 2`
+  and `D = 3` blasts, the similarity checks, the hook on edges and corners.
   *Accept:* the exponent and the jump; the reset idempotent and `U`/`P`
   consistent after it; the injection measured and the drift net of it
   at roundoff, `:stage` against `:step`; floor counts by population; the
@@ -2115,6 +2335,57 @@ Each has an acceptance test; serial `Float64` correctness first.
   landed in step 8 and are measured there on cases where nothing fires;
   what is left for this milestone is the blast itself, which is the case
   where they do.)*
+
+  What step 9 measured, all of it in
+  [Measured results](#step-9--the-sedov-blast) and all of it identical at
+  one and at four threads:
+
+  - **The law, twice over.** `ξ₀ = 1.0327774677614250` for `γ = 7/5` in
+    3D, which is Taylor's 1.033, from a parametrization derived rather
+    than transcribed and checked against the one similarity equation it
+    was not built from (residual `3.6e-14`). The measured exponents are
+    **0.64146, 0.50443, 0.43766** against `2/3, 1/2, 2/5`, and the peak
+    jumps **4.111, 3.765, 2.057** against the strong-shock 6, approached
+    from below as a captured shock must.
+  - **The tracked blast reproduces the uniform fine run to roundoff** —
+    `8.3e-15` at 12544 cells against 16384 — with `tracking == 1` in
+    every dimension, conservation at roundoff through the regrids, and a
+    boundary that contributes exactly nothing, unlike Sod's.
+  - **A tracked mesh cannot measure its own coarse-fine faces**, and that
+    is the step's sharpest finding: tracking puts the refined region's
+    boundary ahead of the shock, so `fixup = false`, `p = 1` and
+    `reset = :step` come back identical to the run they control. The
+    static `sedov_forest(:center)` mesh, where the blast leaves the
+    refined region, is where every interface claim is made — and there
+    the fixup buys `3.2e12` in mass in `D = 2` and `8.5e7` in `D = 3`.
+  - **The floors fire, and neither rule nor place is what was predicted.**
+    The evacuated interior never reaches `ρ_atm`, so the atmosphere rule
+    never fires and every mass injection stays exactly zero; what fires is
+    the *pressure floor*, driven by the interface flux restriction itself,
+    4096 owned cells and 40 ghost entries in `D = 2` and 24504 and 4703 in
+    `D = 3`.
+  - **`p = 1` buys exact positivity for 0.47% of L1**, which closes the
+    open question of [Operator order](#operator-order) with the opposite
+    sign from Sod's row — and the two rows do not disagree, they measure
+    whether a prolongation ever spans a shock.
+  - **The injection is a bound under `:stage` and an equality under
+    `:step`**, because SSPRK33's stages carry weights `1/6, 2/3, 1`;
+    measured ratios `0.51984` and `0.52203`, and `|drift − injection|` of
+    `4.4e-16` and `2.2e-16` under `:step`.
+  - **The M2 ordering case in full**: zero mismatched entries out of
+    1664, 72000 and 59360 stored outward-facing ghost entries on a 2D
+    corner, a 3D edge and a 3D corner, with the fine corner block's
+    density and energy bit-identical to the ambient.
+
+  What the acceptance list got wrong, and it is one item: **the block count
+  does not rise and then fall**. It rises monotonically, because the Sedov
+  interior is a steep density ramp rather than a flat bubble and a Löhner
+  indicator on `ρ` correctly fires throughout it; the refined region is a
+  growing disk. The hollow opens only at the very centre and only late. The
+  milestone is marked done on the strength of what that item was *for* — a
+  mesh that follows a closed expanding surface, at a real saving — which is
+  met; a criterion that would produce a shell is listed under
+  [Possible extensions](#possible-extensions).
 - **H5 — Kelvin–Helmholtz.** The McNally setup, `M(t)` and the kinetic
   energy diagnostic, HLLC, the viewer. *Accept:* `M(t)` grows below the
   incompressible bound and converges toward the uniform fine run as the
@@ -2725,14 +2996,228 @@ Every one of the 75 `@info` lines the suite printed before this step is
 printed **byte-identically** after it; the 20 new ones are identical at
 one thread and at four.
 
+### Step 9 — the Sedov blast
+
+`test/sedov_tests.jl`, 225 tests, `Float64`, `:minmod`, HLLE, the
+conservative family at `p = 3` and the thresholds step 6 calibrated. The
+tracked configurations are `roots = 4`, `N = 8`, `cap = 2` in `D = 1, 2`
+and `roots = 4`, `N = 4`, `cap = 1` in `D = 3`, on `[−1/2, 1/2]^D` with
+`γ = 7/5`, `ρ₀ = 1`, `p_amb = 10⁻⁵` and `E₀ = 1`.
+
+**The similarity law.** Computed from the parametrization derived in
+`src/sedov_reference.jl` rather than transcribed:
+
+| `D` | `α` | `ξ₀ = α^{-1/(D+2)}` | recalled Kamm–Timmes `α` |
+|---|---|---|---|
+| 1 | 1.0774855847350489 | 0.9754301541925205 | 0.5386 — *half*, see below |
+| 2 | 0.9840740168800447 | 1.0040216061302776 | 0.9840 |
+| 3 | 0.8510718547582286 | **1.0327774677614250** | 0.8511 |
+
+`ξ₀(7/5, 3) = 1.0328` is Taylor's classical 1.033, which is the check this
+file named in advance; `ξ₀(5/3, 3) = 1.1516664179314904` is the other
+widely quoted value. The planar `α` is **exactly twice** the recalled one,
+which identifies the convention rather than an error: `σ_1 = 2` counts both
+sides of `|x| < r`, matching this package's deposition volume `V_1 = 2r₀`,
+and Kamm & Timmes count one. The literature values are **as recalled and
+unverified against the report** — the public mirrors of its code are gone —
+but the agreement in every recalled digit for `D = 2, 3` and to an exact
+factor of two for `D = 1` is what the recall is worth. The derivation's own
+check is the **momentum equation**, which is the one of the three the
+closed form was *not* built from: worst residual `3.62e-14` over the whole
+profile in all three geometries at `γ = 7/5` and `5/3`.
+
+**The blast, tracked.** The exponent is fitted over the chunks with
+`r_s ≥ 3r₀` (`2r₀` in `D = 3`):
+
+| `D` | exponent | `2/(D+2)` | `r_s/r₀` reached | peak jump | steps / chunks / regrids | cells |
+|---|---|---|---|---|---|---|
+| 1 | **0.64146** | 0.66667 | 3.81 | 4.11089 | 222 / 25 / 2 | 112 |
+| 2 | **0.50443** | 0.50000 | 5.34 | 3.76529 | 774 / 40 / 6 | 12544 |
+| 3 | **0.43766** | 0.40000 | 2.72 | 2.05717 | 201 / 15 / 3 | 32768 |
+
+`tracking == 1.0` in every dimension. The peak jump approaches the
+strong-shock `(γ+1)/(γ−1) = 6` from below and never exceeds it, as a
+captured shock must: the peak is the average over the cell the front sits
+in, and it falls with the dimension because the same `h` resolves less of a
+spherical shell. The `D = 1` and `D = 3` exponents are the loose ones and
+the reason is in the `r_s/r₀` column — the law is the *asymptotic*
+solution and those runs are fitted over a blast that has barely forgotten
+its top hat.
+
+**The measured `E₀`, and the deposition.** The initial-data cycle converges
+in 4, 4 and 3 passes and puts the top hat at the cap:
+
+| `D` | `p_hot` | `c_s` at `t = 0` | top hat, cells across at the cap | measured `E₀` |
+|---|---|---|---|---|
+| 1 | 3.2 | 2.11660 | 16 | **0.999996875** |
+| 2 | 32.59493 | 6.75521 | 16 | **1.0345068127145072** |
+| 3 | 48.89240 | 8.27341 | 8 | **1.0444541004175152** |
+
+In `D = 1` the cells that receive the deposition tile `V_1(r₀) = 2r₀`
+exactly, so the whole difference from the nominal `E₀ = 1` is the ambient
+share of the top hat itself, `p_amb·2r₀/(γ−1) = 3.125e-6`. In `D = 2, 3` it
+is which cell centres fall inside a circle and a sphere, and the ratio is
+3.5% and 4.4%.
+
+**The first chunk outgrows the speed it was sized from**, which corrects
+"`λ_max` only decreases" in [Sedov blast wave](#sedov-blast-wave):
+
+| `D` | `λ` at chunk 1 | `λ_end` at chunk 1 | growth | worst over the run | `λ` at `t_end` |
+|---|---|---|---|---|---|
+| 1 | 2.11660 | 2.46670 | **1.16537** | 1.16537 | 2.02621 |
+| 2 | 6.75521 | 8.45480 | **1.25164** | 1.25164 | 4.26806 |
+| 3 | 8.27341 | 9.13354 | **1.10396** | 1.10396 | 5.65649 |
+
+The largest growth is the first chunk's in every dimension, `λ` falls
+monotonically afterwards, and `speed_headroom = 2` covers all of it.
+
+**The tracked mesh against the uniform ones, `D = 2`.** Reduced onto the
+32² grid the three meshes share:
+
+| run | cells | \|· − fine\| | peak | exponent |
+|---|---|---|---|---|
+| tracked | 12544 | **8.293829e-15** | 3.7652916 | 0.5044332 |
+| uniform fine | 16384 | — | 3.7652916 | 0.5044332 |
+| uniform coarse | 1024 | 1.118716e-1 | 2.2591980 | 0.5087455 |
+
+The tracked run reproduces the uniformly fine run **to roundoff**, which is
+a sharper statement than the tube's 1.0004 ratio and has a reason: outside
+the refined region the gas is undisturbed, so the coarse blocks hold the
+ambient exactly and there is nothing for them to get wrong. Conservation on
+the tracked mesh is therefore the plain claim — drift
+`(2.2e-16, 1.3e-17, 2.9e-17, 4.4e-16)` against roundoff bounds
+`(1.4e-12, 3.2e-13, 3.2e-13, 1.4e-12)` over 774 steps and 6 mesh changes,
+injection exactly `(0, 0, 0, 0)`. Unlike Sod's, the *boundary* contributes
+nothing: the ambient is at rest and the two faces of each axis carry the
+same pressure flux.
+
+**What the tracked mesh cannot measure.** All three controls come back
+identical to the run they control:
+
+| run | exponent | peak | cells | floor / reset / ghost hits |
+|---|---|---|---|---|
+| `p = 3`, `:stage`, fixup | 0.5044332 | 3.7652916 | 12544 | 0 / 0 / 0 |
+| `fixup = false` | 0.5044332 | 3.7652916 | 12544 | 0 / 0 / 0 |
+| `p = 1` | 0.5044332 | 3.7652916 | 12544 | 0 / 0 / 0 |
+| `reset = :step` | 0.5044332 | 3.7652916 | 12544 | 0 / 0 / 0 |
+
+and `:step` is **bit-identical** to `:stage` in the final state and the
+drift. The block count rises **monotonically**, 40 → 88 → 112 → … → 196
+over 40 chunks, with 20 of the final 196 blocks below the cap; the refined
+region is a growing *disk* and not a shell, for the reason recorded under
+[Sedov blast wave](#sedov-blast-wave).
+
+**The static two-level mesh, `refined = :center`, `D = 2`** — 28 blocks,
+levels `[0, 1]`, 433 steps, the shock reaching `r_s = 0.34587` well past
+the coarse-fine face at `1/4`, and every control at the same step count:
+
+| run | mass drift | energy drift | reset hits | ghost hits | injection (E) | L1 vs fine |
+|---|---|---|---|---|---|---|
+| `p = 3`, `:stage` | 1.332e-15 | 1.2465883e-5 | 4096 | 40 | 2.3980402e-5 | 4.406604e-2 |
+| `p = 3`, `:step` | 1.443e-15 | 1.2457381e-5 | 1384 | 40 | 1.2457381e-5 | 4.406604e-2 |
+| `p = 3`, `:none` | 1.221e-15 | **1.554e-15** | 0 | 40 | — | — |
+| `p = 1`, `:stage` | 1.665e-15 | **2.0e-15** | **0** | **0** | 0 | 4.427249e-2 |
+| `fixup = false` | **4.237033e-3** | **2.9292753e-2** | 0 | 24 | 0 | 6.042174e-2 |
+| uniform coarse | 6.66e-16 | 1.1e-16 | 0 | 0 | — | 9.536813e-2 |
+| uniform fine | 0 | 1.1e-15 | 0 | 0 | — | — |
+
+Roundoff bounds for the row above: `(7.7e-13, 1.8e-13, 1.8e-13, 8.0e-13)`.
+Four things are in that table. The fixup buys **3.2e12** in mass and
+**2350×** in energy on a mesh the shock crosses, and the uniform fine run
+is **bit-identical** with the fixup and without it, so the leak is the
+coarse-fine face's. The `:none` row shows the energy drift of the other
+rows is *entirely* the reset's injection and not a leak. Under `:step` the
+drift **equals** the injection to `4.44e-16` against a bound of `7.96e-13`;
+under `:stage` it is `0.51984` of it, the SSPRK stage weights. And `p = 1`
+floors nothing at all, for `0.47%` of L1.
+
+**The same mesh in `D = 3`** — 120 blocks, levels `[0, 1]`, `N = 4`,
+`r₀ = 1/8`, 133 steps, `r_s = 0.28082`, peak 1.93896:
+
+| run | mass drift | energy drift | floor / reset / ghost hits |
+|---|---|---|---|
+| `p = 3`, `:stage` | 3.251e-11 | 4.4512289e-5 | 75 / 24504 / 4703 |
+| `p = 3`, `:step` | 3.251e-11 | 4.4472762e-5 | 49 / 8232 / 4581 |
+| `fixup = false` | **2.758779e-3** | **5.8954619e-2** | 0 / 0 / 4224 |
+| uniform coarse | 2.773e-10 | 3.0e-14 | 0 / 0 / 0 |
+
+The 3D coarse-fine face under a real shock, where the fixup averages
+`2 × 2` fine faces: **8.5e7** in mass and **1324×** in energy. The mass
+drift is *not* roundoff and is *not* the face's — the uniform mesh at the
+same coarse spacing leaks eight times more, which is a strong blast's
+numerical precursor reaching the Dirichlet boundary, the same trap Sod's
+tube sets. Under `:step` the drift equals the injection to `2.22e-16`
+against a bound of `2.47e-13`.
+
+**Floor counts by population**, which is the measurement the design rests
+on:
+
+| run | owned (recovery) | owned (reset) | ghost |
+|---|---|---|---|
+| tracked `D = 2` | 0 | 0 | 0 |
+| tracked `D = 3` | 0 | 288 | 1152 |
+| `:center` `D = 2` | 0 | 4096 | 40 |
+| `:center` `D = 3` | 75 | 24504 | 4703 |
+| uniform `D = 2` | 0 | 0 | 0 |
+
+The **atmosphere rule never fires**: the minimum density is `6.7e-2`, not
+`10⁻⁶`, so every mass injection is exactly zero and every momentum
+injection is roundoff (`-1.65e-24` in `D = 3` against a bound of
+`2.2e-14`). What fires is the pressure floor, driven by the coarse-fine
+face. See [Floors and the atmosphere](#floors-and-the-atmosphere).
+
+**The corner and the edge of the Dirichlet box**, a few tens of steps with
+the blast at the centre:
+
+| mesh | blocks | steps | outward-facing ghost entries | mismatched | corner block's moved entries | worst \|ΔU\| |
+|---|---|---|---|---|---|---|
+| `D = 2` corner | 19 | 44 | 1664 | **0** | `[0, 0, 0, 0]` | 0 |
+| `D = 3` edge | 92 | 40 | 72000 | **0** | `[0, 64, 64, 64, 0]` | 1.476e-54 |
+| `D = 3` corner | 71 | 40 | 59360 | **0** | `[0, 64, 64, 64, 0]` | 1.297e-56 |
+
+One ulp of the ambient energy density is `3.39e-21`, so the largest motion
+is `10⁻³³` of it; the density and the energy are bit-identical in every
+case and only the momenta, which start at exactly zero, move at all. See
+[Boundaries](#boundaries).
+
+**The suite.** 11507 tests in **2 m 43 at one thread and 2 m 09 at four**
+(wall 2 m 51 and 2 m 14), against step 8's 11282 in 1 m 50 and 1 m 42 — so
+the blast adds roughly 50 s and 30 s, which is what a case with a 3D
+adaptive run and eleven two-dimensional evolutions costs. Run to run this
+machine moves by about ten percent at four threads, so the delta is worth
+one significant figure and no more. Every one of the 95 `@info`
+lines the suite printed before this step is printed **byte-identically**
+after it, and the 28 new ones are identical at one thread and at four.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:
 
-- The Sedov radial profile from the Kamm–Timmes quadrature, making the
-  radial-scatter figure quantitative.
-- A limited, positivity-preserving prolongation — upstream, if the ghost
-  floor count asks for it.
+- **A criterion that produces a Sedov *shell* rather than a disk**
+  (measured in step 9, and deliberately not built). The Löhner indicator on
+  `ρ` fires throughout the blast's interior, correctly — the similarity
+  solution's `G(λ) ∼ λ^{D/(γ−1)}` is a steep, under-resolved ramp and not a
+  flat bubble — so the refined region is a growing disk and the block count
+  rises monotonically. Getting a shell means telling the criterion that a
+  monotone ramp behind a shock does not need resolving, which a
+  second-difference indicator cannot be told; it wants a different
+  criterion (a shock detector, or a relative-amplitude threshold on the
+  second difference) and a calibration of its own. The disk still tracks
+  the blast and still saves cells, so this is an economy rather than a
+  defect.
+- **A limited, positivity-preserving prolongation** — `p = 3` accuracy with
+  `p = 1`'s floor count. Step 9 put a number on what it would buy: on a
+  strong shock crossing a coarse-fine face, `p = 1` floors nothing where
+  `p = 3` floors 4096 owned cells and 40 ghost entries, and costs 0.47% of
+  L1 for it. It is not a fixed-weight tensor-product stencil, so it is an
+  upstream request rather than a keyword; it is still not made, because the
+  repairs `p = 3` needs are ones the reset makes correctly and accounts for
+  exactly.
+- The Sedov radial profile *at a given radius*, making the radial-scatter
+  figure quantitative. The parametric profile `(λ, G, V, Z)` came for free
+  with the energy integral in step 9 and is in `sedov_profile`; what is
+  missing is the inversion `λ ↦ V`, which is a root find nothing in the
+  acceptance needs.
 - Positivity-preserving flux limiting (Zhang–Shu, Hu–Adams–Shu), the
   conservative complement to the atmosphere reset; see
   [Floors and the atmosphere](#floors-and-the-atmosphere) for why it is
@@ -2751,7 +3236,9 @@ Not planned, listed because they are the obvious next questions:
 ## Open questions
 
 Decided in review: the ghost exchange in conserved variables with
-`con2prim` over the stored extent (may change, on the ghost floor count);
+`con2prim` over the stored extent (was "may change, on the ghost floor
+count"; step 9 measured that count and it does not change — see
+[Floors and the atmosphere](#floors-and-the-atmosphere));
 primitive reconstruction; HLLE as the baseline flux with HLLC as the
 Kelvin–Helmholtz comparison; the atmosphere reset of `U` in the
 integrator's stage hook, with the floor on `P` as the second line;
@@ -2770,7 +3257,15 @@ Still proposed:
    driver, and it does not appear in `bin/`.
 2. **The reset cadence**, `:stage` against `:step`, is a measurement and
    not a question; it is listed so that it is not mistaken for a
-   decision already made.
+   decision already made. **(Measured in step 9.)** On the blast the two
+   give the same final state to roundoff, `:stage` making three times the
+   repairs and reporting a strictly less informative injection — a bound
+   rather than an equality, because a stage's injection enters the step
+   with that stage's SSPRK weight. `:stage` stays the default on the
+   strength of what it was adopted for and what a blast in an ambient
+   cannot show: a stage vector that the *next* stage's right-hand side
+   never sees in an unphysical state, which is a star-in-a-vacuum
+   property. See [Floors and the atmosphere](#floors-and-the-atmosphere).
 
 Smaller defaults marked (proposed) in the text — the variable order,
 point samples rather than cell averages for discontinuous initial data,

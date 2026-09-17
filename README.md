@@ -30,9 +30,8 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: the mesh now follows the solution and the atmosphere is imposed
-on the state — milestones H1, H2 and H3 are done, and the reset with them;
-the Sedov blast is next.** What exists is
+**Status: the blast runs — milestones H1, H2, H3 and H4 are done; the
+Kelvin–Helmholtz instability is next.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
@@ -42,7 +41,7 @@ the integrator's own limiter hook, the MUSCL reconstruction with its three
 slope limiters, the
 LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
 its three kernels, SSPRK33 in time, the Löhner refinement criterion, the
-one chunked evolve-and-regrid driver, and two cases on it. The entropy
+one chunked evolve-and-regrid driver, and three cases on it. The entropy
 wave is an exact solution of the nonlinear system, and it
 measures second order in L1 and L∞ in one and two dimensions. Sod's shock
 tube runs against Toro's exact Riemann solution through a Dirichlet
@@ -92,14 +91,33 @@ reset on by default: on the tracked tube and the entropy wave the measured
 injection is exactly `(0, 0, 0)`, no cell is floored in either population,
 and the final state is bit-identical to a run with the reset switched off.
 Applying it twice equals applying it once bit for bit, at `Float64` and
-`Float32` in one, two and three dimensions. Still missing: the Sedov and
-Kelvin–Helmholtz cases — Sedov being the first case in which a floor
-actually fires.
+`Float32` in one, two and three dimensions.
+
+**The Sedov blast is where the floors finally fire, and where two
+Dirichlet faces meet.** The shock expands as the similarity law says it
+must — measured exponents 0.641, 0.504 and 0.438 against `2/3`, `1/2` and
+`2/5`, with the constant `ξ₀ = 1.0328` for `γ = 7/5` in 3D reproducing
+Taylor's own 1.033 — and the captured density jump approaches the
+strong-shock limit of 6 from below. The tracked mesh reproduces the
+uniformly fine run *to roundoff* at 12544 cells against 16384. Three
+findings corrected the design. A mesh that tracks a shock keeps its
+coarse-fine faces in undisturbed gas, so a tracked run cannot measure the
+interface flux restriction at all, and every such claim is made on a
+static mesh the blast leaves; the evacuated interior never reaches the
+atmosphere density, so it is the *pressure* floor that fires and the
+coarse-fine face that drives it, 4096 cells in two dimensions and 24504 in
+three; and a piecewise-constant prolongation floors nothing at all there,
+which buys exact positivity for 0.47% of the L1 error. Every outward-facing
+ghost entry of a fine block wedged into a corner of the box holds its
+boundary state exactly — 1664, 72000 and 59360 of them across a 2D corner,
+a 3D edge and a 3D corner — which is the one exchange path no downstream
+package had run. Still missing: Kelvin–Helmholtz.
 
 There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the
 convergence sweeps, the interface-order tables, the refinement
-calibration, the tracked shock tube. About two minutes.
+calibration, the tracked shock tube, the blast and its similarity law.
+About three minutes.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'

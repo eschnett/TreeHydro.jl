@@ -34,8 +34,8 @@ Two rules follow from `CODE.md` and govern every change here:
 ## Current state
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
-faces on a static mesh (H2), regridding (H3) and the atmosphere reset
-(H4a, step 8) are done; Sedov is step 9.**
+faces on a static mesh (H2), regridding (H3) and Sedov with the atmosphere
+reset (H4) are done; Kelvin–Helmholtz is step 10.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -80,21 +80,34 @@ alone, with no driver and no `regrid!` yet); and from step 7
 of `conserved_totals`, `hydro_solve!`'s `reset` keyword and
 `HydroProblem`'s `accounting` one, with `evolve!` gaining `reset`
 (defaulting to `:stage`), `accounting`, the post-regrid reset and the
-three new return fields `reset_hits`, `ghost_hits` and `injection`.
+three new return fields `reset_hits`, `ghost_hits` and `injection`; and
+from step 9 `src/sedov_reference.jl` (`SedovSimilarity`, `sedov_alpha`,
+`sedov_exponent`, `sedov_radius`, `sedov_profile`, `exponent_fit` and an
+`adaptive_simpson` of its own — host `Float64`, the similarity law
+*derived* from the similarity equations rather than transcribed, a
+*reference* and not a method) and `src/sedov.jl` (`SedovBlast`,
+`sedov_state`, `ambient_state`, `sedov_initial`, `sedov_conserved`,
+`sedov_boundary`, `HydroCase(::SedovBlast)`, `sedov_forest` with
+`refined = :center | :corner | :edge`, `sedov_similarity`, `measured_E₀`,
+`shock_radius`, `peak_compression`, `assert_no_arrival(::SedovBlast, …)`
+and `sedov_static`).
 Tests, **one suite run whole** since step 7c:
 `test/precision_tests.jl`, `test/prerequisite_tests.jl`,
 `test/eos_tests.jl`, `test/riemann_tests.jl`, `test/evolution_tests.jl`,
 `test/reset_tests.jl`,
 `test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
 `test/sod_tests.jl`, `test/interface_tests.jl`,
-`test/refinement_tests.jl` and `test/driver_tests.jl`, included in that
-order by `test/runtests.jl`. One workflow, `CI.yml`, and a `README.md`.
+`test/refinement_tests.jl`, `test/driver_tests.jl` and
+`test/sedov_tests.jl`, included in that
+order by `test/runtests.jl` — Sedov last, because the order is the
+dependency order and the blast uses both the chunked driver and a static
+`hydro_solve!` run. One workflow, `CI.yml`, and a `README.md`.
 The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6, H3b step 7 and H4a step 8; step 7b split the suite into a
-short tier and a
+H3a step 6, H3b step 7, H4a step 8 and H4b step 9; step 7b split the suite
+into a short tier and a
 long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; and `PLAN.md`'s step 9
-(Sedov, H4b) is next — H4 is *not* done until it lands.
+was code coverage under threads and not the runner; and `PLAN.md`'s step 10
+(Kelvin–Helmholtz and HLLC, H5a) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -110,7 +123,8 @@ along every axis **bit for bit**, ghosts included, and the `D = 2` planar
 tube equals the `D = 1` run with `S_y` exactly zero; and where the
 boundary is physical the drift *is* the boundary flux, the momentum total
 moving by exactly `(p_L − p_R)·t_end·A` while mass and energy do not move.
-No floor has fired in any run of any case yet.
+No floor fires in any of these runs; the first that fire are Sedov's, in
+step 9, and they are not the rule or the place the design expected.
 
 Step 5 added the two-level numbers, which are the ones the package exists
 for. On the static two-level mesh every one of the `D + 2` integrals holds
@@ -185,6 +199,35 @@ in 1 m 42.9 at four threads** against 11 149 in 1 m 42.3 before the step,
 and every one of the 75 `@info` lines it printed before is byte-identical.
 All of it in `CODE.md`'s "Step 8 — the atmosphere reset".
 
+Step 9 added the blast, and four of its findings correct the design.
+`ξ₀(7/5, 3) = 1.0327774677614250` reproduces Taylor's 1.033 from a
+parametrization derived here and checked against the one similarity
+equation it was not built from (residual `3.6e-14`); the measured exponents
+are **0.64146 / 0.50443 / 0.43766** against `2/3, 1/2, 2/5` and the peak
+jumps **4.111 / 3.765 / 2.057** against the strong-shock 6. The tracked
+mesh reproduces the uniform fine run **to roundoff** (`8.3e-15`) at 12544
+cells against 16384, with `tracking == 1` everywhere and every drift at
+roundoff — and, unlike Sod's, a boundary that contributes exactly nothing.
+The corrections: **a tracked mesh cannot measure its own coarse-fine
+faces**, since tracking puts the refined region's boundary ahead of the
+shock, so `fixup = false`, `p = 1` and `reset = :step` all come back
+*identical* to the run they control and every interface claim is made on
+the static `sedov_forest(:center)` mesh instead (there the fixup buys
+`3.2e12` in mass in `D = 2` and `8.5e7` in `D = 3`); **the atmosphere rule
+never fires** — the bubble bottoms out at `ρ = 6.7e-2`, not `10⁻⁶` — and
+what fires is the *pressure floor*, driven by the interface flux
+restriction itself, 4096 owned cells and 40 ghost entries in `D = 2` and
+24504 and 4703 in `D = 3`; **`p = 1` floors nothing there**, which buys
+exact positivity for **0.47%** of L1 and closes the open question with the
+opposite sign from Sod's row; and **the accumulated injection is a bound
+under `:stage`** (measured ratio 0.520) and an equality under `:step`
+(`4.4e-16` and `2.2e-16`), because SSPRK33's stages carry weights
+`1/6, 2/3, 1`. The block count **rises monotonically** — the Sedov interior
+is a steep ramp, so the refined region is a disk and not a shell. And the
+M2 ordering case is finally exercised: zero mismatched entries out of 1664,
+72000 and 59360 outward-facing ghost entries on a 2D corner, a 3D edge and
+a 3D corner. All of it in `CODE.md`'s "Step 9 — the Sedov blast".
+
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
 defined.
@@ -194,9 +237,11 @@ defined.
 One suite, run whole, at every thread count; `CODE.md`'s "Testing" has
 the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
-recording a number. About 1 m 56 at one thread and 1 m 43 at four
-(measured in step 8; it was 1 m 37 and 1 m 42 before that step's own file
-was added). `Pkg.test` does not inherit `-t`, so the thread
+recording a number. About **2 m 43 at one thread and 2 m 09 at four**
+(measured in step 9; it was 1 m 56 and 1 m 43 before the blast, which
+costs roughly 50 s and 30 s and is the price of a 3D adaptive run and
+eleven two-dimensional evolutions — this machine moves by about ten
+percent run to run at four threads). `Pkg.test` does not inherit `-t`, so the thread
 count has to be passed explicitly:
 
 ```bash
@@ -403,6 +448,81 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   data). Measured head: 0.1736, 0.1050, 0.0569, 0.0286 — first order.
   This is the good outcome, and it is the reason a rarefaction is
   refinable to a finite depth; do not "fix" it by shrinking `ε`.
+- **A tracked mesh has no coarse-fine face worth measuring, and that is a
+  consequence of tracking** (measured in step 9). `tracking == 1` means
+  every strongly firing cell sits on a block at the cap, and the travelling
+  margin then puts the refined region's boundary *ahead* of the feature by
+  construction — so a tracked run's coarse-fine faces stand in gas the
+  solution has not reached, and the interface flux restriction, the
+  prolongation and the floors all act on undisturbed ambient. On Sedov,
+  `fixup = false`, `p = 1` and `reset = :step` came back with the *same*
+  exponent, peak, cell count, mesh history and tracking as the run they
+  control, and the two reset cadences were bit-identical. So an interface
+  claim goes on a **static** two-level mesh the feature crosses —
+  `sod_forest(:middle)` for the tube, `sedov_forest(:center)` for the blast
+  — and a tracked run that "conserves" is not evidence that the fixup does
+  anything. Sod's tracked tube *did* show a leak, and only because its
+  Dirichlet boundary sits inside the refined region.
+- **Sedov's chunk bound is tighter than Sod's, and the hot spot's `c_s` is
+  why.** The derived margin covers `speed_headroom · λ · chunk` at the
+  cap's spacing and must stay under one finest-level block width, and the
+  blast's early `λ` is `sqrt(γ p_hot/ρ₀)` with `p_hot = (γ−1)E₀/V_D(r₀)` —
+  **6.76** in `D = 2` and **8.27** in `D = 3`, against an `O(1)` wave
+  speed. It also scales as `r₀^{-D/2}`, so halving `r₀` doubles `λ` *and*
+  halves `h_cap`, tightening the admissible chunk by four. `chunk = 1/400`
+  fits the `D = 2` configuration at `r₀ = 1/16` and `1/1000` is needed at
+  `1/32`; a chunk that does not fit is refused by `refinement_buffer`
+  naming the constraint, which is the guard working.
+- **Sedov's first chunk outgrows its own speed too**, by **1.16537,
+  1.25164 and 1.10396** in `D = 1, 2, 3` (measured in step 9). `CODE.md`
+  said the hot spot's `c_s` is the maximum and `λ_max` only decreases; that
+  is right about the blast and wrong about the first chunk, because the
+  jump at `r₀` is a Riemann problem and its star region is not present at
+  `t = 0`. `HydroCase(::SedovBlast)` uses `speed_headroom = 2`. Any case
+  whose initial data has a jump in it needs a headroom above 1, and the
+  recheck is a detector rather than a guard.
+- **`shock_radius` reads cells, not boxes, and turning it into a
+  `firing_boxes` sweep would break the exponent** (measured in step 9). A
+  per-block bounding box loses the correlation between dimensions: the
+  shell crosses a block diagonally, so the box's outermost corner sits
+  about `w²/(2 r_s)` beyond the outermost firing cell — 22% at the start of
+  the fit range and 8% at its end. A bias that *shrinks as the shock grows*
+  lands directly on `d log r_s / d log t`, and it cost about **0.13** of an
+  exponent of 0.5. The host loop is an oracle in the spirit of
+  `reduce_to_grid` and runs once per chunk against hundreds of steps.
+- **The accumulated injection is a bound under `:stage` and an equality
+  under `:step`** (measured in step 9). `SSPRK33`'s three stage vectors
+  enter the step's result with weights `1/6`, `2/3` and `1`, and
+  `reset_atmosphere!` is not told which stage it is in, so the accounting
+  adds raw `Σ hᴰ ΔU` that reached the state scaled. Measured ratio of
+  drift to injection **0.520**; under `:step` the two agree to `4.4e-16`.
+  So a conservation claim "net of the injection" is an *equality* only
+  under `:step`, and under `:stage` it is `|Δtotal| ≤ Σ injection`. Step 8
+  could not see this, because every injection it measured was exactly zero.
+- **On a blast it is the pressure floor that fires, not the atmosphere
+  rule, and the coarse-fine face is what drives it** (measured in step 9).
+  The evacuated interior never reaches `ρ_atm`: numerical diffusion holds
+  the minimum density at `6.7e-2` against a floor at `10⁻⁶`, so no velocity
+  is ever zeroed and every mass injection in this package is still exactly
+  zero. What fires is the interface flux restriction replacing a coarse
+  cell's flux with the average of its fine neighbours', in gas whose
+  internal energy is `p_amb/(γ−1) = 2.5e-5`. Do not raise `ρ_atm` to make
+  the atmosphere rule fire — it is six orders below the data because the
+  refinement criterion's `ε_g` term needs it there.
+- **In `sedov_reference.jl`, never form `V − V₀`** (measured in step 9).
+  The similarity parameter and its centre value agree to the last bit long
+  before `λ` is small — the substitution raises `w` to a power near 10 — so
+  every formula is written in terms of `u = V − V₀` and `V` is only ever
+  *formed*, as `V₀ + u`. Writing the difference instead produces a `NaN` at
+  `λ ≈ 10⁻³`, and the adaptive quadrature then recurses to its depth cap on
+  a panel it can never accept, which looks like a hang rather than an
+  error.
+- **The `E₀` the similarity law takes is the measured one**, not the
+  nominal: which cell centres fall inside `r₀` is a property of the mesh,
+  and the ratio is 1.0345 in `D = 2` and 1.0444 in `D = 3`. In `D = 1` the
+  deposition tiles `2r₀` exactly and the ratio is 0.999996875, the missing
+  `3.125e-6` being the ambient share of the top hat that `measured_E₀`
+  subtracts along with the rest of the box.
 - **Don't name a keyword `maxlevel`.** It shadows TreeAMR's exported
   `maxlevel(forest)` inside the function body. Use `maxlevel_cap`.
 - **A decimal literal in a `T` expression is a leak.** `T(7//5)`, not

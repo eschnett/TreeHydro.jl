@@ -30,21 +30,21 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestones H1, H2 and H3 done, and the atmosphere reset with
-them. The scheme runs and conserves on
-a mesh that follows the solution: the equation of state, the two state
+*Status: milestones H1, H2, H3 and H4 done. The scheme runs and conserves
+on a mesh that follows the solution: the equation of state, the two state
 conversions and the floors, the MUSCL reconstruction with its three
 limiters, the three Riemann solvers, the six-step right-hand side with its
-three kernels, SSPRK33 in time with the reset in its limiter hook, the
-interface flux restriction that makes
+three kernels, SSPRK33 in time with the atmosphere reset in its limiter
+hook, the interface flux restriction that makes
 a coarse-fine face conserve, the Löhner refinement criterion with its
 calibrated thresholds, and the one chunked evolve-and-regrid driver that a
 case is data for — with the entropy wave measuring second order and
-conservation to roundoff, and Sod's shock tube tracked against the exact
-Riemann solution through the Dirichlet boundary hook, matching the
-uniformly fine reference at fewer cells. The Sedov and Kelvin–Helmholtz
-cases are still to come, and Sedov is the first case in which a floor
-actually fires.*
+conservation to roundoff, Sod's shock tube tracked against the exact
+Riemann solution through the Dirichlet boundary hook, and the Sedov blast
+expanding as its similarity law says it must in one, two and three
+dimensions, firing the pressure floor where a strong shock crosses a
+coarse-fine face and running the boundary hook where two Dirichlet faces
+meet. Kelvin–Helmholtz is the case still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
