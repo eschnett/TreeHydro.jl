@@ -21,6 +21,7 @@ using TreeHydro
     include("eos_tests.jl")
     include("riemann_tests.jl")
     include("evolution_tests.jl")
+    include("reset_tests.jl")
     include("entropywave_tests.jl")
     include("exact_riemann_tests.jl")
     include("sod_tests.jl")
