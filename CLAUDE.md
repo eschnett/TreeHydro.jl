@@ -110,8 +110,8 @@ defined.
 
 ## Commands
 
-The full suite (about 80 s after step 5 — 1 m 16 s at one thread and 1 m
-01 s at four, most of it the entropy wave's convergence studies, of which
+The full suite (about 80 s after step 5 — 1 m 18 s at one thread and 1 m
+02 s at four, most of it the entropy wave's convergence studies, of which
 the interface-order sweep in `D = 2` alone is 19 s), and the same at four
 threads — `Pkg.test` does not inherit `-t`, so it has to be passed
 explicitly:

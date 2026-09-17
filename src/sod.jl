@@ -303,6 +303,15 @@ function sod_forest(::Val{D}, N; direction=1,
         ext = block_extent(forest, k)
         inside((ext[dir][1] + ext[dir][2]) / 2)
     end
+    # A refinement that refined nothing would leave a single-level mesh, on
+    # which every conservation claim below passes with no coarse-fine face
+    # to make it about — the way such a test passes for the wrong reason.
+    isempty(targets) && throw(ArgumentError(
+        "sod_forest(refined = $(repr(refined))) selected no root block to " *
+        "refine out of $(length(forest.leaves)) with roots = $rs along axis " *
+        "$dir: the criterion reads the *center* of a root block along the " *
+        "tube, so too few roots leaves it with nothing to pick and the mesh " *
+        "single-level. Use at least four roots along the tube."))
     refine!(forest, targets)
     balance!(forest)
     return forest
