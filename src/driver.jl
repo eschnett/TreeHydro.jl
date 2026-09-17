@@ -327,7 +327,8 @@ l1_difference(a, b) = sum(abs, a .- b) / length(a)
     evolve!([T], case::HydroCase, Val(D); N, ops, t_end, chunk, limiter,
             refine_tol, coarsen_tol, maxlevel_cap, G = 2, cfl = 2//5,
             roots = case.roots, buffer = nothing, riemann = :hlle,
-            fixup = true, reset = :none, ε = T(1//100), ε_g = T(1//1000),
+            fixup = true, reset = :stage, accounting = false,
+            ε = T(1//100), ε_g = T(1//1000),
             maxpasses = 8, backend = CPU(), observer = nothing)
 
 **The** time-stepping loop: adapt the mesh to the initial data, then evolve
@@ -411,9 +412,21 @@ finest-level block width it throws naming the constraint, which means the
 chunk is too long for the cap. With `maxlevel_cap = 0` nothing can refine,
 so the derivation is skipped and the margin is zero.
 
-`reset` is the atmosphere reset of step 8 and only `:none` is accepted
-here; the keyword exists so that the signature does not change when the
-reset arrives.
+`reset` is where [`reset_atmosphere!`](@ref) acts — `:stage` after every
+SSPRK stage, which is the default and GRMHD practice, `:step` once per step,
+or `:none`. It runs in **two** places whichever hook is chosen: inside the
+solve, and here on the freshly gathered state after a [`regrid!`](@ref),
+because the `p = 3` prolongation into a new fine block is unlimited and can
+leave an owned cell unphysical, which would otherwise wait for the first
+stage of the next chunk to be caught.
+
+`accounting` turns on the **injection measurement**: the per-variable totals
+of the stage vector before and after every reset, accumulated over the run
+and returned as `injection`. It costs two full reductions of the state per
+reset, which is why it is off by default — it is a keyword the tests turn on
+and the demos do not. The reset's *hit count* is always taken, being one
+reduction over one diagnostic slot. See "Floors and the atmosphere" in
+`CODE.md`.
 
 `observer(P_problem, t, u)` is called with the state scattered into `U` and
 `P` current, once after the initial-data cycle at `t = 0` and once per
@@ -424,6 +437,20 @@ the viewers of step 11 free of any time stepping of their own.
 
 `drift` and `scales` are per variable and are the *maximum over the run*,
 as Burgers takes them: a leak that reversed sign would otherwise hide.
+
+**Three floor numbers and an injection, and each answers a different
+question.** `floor_hits` is what it has always been: owned cells that the
+`con2prim` pass found unphysical at a chunk boundary, accumulated —
+so with the stage reset in place it should be rare, the reset having
+already handled the stage that produced them. `reset_hits` is the owned
+cells [`reset_atmosphere!`](@ref) actually changed, over every stage of
+every step and every post-regrid call. `ghost_hits` is
+[`ghost_floor_hits`](@ref) accumulated over the chunk boundaries, and it is
+the number that decides the upstream prolongation question. `injection` is
+the per-variable `Σ hᴰ ΔU` the resets injected — and it is `nothing`, not a
+tuple of zeros, when `accounting = false`, so that a caller cannot read "not
+measured" as "measured and zero".
+
 `tracking` is the *minimum* over chunks of [`tracked_share`](@ref), and
 `nblocks_history`, `buffer_history` (the width actually used at each
 regrid, which is the derivation's own record), `λ_history` and
@@ -447,14 +474,12 @@ evolve!(::Type{S}, case::HydroCase{T}, ::Val) where {S,T} = throw(ArgumentError(
 function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk,
                  limiter=nothing, refine_tol, coarsen_tol, maxlevel_cap, G=2,
                  cfl=2 // 5, roots=case.roots, buffer=nothing, riemann=:hlle,
-                 fixup=true, reset=:none, ε=T(1 // 100), ε_g=T(1 // 1000),
+                 fixup=true, reset=:stage, accounting::Bool=false,
+                 ε=T(1 // 100), ε_g=T(1 // 1000),
                  maxpasses=8, backend=CPU(), observer=nothing) where {T,D}
-    reset === :none || throw(ArgumentError(
-        "evolve! accepts reset = :none only, got $(repr(reset)): the " *
-        "atmosphere reset — the SSPRK stage and step limiter hooks, the " *
-        "post-regrid reset and the injection accounting — arrives in step 8 " *
-        "(see \"Floors and the atmosphere\" in CODE.md). The keyword is here " *
-        "already so that the signature does not change when it does."))
+    # Refused here rather than at the first chunk, so that a typo does not
+    # cost an initial-data cycle before it is named.
+    check_reset(reset)
     t_end, chunk, cfl = T(t_end), T(chunk), T(cfl)
     t_end > 0 || throw(ArgumentError("t_end must be positive, got $t_end."))
     chunk > 0 || throw(ArgumentError(
@@ -504,8 +529,13 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         "what the data can reach. Raise maxpasses only if the passes were " *
         "still making progress."))
 
+    # One record for the whole run, handed to every problem the loop builds:
+    # a regrid rebuilds the problem, and the injection and the hit count have
+    # to survive that rather than start again.
+    acc = ResetAccounting{float(real(T))}(D + 2; measure=accounting)
     p = HydroProblem(U, ops; eos=case.eos, floors=case.floors, limiter=limiter,
-                     riemann=riemann, fixup=fixup, boundary=case.boundary)
+                     riemann=riemann, fixup=fixup, boundary=case.boundary,
+                     accounting=acc)
     u = statevector(U)
     gather!(u, U)
     update_primitives!(p, u)
@@ -518,6 +548,7 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     scales = conserved_scales(U)
     drift = ntuple(_ -> zero(R), Val(D + 2))
     hits = 0
+    ghosts = 0
     nsteps = 0
     nregrids = 0
     tracking = one(R)
@@ -540,7 +571,7 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         dt = hydro_dt(forest, cfl, case.speed_headroom * λ, Val(D))
         steps = max(1, ceilint((stop - tstart) / dt))
         dt_used = (stop - tstart) / steps
-        u = hydro_solve!(p, u, tstart, stop, steps)
+        u = hydro_solve!(p, u, tstart, stop, steps; reset=reset)
         nsteps += steps
 
         # (2) the recheck. It throws, and it is meant to.
@@ -557,6 +588,11 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         drift = ntuple(v -> max(drift[v], abs(totals[v] - totals0[v])), Val(D + 2))
         scales = ntuple(v -> max(scales[v], chunkscales[v]), Val(D + 2))
         hits += floor_hits(p)
+        # The ghost population, from the same recovery: `update_primitives!`
+        # above ran `con2prim` over every *stored* cell, so the flag slot is
+        # current in the ghosts too — which it is not after a reset, that
+        # one reaching owned cells only.
+        ghosts += ghost_floor_hits(p)
         push!(nblocks_history, nleaves(forest))
         push!(λ_history, λ)
         push!(λ_end_history, λ_end)
@@ -583,12 +619,17 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
             # resized them in place; reallocating would throw that away.
             p = HydroProblem(U, ops; eos=case.eos, floors=case.floors,
                              limiter=limiter, riemann=riemann, fixup=fixup,
-                             boundary=case.boundary, prims=p.P, fluxes=p.fluxes)
+                             boundary=case.boundary, prims=p.P, fluxes=p.fluxes,
+                             accounting=acc)
             u = statevector(U)
             gather!(u, U)
-            # Step 8: the atmosphere reset goes here, on the freshly
-            # gathered `u`, because a prolongated ghost or a restricted
-            # child can leave a cell below the floors.
+            # The reset's second call site, on the freshly gathered `u`: the
+            # `p = 3` prolongation into a new fine block is unlimited and
+            # acts on ρ, S and E separately, so it can leave an owned cell
+            # below the floors — which would otherwise wait for the first
+            # stage of the next chunk to be caught. `nothing` for the
+            # integrator: there is none here, and the hook does not read it.
+            reset === :none || reset_atmosphere!(u, nothing, p, stop)
         end
     end
 
@@ -597,8 +638,14 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         (l1=volume_weighted_norm(U, err; p=1),
          linf=volume_weighted_norm(U, err; p=Inf))
     end
+    # `nothing` rather than a tuple of zeros where the injection was not
+    # measured: the two are different facts, and zero is the *answer* on
+    # every case that floors nowhere.
+    injection = accounting ? ntuple(v -> acc.injection[v], Val(D + 2)) : nothing
     return (drift=drift, scales=scales, totals0=totals0,
-            totals=conserved_totals(U), floor_hits=hits, nsteps=nsteps,
+            totals=conserved_totals(U), floor_hits=hits,
+            reset_hits=acc.hits, ghost_hits=ghosts, injection=injection,
+            nsteps=nsteps,
             nchunks=nchunks, nregrids=nregrids, passes=passes,
             converged=converged, nblocks=nleaves(forest),
             nblocks_history=nblocks_history, buffer_history=buffer_history,

@@ -30,18 +30,21 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestones H1, H2 and H3 done. The scheme runs and conserves on
+*Status: milestones H1, H2 and H3 done, and the atmosphere reset with
+them. The scheme runs and conserves on
 a mesh that follows the solution: the equation of state, the two state
 conversions and the floors, the MUSCL reconstruction with its three
 limiters, the three Riemann solvers, the six-step right-hand side with its
-three kernels, SSPRK33 in time, the interface flux restriction that makes
+three kernels, SSPRK33 in time with the reset in its limiter hook, the
+interface flux restriction that makes
 a coarse-fine face conserve, the Löhner refinement criterion with its
 calibrated thresholds, and the one chunked evolve-and-regrid driver that a
 case is data for — with the entropy wave measuring second order and
 conservation to roundoff, and Sod's shock tube tracked against the exact
 Riemann solution through the Dirichlet boundary hook, matching the
-uniformly fine reference at fewer cells. The atmosphere reset and the
-Sedov and Kelvin–Helmholtz cases are still to come.*
+uniformly fine reference at fewer cells. The Sedov and Kelvin–Helmholtz
+cases are still to come, and Sedov is the first case in which a floor
+actually fires.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -51,7 +54,7 @@ module TreeHydro
 
 using TreeAMR
 
-using KernelAbstractions: Backend, CPU, allocate, get_backend
+using KernelAbstractions: Backend, CPU, allocate, get_backend, synchronize
 using KernelAbstractions: @kernel, @index, @Const
 # Unused before step 3 and depended on from step 0, so that the Julia floor
 # the two of them set is fixed before anything relies on it.
@@ -61,8 +64,11 @@ using SciMLBase: ODEProblem, solve
 # Devices
 export hostcopy
 
-# Floors and the atmosphere
+# Floors and the atmosphere: the two rules, the reset of the conserved
+# state that applies them from the integrator's limiter hook, and the
+# host-side record of what it injected
 export Floors, apply_floors
+export ResetAccounting, reset_atmosphere!
 
 # Equation of state and the two state conversions
 export EquationOfState, IdealGas
@@ -78,7 +84,7 @@ export physical_flux, signal_speed, riemann_flux
 
 # The right-hand side and what a driver needs around it
 export HydroProblem, hydro_rhs!, update_primitives!
-export max_signal_speed, floor_hits, hydro_dt
+export max_signal_speed, floor_hits, ghost_floor_hits, hydro_dt
 export conserved_totals, conserved_scales, hydro_solve!
 export forest_levels, convergence_rate
 

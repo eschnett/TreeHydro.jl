@@ -556,14 +556,9 @@ end
         Float32, sod_case(Val(1), SOD1D.roots), Val(1))
 end
 
-@testset "The driver refuses step 8's reset and reports every chunk to the observer" begin
-    # The reset keyword exists now so that the signature does not change
-    # when the atmosphere reset arrives; a run that silently ignored it
-    # would be the worst of the three options.
+@testset "The driver reports every chunk to the observer" begin
     short = (roots=SOD1D.roots, N=SOD1D.N, cap=SOD1D.cap, chunk=1 // 200,
              t_end=1 // 50)
-    @test_throws "arrives in step 8" tracked_sod(Val(1), short; reset=:stage)
-    @test_throws "arrives in step 8" tracked_sod(Val(1), short; reset=:step)
 
     # The observer is what keeps `bin/` free of any time stepping of its
     # own, so it has to see the state *scattered* and `P` current, once per

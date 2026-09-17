@@ -27,7 +27,8 @@
 
 """
     HydroProblem(U, ops; eos, floors, limiter, riemann = :hlle, fixup = true,
-                 boundary = nothing, prims = nothing, fluxes = nothing)
+                 boundary = nothing, prims = nothing, fluxes = nothing,
+                 accounting = ResetAccounting{T}(D + 2))
 
 Everything a hydrodynamic right-hand side needs, built once per mesh: the
 conserved state and its ghost schedule, the primitive set the
@@ -59,6 +60,15 @@ the negative control for the conservation claim. `boundary` is the hook
 [`fill_ghosts!`](@ref) calls on ghost regions facing outside a
 non-periodic domain, or `nothing` for a fully periodic one.
 
+`accounting` is the [`ResetAccounting`](@ref) that
+[`reset_atmosphere!`](@ref) accumulates its injection and its hit count
+into. It is mutable and host-side, and it is a *keyword* rather than
+something the problem makes for itself because a run rebuilds its problem
+after every regrid: [`evolve!`](@ref) creates one per run and hands the same
+one to every problem it builds, so the totals survive the rebuild. The
+default is a fresh record with the injection measurement off, which is what
+a caller building a problem for one solve wants.
+
 The layout requirements are checked here rather than discovered later: `U`
 cell-centered with `G ≥ 2` in every dimension (the reconstruction reads
 cells `i−2 … i+1`, and both sides of a same-level face must compute the
@@ -66,7 +76,7 @@ flux from the same four values — see "Conservation at coarse-fine faces"
 in `CODE.md`), `P` with the same forest, ghost width and centering as `U`
 so that one stored index serves both, and fluxes with `G = 0`.
 """
-struct HydroProblem{T,D,GU,GP,GF,LIM,RS,FU,FP,FL,SC,IS,SP,EOS,FLR,BC}
+struct HydroProblem{T,D,GU,GP,GF,LIM,RS,FU,FP,FL,SC,IS,SP,EOS,FLR,BC,ACC}
     U::FU                        # conserved, cell-centered, G = 2
     P::FP                        # primitive + 2 diagnostic slots, same layout
     fluxes::FL                   # NTuple{D,FieldSet}, facecentered(D, d), G = 0
@@ -76,6 +86,7 @@ struct HydroProblem{T,D,GU,GP,GF,LIM,RS,FU,FP,FL,SC,IS,SP,EOS,FLR,BC}
     eos::EOS
     floors::FLR
     boundary::BC
+    accounting::ACC              # host-side, mutable, never a kernel argument
     fixup::Bool
     valD::Val{D}
     valGU::Val{GU}
@@ -94,7 +105,8 @@ const HYDRO_SOLVERS = (:llf, :hlle, :hllc)
 function HydroProblem(U::FieldSet{T,D}, ops::Operators; eos::EquationOfState,
                       floors::Floors, limiter::Union{Symbol,Nothing}=nothing,
                       riemann::Symbol=:hlle, fixup::Bool=true, boundary=nothing,
-                      prims=nothing, fluxes=nothing) where {T,D}
+                      prims=nothing, fluxes=nothing,
+                      accounting=ResetAccounting{float(real(T))}(D + 2)) where {T,D}
     forest = U.forest
     backend = get_backend(U.work)
 
@@ -164,8 +176,9 @@ function HydroProblem(U::FieldSet{T,D}, ops::Operators; eos::EquationOfState,
     return HydroProblem{T,D,GU,GP,GF,limiter,riemann,typeof(U),typeof(P),
                         typeof(fluxes),typeof(schedule),typeof(ischeds),
                         typeof(spacings),typeof(eos),typeof(floors),
-                        typeof(boundary)}(
-        U, P, fluxes, schedule, ischeds, spacings, eos, floors, boundary, fixup,
+                        typeof(boundary),typeof(accounting)}(
+        U, P, fluxes, schedule, ischeds, spacings, eos, floors, boundary,
+        accounting, fixup,
         Val(D), Val(GU), Val(GP), Val(GF), Val(limiter), Val(riemann))
 end
 
@@ -388,16 +401,98 @@ The count is a measurement the design depends on and not a diagnostic (see
 "Floors and the atmosphere" in `CODE.md`): where it is zero the
 conservation claim is the plain one, and where it is not, the drift is
 claimed net of a measured injection. This is the *owned* population;
-the ghost-cell count — the one that decides whether to ask upstream for a
-limited, positivity-preserving prolongation — needs the stored extent,
-which `block_mapreduce` does not offer, and arrives with the atmosphere
-reset.
+[`ghost_floor_hits`](@ref) is the other one.
+
+**Whose flags they are depends on who wrote the slot last**, and both
+callers want that. After [`hydro_rhs!`](@ref) or
+[`update_primitives!`](@ref) the slot holds the `con2prim` pass's flags over
+every owned cell, which is the count the driver accumulates per chunk; after
+[`reset_atmosphere!`](@ref) it holds the reset's own, which is how the reset
+counts the cells it changed. `P` is scratch and is rewritten in full by the
+next evaluation, so the two never mix within one measurement.
 
 Requires `P` to be current, as [`max_signal_speed`](@ref) does.
 """
 function floor_hits(p::HydroProblem{T,D}) where {T,D}
     R = float(real(T))
     return round(Int, sum(block_mapreduce(identity, +, zero(R), p.P; vars=D + 4)))
+end
+
+# The ghost population's count. `block_mapreduce` reduces a block's
+# *interior*, which is the whole of what it offers and exactly what this one
+# cannot use, so this is the one reduction in the package written as a
+# launch of its own: one work item per block, each summing the flag slot
+# over its own block's stored cells and skipping the owned ones, with the
+# per-block values combined on the host in **block order**. That is
+# TreeAMR's own discipline for `block_mapreduce`, spelled out here because
+# the range is the application's this once (see "Field sets" in `CODE.md`).
+#
+# `S` is the stored extent and `N`, `G` the owned range inside it; all three
+# travel as `Val`s so the loops unroll and the kernel holds no host array
+# beyond its output.
+@kernel function ghost_flags_kernel!(counts, @Const(prim), init, slot::Int,
+                                     ::Val{D}, ::Val{G}, ::Val{N},
+                                     ::Val{S}) where {D,G,N,S}
+    b = @index(Global)
+    acc = init
+    for c in CartesianIndices(S)
+        idx = Tuple(c)
+        owned = true
+        for d in 1:D
+            owned &= G[d] < idx[d] ≤ G[d] + N
+        end
+        owned || (acc += prim[idx..., slot, b])
+    end
+    counts[b] = acc
+end
+
+"""
+    ghost_floor_hits(p::HydroProblem)
+
+How many **ghost** entries had a floor fire in them when the primitives were
+last recovered, as an `Int`: diagnostic slot `D + 4` summed over each
+block's stored extent *minus* its owned range.
+
+The other half of [`floor_hits`](@ref)'s population split, and the reason
+the split exists. The ghost cells of `U` are filled by prolongation across
+a coarse-fine face, and that prolongation is unlimited and acts on `ρ`, `S`
+and `E` *separately* — so across a strong shock it can produce a fine ghost
+whose internal energy `E − ½S²/ρ` is negative, which `con2prim` then floors.
+Whether it does, and how often against the owned count, is the concrete
+measurement that decides whether to ask upstream for a limited,
+positivity-preserving prolongation; `CODE.md` puts that question under
+"Field sets" and answers it on the Sedov blast. A count that is zero here on
+Sod and on the entropy wave is what says the question is about Sedov and not
+about the exchange in general.
+
+**Ghost *entries* are counted, not cells.** A physical cell that is a ghost
+of two blocks contributes twice, because what is being measured is how often
+the recovery meets an unphysical ghost, not how many cells of the domain are
+unphysical — and the two are different questions at a face where several
+blocks meet.
+
+Requires `P` to be current over the **stored** extent, which
+[`update_primitives!`](@ref) and [`hydro_rhs!`](@ref) both leave it: the
+`con2prim` pass is the `stored = true` launch. Note that
+[`reset_atmosphere!`](@ref) writes the slot for owned cells only, so this
+must be asked after a recovery and not after a reset.
+"""
+function ghost_floor_hits(p::HydroProblem{T,D}) where {T,D}
+    R = float(real(T))
+    P = p.P
+    backend = get_backend(P.work)
+    n = nblocks(P)
+    counts = allocate(backend, R, (n,))
+    S = ntuple(d -> size(P.work, d), D)
+    ghost_flags_kernel!(backend)(counts, P.work, zero(R), D + 4, p.valD, Val(P.G),
+                                 Val(P.forest.N), Val(S); ndrange=n)
+    synchronize(backend)
+    host = Array(counts)
+    total = 0
+    for b in 1:n
+        total += round(Int, host[b])
+    end
+    return total
 end
 
 """
@@ -433,6 +528,38 @@ conserved_totals(U::FieldSet{T,D}) where {T,D} =
     ntuple(v -> total_mass(U, v), Val(D + 2))
 
 """
+    conserved_totals(U::FieldSet, u::AbstractVector)
+
+The same `D + 2` integrals taken over a **state vector** instead of over the
+working array: `Σ_b h_bᴰ Σ_cells u_v`, with `U` supplying the layout and the
+per-block spacings.
+
+[`reset_atmosphere!`](@ref) is the caller, and it is why the method exists.
+The reset acts on a stage vector the integrator owns, in between two
+right-hand-side evaluations, so there is no scatter at that moment and the
+working array holds some other stage's numbers; measuring the injection off
+`U` would measure the wrong state. `block_mapreduce` offers exactly this
+pair of forms for exactly this reason, and the weighting and the block-order
+sum here are [`conserved_scales`](@ref)'s.
+
+Where nothing has been written between two calls the two results are
+**bit-identical** — the same numbers reduced in the same order — which is
+what makes the injection of a reset that fired nowhere exactly zero rather
+than zero to a tolerance.
+"""
+function conserved_totals(U::FieldSet{T,D}, u::AbstractVector) where {T,D}
+    R = float(real(T))
+    forest = U.forest
+    return ntuple(Val(D + 2)) do v
+        partials = block_mapreduce(identity, +, zero(R), U, u; vars=v)
+        for b in 1:nblocks(U)
+            partials[b] *= spacing(R, forest, blockkey(U, b))^D
+        end
+        sum(partials)
+    end
+end
+
+"""
     conserved_scales(U::FieldSet)
 
 `Σ hᴰ |U_v|` for each of the `D + 2` conserved variables, as a tuple — the
@@ -455,8 +582,35 @@ function conserved_scales(U::FieldSet{T,D}) where {T,D}
     end
 end
 
+# The three places the atmosphere reset may act, in the order `CODE.md`
+# introduces them. Named here so that both `hydro_solve!` and `evolve!` can
+# refuse an unknown one with the same sentence.
+const HYDRO_RESETS = (:stage, :step, :none)
+
 """
-    hydro_solve!(p::HydroProblem, u, t0, t1, nsteps)
+    check_reset(reset) -> reset
+
+`reset` if it is one of `$(HYDRO_RESETS)`, an `ArgumentError` saying what
+each of them means otherwise.
+
+Split out so that [`evolve!`](@ref) can refuse a typo before it adapts a
+mesh rather than at the first chunk, and so that the two callers cannot
+drift apart on what the admissible values are.
+"""
+function check_reset(reset::Symbol)
+    reset in HYDRO_RESETS || throw(ArgumentError(
+        "reset must be one of $(HYDRO_RESETS), got :$reset: :stage runs the " *
+        "atmosphere reset after every SSPRK stage, which is GRMHD practice " *
+        "and the default; :step runs it once on the step's result, which is " *
+        "the cheaper hook and the comparison the Sedov blast measures; and " *
+        ":none leaves the conserved state alone, which is the first draft's " *
+        "behaviour and the negative control. See \"Floors and the " *
+        "atmosphere\" in CODE.md."))
+    return reset
+end
+
+"""
+    hydro_solve!(p::HydroProblem, u, t0, t1, nsteps; reset = :stage)
 
 One fixed-step `SSPRK33` solve of `nsteps` steps from `t0` to `t1`,
 returning the final state vector.
@@ -466,14 +620,39 @@ limited scheme's shocks stay monotone only under one: conservation holds
 for *any* Runge–Kutta method, since every stage's `du` already sums to
 zero. Fixed step because `λ_max` is measured once per chunk and a
 step-adaptive `dt` would be a callback fighting a fixed-step `solve`; the
-driver's CFL recheck at the end of a chunk is what makes that safe. Its
-`stage_limiter!` hook is where the atmosphere reset will act. See "Time
-integration and the time step" in `CODE.md`.
+driver's CFL recheck at the end of a chunk is what makes that safe. See
+"Time integration and the time step" in `CODE.md`.
+
+`reset` chooses which of the integrator's limiter hooks
+[`reset_atmosphere!`](@ref) is installed in: `:stage` after every stage
+(the default, and GRMHD practice), `:step` once on the step's result, or
+`:none` for neither. A positivity-preserving correction after each stage is
+what those hooks exist for, which is the second reason this package wants an
+SSPRK method.
+
+**The hooks are passed to `solve`, not to the algorithm constructor**
+(amended in step 8). `SSPRK33(; stage_limiter! = …)` is what `CODE.md` was
+written against and still works, but `OrdinaryDiffEqCore` moved the limiters
+into the solver options and deprecated the constructor form — it warns on
+every run, and a deprecation that is eventually *removed* would leave the
+constructor's field silently unread, which is the one failure mode a
+positivity correction must not have. `test/reset_tests.jl` asserts that a
+step actually comes out floored under `:stage` and under `:step` and does
+not under `:none`, so the wiring is checked rather than assumed either way.
+
+Where nothing is floored the three settings give **bit-identical** results:
+the reset writes back only the cells a floor fired in, and the limiter hook
+does not otherwise enter the arithmetic of a stage.
 """
-function hydro_solve!(p::HydroProblem{T}, u, t0::T, t1::T, nsteps::Int) where {T}
+function hydro_solve!(p::HydroProblem{T}, u, t0::T, t1::T, nsteps::Int;
+                      reset::Symbol=:stage) where {T}
+    check_reset(reset)
     prob = ODEProblem(hydro_rhs!, u, (t0, t1), p)
+    hooks = reset === :stage ? (; stage_limiter=reset_atmosphere!) :
+            reset === :step ? (; step_limiter=reset_atmosphere!) :
+            (;)
     sol = solve(prob, SSPRK33(); dt=(t1 - t0) / nsteps, adaptive=false,
-                save_everystep=false)
+                save_everystep=false, hooks...)
     return sol.u[end]
 end
 

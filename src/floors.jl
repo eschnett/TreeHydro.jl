@@ -12,8 +12,9 @@
 #
 # `apply_floors` is the whole of them. Three callers reach it: `con2prim`
 # below, the reconstruction's face states (step 2), and the atmosphere
-# reset of the conserved state inside the integrator's stage hook (step
-# 8). One place the rules are written, three places they are applied.
+# reset of the conserved state inside the integrator's stage hook
+# (`reset_atmosphere!`, at the foot of this file). One place the rules are
+# written, three places they are applied.
 #
 # This file is included *before* `eos.jl` because `con2prim` takes a
 # `Floors` and says so in its signature, and a signature is evaluated
@@ -178,7 +179,7 @@ Pure, pointwise and `isbits` in and out, so it is callable from inside a
 kernel and identical on every backend and at every thread count. The
 *reset* of the conserved state `U` that uses this — `con2prim`,
 `apply_floors`, `prim2con`, written back from the integrator's stage hook
-— is step 8; this function is only the rules.
+— is [`reset_atmosphere!`](@ref); this function is only the rules.
 """
 @inline function apply_floors(eos, floors::Floors, P::NTuple{M}) where {M}
     ρ = density(P)
@@ -193,4 +194,179 @@ kernel and identical on every backend and at every thread count. The
         return (ρ, velocity(P)..., floors.p_floor), true
     end
     return P, false
+end
+
+# --- the atmosphere reset -------------------------------------------------
+#
+# The floors above are rules about a *primitive* state and the right-hand
+# side applies them to `P` alone. That is enough for the cases here and not
+# enough for what the package rehearses: a star in a large vacuum region
+# needs the atmosphere imposed on the evolved state itself, or its
+# velocities run away. So `U` is reset too — and the question `CODE.md`
+# settles under "Floors and the atmosphere" is *where*, given that TreeAMR's
+# contract forbids the right-hand side to mutate `u` and an external
+# integrator owns the stages.
+#
+# The answer is the integrator's own limiter hook, which is what a
+# strong-stability-preserving method offers a positivity-preserving
+# correction. The reset is a pointwise map over the stage vector — nothing
+# is read from a neighbour, no ghost is touched, no spacing is needed — so
+# it is bit-identical at every thread count and identical on every backend,
+# and it composes with the right-hand side's purity: the RHS reads the reset
+# `u` and nothing else.
+#
+# Two things here are deliberate and easy to undo by accident:
+#
+#   * **Only a cell where a floor fired is written back.** A cell that the
+#     floors leave alone keeps the bits it came in with, so the injection is
+#     *exactly* zero on a run where nothing fires and the conservation claim
+#     of the entropy wave, Sod and Kelvin–Helmholtz stands unchanged. A
+#     kernel that wrote `prim2con(con2prim(U))` unconditionally would move
+#     every cell by a few ulp and turn every one of those claims into a
+#     tolerance.
+#   * **`p` is not annotated.** It is the [`HydroProblem`](@ref) the
+#     integrator carries, and this file is included *before* the one that
+#     defines that type — a signature is evaluated where the method is
+#     defined, which is the same reason this file precedes `eos.jl`. It is
+#     also the honest signature for an integrator hook, which is handed
+#     whatever the problem's parameter object happens to be.
+
+"""
+    ResetAccounting{R}(nvars; measure = false)
+
+The host-side record of what [`reset_atmosphere!`](@ref) has done over a
+run: the per-variable injection `Σ hᴰ (U_after − U_before)` accumulated over
+every call, the number of owned cells the reset changed, and whether the
+injection is being measured at all.
+
+**A reset injects mass, momentum and energy, and the design's answer is to
+measure it rather than to assume it away** (see "Floors and the atmosphere"
+in `CODE.md`). Where no cell is floored the totals before and after are
+bit-identical and every entry of `injection` stays exactly zero, so the
+roundoff conservation claim is untouched; where cells *are* floored — the
+Sedov blast is the case — the drift is reported as fixup roundoff plus this
+measured injection, and the negative control compares the two runs on the
+drift net of it.
+
+`measure` is off by default because the measurement costs two full
+reductions of the state per stage, which is the same order as the reset
+itself. It is a keyword the tests turn on and the demos do not;
+[`evolve!`](@ref) exposes it as `accounting`. The **hit count is always
+taken**: it is one reduction over one diagnostic slot, and the counts by
+population are a measurement the design depends on rather than a
+diagnostic.
+
+It is mutable and host-side, and it is held by the [`HydroProblem`](@ref)
+rather than returned by each call, because a run rebuilds its problem after
+every regrid and the totals have to survive that. No kernel ever receives
+it — the reset passes arrays and `isbits` values to its kernel and reads
+this only on the host.
+"""
+mutable struct ResetAccounting{R}
+    injection::Vector{R}
+    hits::Int
+    measure::Bool
+end
+
+ResetAccounting{R}(nvars::Integer; measure::Bool=false) where {R} =
+    ResetAccounting{R}(zeros(R, nvars), 0, measure)
+
+# The reset itself: one work item per **owned** cell, over the stage vector
+# viewed as `(N, …, N, D+2, nblocks)`. The launch is the default
+# `map_blocks!` range and the state array carries no ghosts, so the kernel's
+# index is the cell's index in it and adds nothing; the primitive set does
+# have ghosts, so the flag slot is written at `I + G_P`. That is the same
+# split `divergence_kernel!` makes between `du` and the fluxes.
+#
+# The flag goes into `P`'s diagnostic slot `D + 4`, which is where the
+# `con2prim` kernel writes its own and where [`floor_hits`](@ref) reads.
+# `P` is scratch that the next right-hand-side evaluation rewrites in full,
+# so borrowing the slot costs nothing and buys a count that is a plain
+# `block_mapreduce` over owned cells, combined in block order and therefore
+# independent of the thread count.
+@kernel function reset_kernel!(state, prim, eos, floors, ::Val{D},
+                               ::Val{GP}) where {D,GP}
+    I = @index(Global, NTuple)                     # (i1..iD, block), owned
+    b = I[D + 1]
+    c = ntuple(d -> I[d], Val(D))                  # the state vector has no ghosts
+    Ucell = ntuple(v -> state[c..., v, b], Val(D + 2))
+    Pcell, hit = con2prim(eos, floors, Ucell)
+    # Written back only where something fired: an untouched cell keeps its
+    # bits and the injection over it is exactly zero.
+    if hit
+        Unew = prim2con(eos, Pcell)
+        for v in 1:(D + 2)
+            state[c..., v, b] = Unew[v]
+        end
+    end
+    q = ntuple(e -> I[e] + GP[e], Val(D))
+    # `one`/`zero` of a *value*: a captured `Type` in a kernel closure is the
+    # leak "Running on a device" in `CODE.md` warns about. `one(NaN)` is `1`,
+    # which is what a flooded cell's flag should be.
+    prim[q..., D + 4, b] = hit ? one(Ucell[1]) : zero(Ucell[1])
+end
+
+"""
+    reset_atmosphere!(u, integrator, p, t)
+
+The atmosphere reset of the **conserved** state: `con2prim`,
+[`apply_floors`](@ref), `prim2con`, written back in every owned cell where a
+floor fired, with the hit count and — under `p.accounting.measure` — the
+injection accumulated into `p`'s [`ResetAccounting`](@ref).
+
+This is `SSPRK33`'s `stage_limiter!`/`step_limiter!` signature, which is the
+whole point of its shape: the hooks exist for positivity-preserving
+corrections and that is exactly what this is. `u` is the stage vector in
+state layout, `p` the [`HydroProblem`](@ref), and `integrator` is unused and
+may be `nothing` — the driver calls the same function directly on the
+freshly gathered state after a [`regrid!`](@ref), where the `p = 3`
+prolongation into a new fine block is unlimited and can leave an owned cell
+unphysical. Two call sites, one function; see "Floors and the atmosphere" in
+`CODE.md` for why the reset lives in the method rather than in the
+right-hand side.
+
+**The right-hand side's floor on `P` stays, as the second line.** This
+reaches owned cells only, because that is what a state vector holds; ghost
+cells are refilled from owned data at every evaluation and a prolongated
+fine ghost across a strong shock can still be unphysical, as can a
+reconstructed face state under `:none`. The two mechanisms are separate on
+purpose and the counts are kept by population — owned here, ghost in
+[`ghost_floor_hits`](@ref) — because the ghost count is what decides an open
+upstream question about the prolongation.
+
+**Where nothing fires the state is bit-identical afterwards**, cell by cell,
+because only a cell whose `hit` came back `true` is written at all. That is
+what makes the injection *exactly* zero on the entropy wave, on Sod and on
+Kelvin–Helmholtz rather than zero to a tolerance, and a nonzero injection on
+one of those has found a bug.
+
+It writes `P`'s diagnostic slot `D + 4` for every owned cell as it goes.
+`P` is scratch — the next [`hydro_rhs!`](@ref) or
+[`update_primitives!`](@ref) rewrites all of it, ghosts included — so this
+is within its contract, and it is what makes the reset's own hit count a
+plain [`floor_hits`](@ref) call rather than a second field set.
+"""
+function reset_atmosphere!(u, integrator, p, t)
+    acc = p.accounting
+    # Two branches rather than a `Union{Nothing,NTuple}`, so that the
+    # measured path costs two reductions and the unmeasured one costs none.
+    if acc.measure
+        before = conserved_totals(p.U, u)
+        apply_reset!(p, u)
+        after = conserved_totals(p.U, u)
+        for v in eachindex(acc.injection)
+            acc.injection[v] += after[v] - before[v]
+        end
+    else
+        apply_reset!(p, u)
+    end
+    acc.hits += floor_hits(p)
+    return nothing
+end
+
+# The launch on its own, so that both branches above read the same line.
+function apply_reset!(p, u)
+    map_blocks!(reset_kernel!, p.U, statearray(u, p.U), p.P.work, p.eos, p.floors,
+                p.valD, p.valGP)
+    return nothing
 end
