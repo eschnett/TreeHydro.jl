@@ -1693,7 +1693,8 @@ every unit-level test as it was, the structural claims the expensive ones
 rest on, and `test/regression_tests.jl`: a *reduced* configuration of each
 study — coarser `N`, fewer roots, a shorter `t_end`, fewer chunks — whose
 named outputs are compared against `test/references/*.toml` **to
-roundoff**, `isapprox(…; rtol = 1e-12, atol = 1e-300)` for floats and
+roundoff**, `isapprox(…; rtol = 1e-12, atol = 1e-13)` for floats (the
+absolute floor is measured, see below) and
 exact equality for step counts, block counts, levels and each table's
 `_config`. It cannot say the scheme is second order. What it says is that
 *this* code produces *these* numbers, so a reordered sum, a limiter branch
@@ -1721,17 +1722,38 @@ regeneration arrives as a reviewed `git diff` whose commit says why they
 moved. Regenerating to make a red comparison green is the one thing the
 tier forbids.
 
-**Across platforms the numbers are expected to be identical, bit for
-bit.** The files are generated on Apple silicon and compared on GitHub's
-Linux x86-64 and macOS arm64 runners; Julia's `sin`, `cos`, `exp`, `log`
-and `^` are pure Julia and therefore platform-independent, `sqrt` is
-correctly rounded by IEEE 754, Julia does not contract `a*b + c` into an
-`fma` unless asked, and TreeAMR's reductions are order-fixed, so there is
-nothing left for the hardware to disagree about. The stated tolerance is
-nevertheless `rtol = 1e-12` — roundoff, not physics — so that a last-bit
-difference, should one ever appear, does not break CI; what CI reports is
-then the agreement actually observed, and a failure at `1e-12` is a change
-in the numerics.
+**Across machines the numbers are *not* bit-identical, and "to roundoff"
+has to be said in two numbers** (amended after the first CI run of the
+split; the first draft predicted bit-identity). The prediction had its
+reasons — Julia's `sin`, `cos`, `exp`, `log` and `^` are pure Julia and
+therefore platform-independent, `sqrt` is correctly rounded by IEEE 754,
+Julia does not contract `a*b + c` into an `fma` unless asked, and
+TreeAMR's reductions are order-fixed — and the measurement overruled it:
+on all four runners, macOS arm64 on the same Julia 1.13 as the generating
+machine included, the conserved totals of order one came back **1 to 4
+ulp** from the stored ones. Every output therefore differed at the
+`1e-16` level, and the five comparisons that failed were exactly the
+*drifts*, where a `1e-16` difference is the whole value (`1.1e-16` against
+`0.0`; `2.9082786759615e-5` against `2.9082786759504e-5` for a leak, which
+is `4e-12` relative and one ulp of the totals it is a difference of). The
+one dependency that differed between the runners and the generating
+machine, a patch release of `DiffEqBase`, was tested and cleared —
+upgraded on the generating machine it reproduces the stored numbers
+exactly — so what differs is the machine itself, on the same Julia, the
+same packages and the same instruction set. The mechanism is Base's
+`sum` and `mapreduce`, whose inner loops run under `@simd` and may
+therefore reassociate: the arrangement of vectorized partial sums follows
+the CPU target the code was compiled for, and TreeAMR's `block_mapreduce`
+— hence every conserved total and every volume-weighted norm here — rests
+on them. TreeAMR's bit-identity across *thread counts* is untouched by
+this; it is bit-identity across *microarchitectures* that Base's
+reductions do not offer. The tolerance is therefore
+`rtol = 1e-12` **and** `atol = 1e-13`: the relative part for a value's own
+scale, the absolute floor a few hundred ulp of the order-one totals every
+drift is a difference of. Both are roundoff and not physics — a reordered
+sum moves a total by ulps, a changed limiter branch or stencil by far more
+than `1e-13` — and the claim that a drift is *small* is made against its
+bound in `regression_tests.jl`, not against a stored number.
 
 ## Milestones
 

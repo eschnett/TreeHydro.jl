@@ -33,19 +33,39 @@
 #     study that gains an output must be regenerated to gain it here too,
 #     rather than quietly not being compared.
 #
-# ## Why the numbers are expected to be the same on another machine
+# ## What "to roundoff" has to mean on another machine
 #
 # The files are generated on Apple silicon and compared on GitHub's Linux
-# x86-64 and macOS arm64 runners. Bit-identity across the three is what is
-# actually expected: Julia's `sin`, `cos`, `exp`, `log` and `^` are
-# pure-Julia and therefore platform-independent, `sqrt` is correctly rounded
-# by IEEE 754, Julia does not contract `a*b + c` into an `fma` unless asked,
-# and TreeAMR's reductions are order-fixed, so there is nothing left for the
-# hardware to disagree about. **The stated tolerance is nevertheless
-# `rtol = 1e-12`** — roundoff, not physics — so that a last-bit difference,
-# should one ever appear, does not break CI; what CI reports is then the
-# agreement actually observed. A comparison that fails at `1e-12` is a
-# change in the numerics and not a platform difference.
+# x86-64 and macOS arm64 runners. Bit-identity across the three was the
+# expectation when this file was written — Julia's `sin`, `cos`, `exp`,
+# `log` and `^` are pure-Julia and therefore platform-independent, `sqrt` is
+# correctly rounded by IEEE 754, Julia does not contract `a*b + c` into an
+# `fma` unless asked, and TreeAMR's reductions are order-fixed — and **the
+# first CI run measured it to be false**: on all four runners, macOS arm64
+# on the very same Julia 1.13 included, the conserved totals of order one
+# came back **1 to 4 ulp** away from the stored ones, so every output
+# differed at the `1e-16` level and the five that failed were the drifts,
+# where a `1e-16` difference *is* the whole number. The one dependency that
+# differed between the runners and this machine (a patch release of
+# `DiffEqBase`) was tested and cleared: upgraded here, it reproduces the
+# stored numbers exactly. What differs is the *machine*. Base's `sum` and
+# `mapreduce` run their inner loops under `@simd`, which permits
+# reassociation, so the arrangement of vectorized partial sums follows the
+# CPU target the code is compiled for — and TreeAMR's `block_mapreduce`,
+# hence every total and norm here, rests on them. The state the kernels
+# produce is presumably identical; the *reductions* of it are not, by an ulp
+# or a few, between an M3 and the runners' M1s and Xeons. The comparison
+# therefore has to say what a reduced run may differ by rather than hope.
+#
+# So the tolerance is two numbers, and both are roundoff and not physics:
+# **`rtol = 1e-12`** for a value's own scale, and an absolute floor
+# **`atol = 1e-13`**, a few hundred ulp of the order-one totals every drift
+# is a difference of. A drift that is itself roundoff then compares as
+# "roundoff either way", which is what it is; the claim that it is *small*
+# is made separately, in `regression_tests.jl`, against the bound and not
+# against a stored number. A comparison that fails at these tolerances is a
+# change in the numerics — a reordered sum moves a total by ulps, not by
+# `1e-13`.
 #
 # This file is deliberately self-contained: it computes its own primed
 # problems and its own indicator table rather than borrowing
@@ -66,17 +86,26 @@ reference_path(study::Symbol) = joinpath(REFERENCE_DIR, "$(study).toml")
 """
 Roundoff, not physics: the references are the *same* computation, so the
 only thing they may differ by is the last bits of a floating-point number.
-See the note on cross-platform bit-identity at the top of this file.
+See the note on what that means across machines at the top of this file.
 """
 const REFERENCE_RTOL = 1e-12
 
 """
 The absolute floor of the comparison, below which two numbers are both
-"zero to roundoff". It is far below any scale the package computes in and
-exists only so that an exactly-zero output — the transverse momentum drift,
-for one — compares equal to itself without dividing by zero.
+"roundoff of an order-one quantity" and compare equal.
+
+It is `1e-13` and not something negligible because the first CI run
+measured why (see the top of this file): the conserved totals, which are of
+order one, came back 1 to 4 ulp — `1e-16` to `1e-15` — away from the stored
+ones on every runner, and a *drift* is a difference of two such totals, so
+its whole value is that roundoff. A relative tolerance alone would then
+compare noise against noise and fail, as it did. `1e-13` is a few hundred
+ulp of one: far above the roundoff a reordered sum can produce, far below
+anything a changed limiter branch, a moved step or an upstream stencil
+change does. It also lets an exactly-zero output — the transverse momentum
+drift — compare equal to itself without a division by zero.
 """
-const REFERENCE_ATOL = 1e-300
+const REFERENCE_ATOL = 1e-13
 
 # The conservative family at the interface order the scheme wants, as every
 # study in the suite runs it. `p` is the prolongation order, which the
@@ -128,7 +157,8 @@ function write_references(path, dict)
         println(io, "#")
         println(io, "# Reduced configurations of the physics studies and the")
         println(io, "# outputs the short tier compares against, to roundoff")
-        println(io, "# (rtol = 1e-12). Committed and reviewed like code: a")
+        println(io, "# (rtol = 1e-12, atol = 1e-13 — order-one totals differ by")
+        println(io, "# ulps between machines). Committed and reviewed like code: a")
         println(io, "# changed number here is a changed numerical result, and")
         println(io, "# the commit that changes it says why. Each table's")
         println(io, "# `_config` sub-table records the configuration it came")

@@ -416,17 +416,26 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   run at `N ≤ 8` and a few dozen steps and pins the numbers against
   `test/references/` instead. `CI.yml` carries `timeout-minutes: 30` so
   that breaking this fails loudly rather than billing an hour.
-- **Regenerating the references on another machine is a change, not a
-  refresh.** `TREEHYDRO_REGENERATE=1` rewrites committed data, and the
-  data is expected to be bit-identical everywhere — Julia's `sin`, `cos`,
-  `exp`, `log` and `^` are pure Julia, `sqrt` is correctly rounded, Julia
-  does not contract `a*b + c` into an `fma`, and TreeAMR's reductions are
-  order-fixed — so a diff that appears only because the machine changed is
-  a finding to report, not a file to commit. (The comparison is stated at
-  `rtol = 1e-12` precisely so that a last-bit platform difference does not
-  break CI.) The flag is refused without `TREEHYDRO_TEST_LONG=1`, so the
-  physics claims always run first; that is on purpose, and it is why a
-  long run on a cluster cannot quietly move the numbers.
+- **Regenerating the references on another machine moves the last bits,
+  and that is measured, not hypothetical.** The first CI run of the split
+  failed on all four runners — macOS arm64 on the same Julia 1.13 as the
+  generating machine included — because the order-one conserved totals
+  came back 1 to 4 ulp off, so every drift (a difference of two such
+  totals) failed a purely relative comparison. Not a dependency: the one
+  package that differed, a `DiffEqBase` patch, was upgraded here and
+  reproduces the stored numbers exactly. It is the machine — Base's `sum`
+  and `mapreduce` reduce under `@simd`, so their partial sums follow the
+  CPU target, and every total and norm goes through them via TreeAMR's
+  `block_mapreduce`. Hence the
+  comparison is `rtol = 1e-12` **and** `atol = 1e-13`, both roundoff (see
+  "Testing: two tiers" in `CODE.md`). Consequences: a regeneration on
+  another machine will show ulp-level diffs in the drifts that mean
+  nothing — do not commit those as a "refresh"; a diff at `1e-13` or
+  above is a real change and needs a reason in the commit; and if a
+  future failure is again ulps of an order-one quantity, the fix is to
+  measure that quantity against its bound in `regression_tests.jl`, not
+  to loosen the tolerances. The flag is refused without
+  `TREEHYDRO_TEST_LONG=1`, so the physics claims always run first.
 - **Measured numbers go into `CODE.md`**, beside the prediction they
   confirm or correct, so a regression shows up as a changed number and
   not as a test that merely still passes. The test that produces one lives
