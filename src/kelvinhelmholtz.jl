@@ -412,7 +412,7 @@ end
 
 """
     kh_run([T = Float64], Val(2); N, ops, chunk, maxlevel_cap, refine_tol,
-           coarsen_tol, t_end = 3//2, roots = 4, scale = 1, riemann = :hlle, …)
+           coarsen_tol, t_end = 3//2, roots = 4, scale = 1, riemann = :hllc, …)
 
 Run the shear layer through [`evolve!`](@ref) and record **both** of McNally's
 diagnostics once per chunk through the observer, returning the driver's own
@@ -430,11 +430,12 @@ reference** is built: `maxlevel_cap = 0` with `scale = 2^cap` gives a uniform
 mesh at the tracked run's own finest spacing, and `scale = 1` gives the uniform
 coarse control at its coarsest. [`kh_uniform`](@ref) is that call under a name.
 
-`riemann` defaults to the package-wide `:hlle` for now. Whether this case
-overrides it is the measurement the milestone exists for — the shear layer *is*
-a contact, and HLLE's two-wave average smears exactly the wave HLLC restores —
-and `CODE.md`'s "Riemann solver" says the comparison is made here and nowhere
-else.
+`riemann = :hllc` is this case's default and **the one place in the package
+where it is** (decided in step 10; see "Riemann solver" in `CODE.md`). The
+shear layer is a contact, HLLE's two-wave average smears exactly that wave, and
+the measurement recorded under "Step 10" is what chose it. The package-wide
+default in [`HydroProblem`](@ref) and [`evolve!`](@ref) stays `:hlle`, which is
+*the* GRMHD flux.
 
 `accounting = true` by default, unlike [`evolve!`](@ref): this is a measurement
 driver, the injection is one of the numbers it exists to report, and on this
@@ -448,7 +449,7 @@ kh_run(valD::Val; kwargs...) = kh_run(Float64, valD; kwargs...)
 
 function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
                 coarsen_tol, t_end=3 // 2, roots=4, scale=1, limiter=:minmod,
-                riemann=:hlle, fixup=true, reset=:stage, cfl=2 // 5,
+                riemann=:hllc, fixup=true, reset=:stage, cfl=2 // 5,
                 speed_headroom=1, accounting::Bool=true, backend=CPU(),
                 params...) where {T,D}
     w = KelvinHelmholtz(T, Val(D); params...)

@@ -33,4 +33,9 @@ using TreeHydro
     # `hydro_solve!` run — the one to say what a tracked mesh measures and the
     # other to say what it cannot.
     include("sedov_tests.jl")
+    # Kelvin–Helmholtz after it, for the same reason: it is the last case, it
+    # needs the driver and the observer and nothing else, and it is the only
+    # one whose reference is a uniform fine run of this code rather than a
+    # closed form — so every part it rests on has been asserted above it.
+    include("kelvinhelmholtz_tests.jl")
 end
