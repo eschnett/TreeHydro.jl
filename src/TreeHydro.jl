@@ -30,7 +30,8 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestones H1, H2, H3 and H4 done. The scheme runs and conserves
+*Status: milestones H1, H2, H3 and H4 done, and H5's physics with them. The
+scheme runs and conserves
 on a mesh that follows the solution: the equation of state, the two state
 conversions and the floors, the MUSCL reconstruction with its three
 limiters, the three Riemann solvers, the six-step right-hand side with its
@@ -40,11 +41,13 @@ a coarse-fine face conserve, the Löhner refinement criterion with its
 calibrated thresholds, and the one chunked evolve-and-regrid driver that a
 case is data for — with the entropy wave measuring second order and
 conservation to roundoff, Sod's shock tube tracked against the exact
-Riemann solution through the Dirichlet boundary hook, and the Sedov blast
+Riemann solution through the Dirichlet boundary hook, the Sedov blast
 expanding as its similarity law says it must in one, two and three
 dimensions, firing the pressure floor where a strong shock crosses a
 coarse-fine face and running the boundary hook where two Dirichlet faces
-meet. Kelvin–Helmholtz is the case still to come.*
+meet, and McNally's Kelvin–Helmholtz shear layer growing at a rate below
+both incompressible bounds on a mesh that follows a feature which grows
+rather than travels. The viewers are what is still to come.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work
@@ -118,6 +121,12 @@ export SedovBlast, sedov_state, ambient_state, sedov_initial, sedov_conserved
 export sedov_boundary, sedov_forest, sedov_similarity
 export measured_E₀, shock_radius, peak_compression, sedov_static
 
+# The Kelvin–Helmholtz shear layer: the case, McNally's two diagnostics, the
+# fit over the linear phase, and the two runs the comparison is made of
+export KelvinHelmholtz, kh_state, kh_initial, kh_conserved
+export mode_amplitude, max_y_kinetic_energy, growth_rate
+export kh_run, kh_uniform
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -157,5 +166,10 @@ include("sod.jl")
 # check and the exponent all come out of one `SedovSimilarity`.
 include("sedov_reference.jl")
 include("sedov.jl")
+# The shear layer, last, because it is the only case with no reference of its
+# own: the uniform fine run of this code is what it is judged against, so it
+# needs the driver and nothing else, and it is the case the viewers of step 11
+# are written for.
+include("kelvinhelmholtz.jl")
 
 end # module TreeHydro
