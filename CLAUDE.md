@@ -349,7 +349,17 @@ julia --project=bin bin/visualize2d.jl --case=kh
 
 `--case=sedov` and the default `--case=both` are the other two; every
 script takes `--out=`, `--ops=`, `--type=f32|f64`, `--backend=`,
-`--display` and `--no-display`. PNGs land in `bin/output/`, which is
+`--display` and `--no-display`. `visualize2d.jl` also takes **`--movie`**,
+which writes a video beside the figure from the same run — every frame the
+observer hands over rather than the filmstrip's four:
+
+```bash
+julia --project=bin bin/visualize2d.jl --case=kh --movie
+```
+
+with `--movie-frames=`, `--movie-fps=` and `--movie-format=mp4|gif` beside
+it. The shear layer's 301 frames cost minutes, not seconds; see "Step 11"
+in `CODE.md` for the measured number before being surprised by it. PNGs land in `bin/output/`, which is
 gitignored, and a terminal also gets them inline through SixelTerm — a
 pipe does not, which is what `--no-display` makes explicit in CI. Roughly
 26 s, 28 s and 53 s per figure, most of the first 20 s of each being
@@ -760,6 +770,12 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   order-one totals — every drift in this package — cannot be made
   relatively at all. Assert such a quantity against its bound instead,
   which is what the suite does and why it travels.
+- **CI's artifact glob is extension-specific, and it silently drops what it
+  does not match.** It was `path: bin/output/*.png` until the movie
+  arrived, so an `.mp4` rendered in CI would have been produced, asserted
+  non-empty by `test -s`, and then left out of the upload with no error
+  anywhere. It is `bin/output/*` now. A new output *kind* in `bin/` means
+  checking that glob and the `test -s` list, neither of which fails loudly.
 - **In `bin/`, two exported names collide with Makie** (found in step 11).
   TreeAMR exports `scatter!` — the state-vector-into-field-set one — and
   Makie exports the plot recipe; TreeHydro exports `density` and Makie's

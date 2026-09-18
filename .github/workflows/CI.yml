@@ -121,8 +121,17 @@ jobs:
         run: julia --project=bin bin/visualize1d.jl --type=f32 --no-display
       - name: Render the Kelvin-Helmholtz filmstrip and diagnostics
         run: julia --project=bin bin/visualize2d.jl --case=kh --no-display
-      - name: Render the Sedov filmstrip and radial scatter
-        run: julia --project=bin bin/visualize2d.jl --case=sedov --no-display
+      # `--movie` rides on the Sedov step rather than the Kelvin-Helmholtz
+      # one for two reasons: Sedov is the cheaper 2D case, having no uniform
+      # reference run beside it, and leaving the KH step alone keeps the
+      # default no-movie path exercised as well. Twelve frames is a smoke
+      # test and not a film -- it costs about five seconds and its only job
+      # is that `bin/` cannot grow a broken `--movie` unnoticed, which is
+      # this whole job's reason for existing.
+      - name: Render the Sedov filmstrip, radial scatter and a short movie
+        run: |
+          julia --project=bin bin/visualize2d.jl --case=sedov --movie \
+            --movie-frames=12 --no-display
       # Four separate processes on purpose, and not one `julia -e` that
       # includes both scripts: each defines `main`, `snapshot`/`frame2d` and
       # `const LEVELCOLORS` at top level in `Main`, and Julia 1.11 -- the
@@ -133,7 +142,11 @@ jobs:
           test -s bin/output/sod_1d_f32.png
           test -s bin/output/kh_2d.png
           test -s bin/output/sedov_2d.png
+          test -s bin/output/sedov_2d.mp4
       - uses: actions/upload-artifact@v7
         with:
           name: figures
-          path: bin/output/*.png
+          # Everything the viewers wrote, not `*.png`: the glob used to be
+          # extension-specific, which would have produced the movie above
+          # and then silently dropped it from the artifact.
+          path: bin/output/*

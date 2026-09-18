@@ -1751,6 +1751,14 @@ a number.
   `t = 0, 1/2, 1, 3/2` on one colour range, the fit window `2a ≤ M ≤ 6a`
   is shaded under `M(t)`, and the uniform fine run's 256 blocks are drawn
   across the block count as the mesh the 232 are being compared with.)
+  **(Extended after step 11 with `--movie`, which was not part of what H5
+  accepted and is recorded as an addition rather than folded in.** The
+  design asked for four frames and four frames is what H5 was marked done
+  on; the movie keeps all 301 the observer hands over instead. It exists
+  because the strip cannot show *order* — that the mode decays before it
+  grows, and that the refined region thickens with the rolls rather than
+  travelling with them — which is the one thing this case is for. See
+  "A movie" below.)
 
 **What step 10 decided, beside the flux** — each measured rather than
 assumed, and each recorded with its number under "Step 10" below:
@@ -2091,7 +2099,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
-| `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
+| `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
 | `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
 | `bin/benchmark.jl` | as in TreeWave, and it arrives with `src/benchmark.jl` in H6c — step 11 shipped the other two and not this one |
 
@@ -3760,6 +3768,69 @@ it usually takes. It is **not** the device milestone: H6c still owes the
 per-phase table, the opt-in device tests and the benchmark, and nothing
 here was measured for speed. It is one case, at one precision, saying the
 plumbing is connected.
+
+### A movie (added after step 11)
+
+`--movie` on `bin/visualize2d.jl` keeps every frame the observer hands over
+instead of the filmstrip's four and writes them as a video —
+`bin/output/kh_2d.mp4` beside `kh_2d.png`, from the same run. The shear
+layer's `chunk = 1/200` over `t_end = 3/2` is **301 observer calls**, so the
+movie is 301 frames at 30 fps: ten seconds, 1.17 MB. It works for
+`--case=sedov` too, the drawing code being shared.
+
+This is an addition and not part of what H5 accepted, which is why it is
+recorded here rather than folded into the step 11 entry. The strip shows
+four states; the movie shows the *order*, which on this case is the whole
+point — the seeded mode decays while the ramp sheds its transient, takes off
+near `t = 0.5`, and only then rolls up, and the refined region thickens with
+the rolls rather than travelling with them.
+
+**It costs `bin/Project.toml` nothing.** `FFMPEG_jll` arrives as a
+dependency of Makie, so `Makie.record` encodes `.mp4` and `.gif` with no new
+entry — verified by encoding both before any of this was written.
+
+**The figure is byte-identical whether or not a movie is asked for**, which
+is the one property the design exists to protect: `keptframes` takes the
+*union* of the filmstrip's four picks and the movie's, so `--movie` retains
+more frames and draws the identical four. Checked with `cmp` on both cases,
+not by inspection.
+
+**The cost is superlinear in the frame count, and that was not expected.**
+Measured on this machine, `--case=kh`:
+
+| frames | wall clock | per extra frame |
+|---|---|---|
+| 2 (runs + figure only) | 57.8 s | — |
+| 151 | 2 m 45 | 0.72 s |
+| 301 | 7 m 31, and 7 m 23 on a second draw | 1.30 s |
+
+Doubling the frames costs **3.66×**, not 2× — about `n^1.9`. The estimate
+made before implementing was 1.9 min for 301 frames, from a synthetic
+benchmark of the drawing alone; the real thing is four times that, and the
+synthetic benchmark cannot be made to reproduce it. Three candidate
+explanations were tested and **all three are wrong**: setting `ax.title`
+per frame and the `Colorbar` cost nothing (0.28–0.34 s/frame with and
+without), plots do not accumulate across `empty!(ax)` (the plot count is
+flat over repeated cycles), and holding 301 frames live while drawing does
+not slow drawing down on its own (0.24 s/frame with 301 live against 0.36
+with 4). What is left is the combination — building 301 real snapshots
+during the run and then drawing them — most plausibly garbage collection
+marking a large live set once per frame, which would be `O(n²)`; that was
+not confirmed and is recorded as unexplained rather than asserted.
+
+The practical consequence is the useful part: **`--movie-frames=` is the
+lever and not a convenience**. Halving the frames divides the *marginal*
+cost by 3.66 and the total by 2.7, the runs and the figure being a fixed
+58 s underneath: a 151-frame movie of the shear layer is a five-second
+animation for 2 m 45 against 7 m 31. It is also what keeps the CI smoke test cheap — twelve frames
+on the Sedov step, about five seconds, riding on the cheaper 2D case so
+that the Kelvin–Helmholtz step goes on exercising the default no-movie
+path. Both branches are covered for the cost of one.
+
+One trap fixed while adding it: the artifact upload globbed
+`bin/output/*.png`, so a movie rendered in CI would have been produced,
+asserted non-empty by `test -s`, and then silently left out of the upload.
+It is `bin/output/*` now.
 
 **Why the job is ungated**, unlike the coverage step: coverage is a
 *report* whose consumer reads only `main`, while this is a *check*, and a
