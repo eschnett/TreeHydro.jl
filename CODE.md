@@ -2089,7 +2089,7 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | per-phase timings, TreeWave's format |
 | `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
-| `.github/workflows/CI.yml` | the one workflow: the whole suite on every push, over the Julia × OS matrix, at one thread and at four |
+| `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
 | `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
@@ -2646,7 +2646,14 @@ Each has an acceptance test; serial `Float64` correctness first.
   `bin/Project.toml` and the `viewer` job in `CI.yml` render the filmstrip,
   the two diagnostics against the uniform fine run, and the block count, on
   every push. The viewer adds no time stepping of its own: it reads
-  `kh_run`'s observer through the pass-through step 11 gave it.
+  `kh_run`'s observer through the pass-through step 11 gave it. **One leg of
+  the acceptance is not yet observed**: this milestone's wording is "the
+  filmstrip rendered in CI", and the `viewer` job has never run on a runner
+  — the figure is verified locally and from a clean `git archive` tree, with
+  the job written but untested. H5 is marked done on the strength of the
+  work being complete and the render reproducing every recorded number; the
+  first CI run is what closes the last clause, and if it fails this is the
+  bullet to come back to.
 - **H6 — Precision, threads, device.** `T` and `backend` on every
   driver, the type table above, the thread workload, device tests, the
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
@@ -3695,10 +3702,19 @@ paid once; CI still runs them as two steps, because a failure then names
 which case failed. Instantiating `bin/` cold cost **98 s** of
 precompilation on top of an already-warm depot; on a CI runner with nothing
 cached, CairoMakie's stack is minutes and is expected to dominate the job.
-The `viewer` job is therefore given the same `timeout-minutes: 30` the test
-job has, as a regression guard rather than a budget. It needs no cache
-configuration of its own: `julia-actions/cache`'s default key carries the
-job name, so this environment gets its own entry without being told to.
+**The job's own cost is an estimate and not a measurement**, because it has
+never run: everything above was timed on this machine, and the figures were
+verified locally and from a clean `git archive` tree rather than on a
+runner. So its guard is `timeout-minutes: 45` and not the test job's 30 —
+deliberately loose, since a guard set from an estimate against runners with
+±70% scatter would fail a healthy first run. It should be tightened to 30
+once a few runs have said what the job costs warm and cold. If it turns out
+genuinely close, the cheap lever is rendering the two 2D cases in one
+`--case=both` process, which saves a `using CairoMakie` (66 s against 81)
+at the price of a step that no longer names which case failed. It needs no
+cache configuration of its own: `julia-actions/cache`'s default key carries
+the job name, so this environment gets its own entry without being told to,
+and later runs should skip the precompilation that dominates the first.
 
 **What was checked, beyond the figures looking right.** The suite is green
 at 11622 tests both on the current release and — the check that matters for

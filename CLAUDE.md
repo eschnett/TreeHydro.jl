@@ -871,6 +871,12 @@ Match TreeAMR's, since the three packages are read together:
   part of the tree no test would notice breaking. It runs beside the four
   test cells rather than after them, so it is not on the critical path;
   cold, CairoMakie's precompilation is expected to be most of it.
+  **It has never run, so its cost is an estimate and its
+  `timeout-minutes: 45` is deliberately loose** — watch the first few runs
+  and tighten it to the test job's 30 once there is a number. If it is
+  genuinely close, render the two 2D cases in one `--case=both` process
+  (66 s against 81 locally, one `using CairoMakie` instead of two) at the
+  price of a step that no longer names which case failed.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

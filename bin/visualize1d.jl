@@ -236,34 +236,47 @@ function makefigure(snaps, w, title; tols, cap, area, ulp)
                ylabel="|total(t) − total(0)|", xticks=tticks,
                title="conserved integrals, absolute")
     names = ["mass"; ["S_$d" for d in 1:(nvars - 2)]; "energy"]
+    handles = []
     for v in 1:nvars
         ys = [max(abs(s.totals[v] - totals0[v]), driftfloor) for s in snaps]
-        lines!(axd, ts, ys; color=LEVELCOLORS[mod1(v, length(LEVELCOLORS))],
-               linewidth=2, label=names[v])
+        push!(handles,
+              lines!(axd, ts, ys;
+                     color=LEVELCOLORS[mod1(v, length(LEVELCOLORS))],
+                     linewidth=2))
     end
     # The momentum's yardstick, and it is a physical flux rather than an
     # error: the tube's Dirichlet faces hold `p_L` and `p_R` forever, so the
     # box gains momentum at exactly `(p_L − p_R)·A` per unit time. A run
     # whose momentum line sits on this one is conserving, not leaking.
     dp = Float64(TreeHydro.tofloat64(w.p_L)) - Float64(TreeHydro.tofloat64(w.p_R))
-    lines!(axd, ts, [max(abs(dp * t * area), driftfloor) for t in ts];
-           color=:black, linestyle=:dash, linewidth=2,
-           label="(p_L − p_R)·t·A")
-    hlines!(axd, [driftfloor]; color=(:grey, 0.6), linestyle=:dot,
-            linewidth=1.5, label="1 ulp of the largest total")
-    axislegend(axd; position=:lt, framevisible=false, labelsize=9,
-               patchsize=(14, 2))
+    push!(handles,
+          lines!(axd, ts, [max(abs(dp * t * area), driftfloor) for t in ts];
+                 color=:black, linestyle=:dash, linewidth=2))
+    push!(handles,
+          hlines!(axd, [driftfloor]; color=(:grey, 0.6), linestyle=:dot,
+                  linewidth=1.5))
+    push!(names, "(p_L − p_R)·t·A", "1 ulp of the largest total")
 
     axn = Axis(fig[3, 2]; xlabel="t", ylabel="blocks", xticks=tticks,
                title="mesh size (cap $cap)")
     lines!(axn, ts, [Float64(s.nblocks) for s in snaps]; color=:seagreen,
            linewidth=2)
 
+    # Both legends live outside their axes, stacked in the last cell of the
+    # right-hand column. Inside, either one covers data: this panel is
+    # narrow and its legend is nearly as wide, so the momentum's steep rise
+    # at `t = 0` is under any left placement and the roundoff floor is under
+    # any bottom one.
     levels = sort(unique(b.lvl for b in last.blocks))
-    Legend(fig[4, 2],
+    legends = GridLayout(fig[4, 2])
+    Legend(legends[1, 1], handles, names, "conserved integrals";
+           framevisible=false, labelsize=9, titlesize=11, patchsize=(14, 2),
+           tellheight=false, valign=:top)
+    Legend(legends[2, 1],
            [LineElement(; color=levelcolor(l), linewidth=2) for l in levels],
            ["level $l" for l in levels], "refinement";
-           framevisible=false, tellheight=false, valign=:top)
+           framevisible=false, labelsize=9, titlesize=11,
+           tellheight=false, valign=:top)
 
     colsize!(fig.layout, 1, Relative(0.70))
     for r in 1:4
