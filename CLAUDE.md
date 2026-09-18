@@ -677,9 +677,14 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   collected **once, where it is read, on the cheapest host**:
   `coverage: true` on the `version: "1.11"` / `ubuntu-latest` matrix
   entry alone — instrumented, that cell measures **18 m 08** against
-  **42 m 02** for the same suite on `version: "1"`, because coverage
-  costs ~1.35× on 1.11 and better than 5× on 1.13, and with no `VERSION`
-  check anywhere in `src/` or `test/` the lines reported are identical.
+  **42 m 02** for the same suite on `version: "1"`. Measured on this
+  machine at one thread, back to back, coverage costs **1.04× on 1.11 and
+  3.14× on 1.13** (8 m 55 → 9 m 17 against 4 m 01 → 12 m 38) — it is very
+  nearly free on the floor version, and under coverage 1.11 is faster in
+  absolute terms than 1.13 despite being 2.2× slower without it. The
+  factor is not measurable on CI, where 1.04× sits below the runners'
+  scatter. With no `VERSION` check anywhere in `src/` or `test/` the lines
+  reported are identical either way.
   The step's condition is `matrix.coverage == true && (github.ref ==
   'refs/heads/main' || github.event_name == 'workflow_dispatch')`, with
   `julia-processcoverage` and the Codecov upload under the same

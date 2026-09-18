@@ -2179,11 +2179,23 @@ threaded entry would pay. Three conditions follow from that number, and
 *One cell, not four, and the cheapest one.* Every serial cell executes
 the same lines, so a second instrumented cell pays again to tell Codecov
 what the first already said. Which cell, though, turned out to matter far
-more than expected: measured instrumented on the whole suite, the same
-work costs **18 m 08 on Linux at 1.11, 23 m 22 on macOS at the current
-release and 42 m 02 on Linux at the current release**. Instrumentation
-costs about 1.35× on 1.11 and better than 5× on 1.13, so the version
-under test dominates the choice. No file here contains a `VERSION` check
+more than expected, and the reason is the Julia version rather than the
+runner. Measured on this machine at one thread, back to back, the whole
+suite:
+
+| | Julia 1.11 | Julia 1.13 |
+|---|---|---|
+| no coverage | 8 m 55 | 4 m 01 |
+| with coverage | 9 m 17 | 12 m 38 |
+| factor | **1.04×** | **3.14×** |
+
+So instrumentation is very nearly *free* on the floor version and costs a
+factor of three on the current one — and under coverage 1.11 is faster in
+absolute terms than 1.13, though it is 2.2× slower without it. On CI the
+same three instrumented cells came back at 18 m 08 on Linux at 1.11,
+23 m 22 on macOS at 1.13 and 42 m 02 on Linux at 1.13, which agrees in
+ordering; the *factor* cannot be measured there at all, because 1.04×
+sits far below the runners' own scatter. No file here contains a `VERSION` check
 or an `@static`, so the lines reported are the same lines whichever cell
 carries it; the `matrix` therefore puts `coverage: true` on the
 `version: "1.11"`, `ubuntu-latest` entry and the step reads
