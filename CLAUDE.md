@@ -869,14 +869,17 @@ Match TreeAMR's, since the three packages are read together:
   figures, and is **ungated** — it runs on pull requests too, because
   unlike coverage it is a check rather than a report, and `bin/` is the one
   part of the tree no test would notice breaking. It runs beside the four
-  test cells rather than after them, so it is not on the critical path;
-  cold, CairoMakie's precompilation is expected to be most of it.
-  **It has never run, so its cost is an estimate and its
-  `timeout-minutes: 45` is deliberately loose** — watch the first few runs
-  and tighten it to the test job's 30 once there is a number. If it is
-  genuinely close, render the two 2D cases in one `--case=both` process
-  (66 s against 81 locally, one `using CairoMakie` instead of two) at the
-  price of a step that no longer names which case failed.
+  test cells rather than after them. **Measured cold on its first run
+  (PR #1): 11 m 43, of which 7 m 31 — 64% — is instantiating CairoMakie and
+  3 m 50 the four renders.** So it is *not* hidden behind the test matrix:
+  the four cells came in at 8 m 28, 9 m 52, 10 m 36 and 11 m 09 on that same
+  run, making the viewer the longest job of the five by 34 s. That is well
+  inside the ±70% these runners show, so it is level with them rather than
+  the critical path, but the earlier note claiming it was off the critical
+  path was wrong. `timeout-minutes: 30`, as on the test job, is 2.5× a cold
+  draw. If it ever does run long, the lever is the **cache** and not the
+  renders — `--case=both` would save one `using CairoMakie`, about 20 s
+  against a 451 s precompilation.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

@@ -2646,14 +2646,11 @@ Each has an acceptance test; serial `Float64` correctness first.
   `bin/Project.toml` and the `viewer` job in `CI.yml` render the filmstrip,
   the two diagnostics against the uniform fine run, and the block count, on
   every push. The viewer adds no time stepping of its own: it reads
-  `kh_run`'s observer through the pass-through step 11 gave it. **One leg of
-  the acceptance is not yet observed**: this milestone's wording is "the
-  filmstrip rendered in CI", and the `viewer` job has never run on a runner
-  — the figure is verified locally and from a clean `git archive` tree, with
-  the job written but untested. H5 is marked done on the strength of the
-  work being complete and the render reproducing every recorded number; the
-  first CI run is what closes the last clause, and if it fails this is the
-  bullet to come back to.
+  `kh_run`'s observer through the pass-through step 11 gave it. The last
+  clause of the acceptance — "the filmstrip rendered in CI" — is **closed
+  on the first run of the job**, PR #1: the `viewer` job passed in 11 m 43,
+  and the `kh_2d.png` it uploaded carries the same 232 blocks, the same
+  `M(1.5) = 0.12346` and the same fitted 2.58036 as the local render.
 - **H6 — Precision, threads, device.** `T` and `backend` on every
   driver, the type table above, the thread workload, device tests, the
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
@@ -3702,19 +3699,40 @@ paid once; CI still runs them as two steps, because a failure then names
 which case failed. Instantiating `bin/` cold cost **98 s** of
 precompilation on top of an already-warm depot; on a CI runner with nothing
 cached, CairoMakie's stack is minutes and is expected to dominate the job.
-**The job's own cost is an estimate and not a measurement**, because it has
-never run: everything above was timed on this machine, and the figures were
-verified locally and from a clean `git archive` tree rather than on a
-runner. So its guard is `timeout-minutes: 45` and not the test job's 30 —
-deliberately loose, since a guard set from an estimate against runners with
-±70% scatter would fail a healthy first run. It should be tightened to 30
-once a few runs have said what the job costs warm and cold. If it turns out
-genuinely close, the cheap lever is rendering the two 2D cases in one
-`--case=both` process, which saves a `using CairoMakie` (66 s against 81)
-at the price of a step that no longer names which case failed. It needs no
-cache configuration of its own: `julia-actions/cache`'s default key carries
-the job name, so this environment gets its own entry without being told to,
-and later runs should skip the precompilation that dominates the first.
+**Measured on CI, cold, on the first run of the job** (PR #1, run
+35367816414), and the prediction that precompilation would dominate is the
+one thing it confirms:
+
+| step | cold |
+|---|---|
+| instantiate `bin/` | **7 m 31** |
+| render the tube | 37 s |
+| render the tube at `Float32` | 36 s |
+| render Kelvin–Helmholtz | 1 m 49 |
+| render Sedov | 48 s |
+| checkout, setup, cache, upload | ~20 s |
+| **job total** | **11 m 43** |
+
+So instantiating the environment is **64%** of a cold run and the four
+renders together are 3 m 50. The renders themselves cost 1.4–2.1× their
+local times, which is what a 2-vCPU runner does to this arithmetic. The
+guard is therefore the test job's `timeout-minutes: 30`, which leaves 2.5×
+of headroom over a cold draw; it needs no cache configuration of its own,
+`julia-actions/cache`'s default key carrying the job name, and a warm run
+should skip most of the 7 m 31.
+
+**Two things this corrects.** The `--case=both` lever recorded above as the
+fallback if the job ran long is the **wrong lever**: it saves one `using
+CairoMakie`, which is ~20 s against a 451 s precompilation, under 3% of the
+job. What actually governs this job's cost is the cache, and nothing in the
+rendering. And the claim that the job "is not on the critical path" because
+it runs beside the four test cells is **wrong as measured**: on this run
+the four cells came in at 8 m 28, 9 m 52, 10 m 36 and 11 m 09, so at
+11 m 43 the viewer was the *longest* job in the run. It beat the slowest
+test cell by 34 s, which is well inside the ±70% these runners show, so the
+honest statement is that it is level with the test matrix rather than
+hidden behind it — and that a PR now costs what its slowest cell costs,
+whichever that turns out to be on the day.
 
 **What was checked, beyond the figures looking right.** The suite is green
 at 11622 tests both on the current release and — the check that matters for

@@ -94,17 +94,12 @@ jobs:
   viewer:
     name: Viewer (bin/)
     runs-on: ubuntu-latest
-    # Deliberately looser than the test job's 30, and only until there is a
-    # number: this job has never run on a runner, and cold it is dominated
-    # by CairoMakie precompiling, which was measured at 98 s here on an
-    # already-warm depot and is minutes on a runner with nothing cached.
-    # These runners show +-70% scatter, so a guard set from an estimate
-    # would fail a healthy first run. Tighten this to 30 once the first few
-    # runs have said what the job actually costs, warm and cold; if it is
-    # genuinely close, the cheap lever is rendering the two 2D cases in one
-    # `--case=both` process, which saves a `using CairoMakie` at the price
-    # of a step that no longer names which case failed.
-    timeout-minutes: 45
+    # As on the test job: a guard against a runtime regression, not a
+    # budget. Measured cold on the first run, 11 m 43 -- of which 7 m 31 is
+    # instantiating CairoMakie and 3 m 50 the four renders -- so 30 leaves
+    # 2.5x of headroom over a cold draw, and a warm one skips most of the
+    # precompilation.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
