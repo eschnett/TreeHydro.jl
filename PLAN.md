@@ -476,6 +476,12 @@ Two deviations from the list above, both recorded in `CODE.md` under
   demo size" about the 3D blast stays a forward reference; a 3D render
   needs a midplane slice and is not what this step accepted.
 
+Added afterwards, and recorded here so the step is not read as having
+included it: **`--movie`** on `bin/visualize2d.jl`, for both 2D cases,
+keeping every frame the observer hands over instead of the filmstrip's
+four. The design asked for four frames and H5 was accepted on four; this is
+an addition, measured under "Step 11" in `CODE.md`.
+
 ## Step 12 — Precision (H6a)
 
 `CODE.md`: "Precision".

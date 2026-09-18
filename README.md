@@ -176,6 +176,15 @@ similarity profile:
 julia --project=bin bin/visualize2d.jl --case=kh
 ```
 
+And `--movie` turns the 2D filmstrip into a video, from the same run and
+without a new dependency — every frame the driver's observer hands over
+rather than the four the strip draws, which for the shear layer is 301 of
+them:
+
+```bash
+julia --project=bin bin/visualize2d.jl --case=kh --movie
+```
+
 Both take `--type=f32` and `--backend=cuda|metal`; no device package is a
 dependency of this one. CI renders every figure on every push and uploads
 them, because `bin/` sits outside `src/` and `test/` and nothing else would

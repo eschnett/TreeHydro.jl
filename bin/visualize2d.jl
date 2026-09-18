@@ -6,6 +6,8 @@
 #     julia --project=bin bin/visualize2d.jl
 #     julia --project=bin bin/visualize2d.jl --case=kh
 #     julia --project=bin bin/visualize2d.jl --case=sedov --out=/tmp
+#     julia --project=bin bin/visualize2d.jl --case=kh --movie
+#     julia --project=bin bin/visualize2d.jl --movie --movie-frames=60 --movie-format=gif
 #     julia --project=bin bin/visualize2d.jl --type=f32
 #     julia --project=bin bin/visualize2d.jl --backend=metal --type=f32
 #
@@ -47,6 +49,17 @@
 #   3. the shock radius against time on log axes with the similarity law
 #      over it, and the block count beside it.
 #
+# `--movie` writes a video beside the figure, from the same run: every
+# frame the observer hands over rather than the four the filmstrip draws,
+# which for the shear layer is 301 of them and a ten-second animation. It
+# is what the strip cannot show -- the *order* in which things happen, the
+# mode decaying before it grows, the refined region thickening with the
+# rolls rather than travelling with them. `--movie-frames=` shortens it,
+# `--movie-fps=` sets the rate and `--movie-format=gif` changes the
+# container; `FFMPEG_jll` comes with Makie, so none of this is a new
+# dependency. The figure is byte-identical whether or not a movie is asked
+# for, which is what `keptframes` is for.
+#
 # The runs come from `kh_run` and `evolve!` via their `observer` keyword,
 # so this script contains no time-stepping loop of its own. See `CODE.md`.
 
@@ -77,6 +90,10 @@ const FLOATTYPES = Dict("f32" => Float32, "f64" => Float64)
 # `CODE.md` were measured on.
 const REFINE_TOL = 2 // 25            # 0.08
 const COARSEN_TOL = 1 // 50           # 0.02
+# The same colormap each case's filmstrip uses, so the movie and the figure
+# are the same picture in motion and not two different ones.
+const MOVIECOLORMAPS = Dict("kh" => :viridis, "sedov" => :inferno)
+
 const KH = (roots=4, N=8, cap=2, chunk=1 // 200, t_end=3 // 2)
 const SEDOV2D = (roots=4, N=8, cap=2, r₀=1 // 16, chunk=1 // 400, t_end=1 // 10)
 
@@ -189,14 +206,98 @@ function filmstrip!(layout, snaps; colormap)
 end
 
 """
-Which observer calls to keep a frame from: four, evenly spaced over the
-run, including the first and the last.
+    moviefile(path, snaps; colormap, fps, label) -> path
 
-Keeping every frame is what makes this necessary rather than tidy: the
-shear layer takes 301 observer calls over a few hundred blocks of 64 cells,
-which is tens of megabytes of `ρ` for a figure that draws four of them.
+Every retained frame as a video, one heatmap per block with the block
+outlines over it -- the filmstrip's panel, animated.
+
+This is what the four-frame strip cannot show: the shear layer *evolves*,
+and its whole interest is the order in which things happen. The seeded mode
+decays while the ramp sheds its transient, takes off around `t = 0.5`, and
+rolls up; the refined region thickens with the rolls rather than travelling
+with them. Four stills sample that; 301 frames are the thing itself.
+
+Three details that are not free choices:
+
+- **`empty!(ax)` every frame.** [`fieldpanel!`](@ref) emits one `heatmap!`
+  per block and the mesh is not fixed -- the shear layer grows 160 -> 232
+  blocks over three regrids -- so a frame drawn on top of the last would
+  keep the previous mesh's blocks underneath it wherever the new one is
+  coarser.
+- **The colour range is fixed over the whole movie**, taken from the frames
+  that will actually be drawn, exactly as [`filmstrip!`](@ref) takes it. A
+  per-frame range would renormalize every frame and turn a growing
+  instability into a constant-looking one.
+- **The `Colorbar` is built from `colorrange` and not from a plot handle.**
+  The handle a `heatmap!` returns is deleted by the next `empty!`, so a
+  colorbar attached to one would be pointing at a dead plot from frame two
+  onward.
+
+`Makie.record` picks the container from the extension, and both `.mp4` and
+`.gif` work here: `FFMPEG_jll` arrives as a dependency of Makie, so the
+movie costs `bin/Project.toml` nothing.
+"""
+function moviefile(path, snaps; colormap, fps, label)
+    lo = minimum(minimum(minimum(b.ρ) for b in s.blocks) for s in snaps)
+    hi = maximum(maximum(maximum(b.ρ) for b in s.blocks) for s in snaps)
+    fig = Figure(; size=(900, 950))
+    ax = Axis(fig[1, 1]; aspect=DataAspect(), titlesize=13)
+    hidedecorations!(ax)
+    Colorbar(fig[1, 2]; colorrange=(lo, hi), colormap=colormap, label="ρ",
+             width=12, height=Relative(0.9))
+    record(fig, path, eachindex(snaps); framerate=fps) do k
+        s = snaps[k]
+        empty!(ax)
+        fieldpanel!(ax, s; colorrange=(lo, hi), colormap=colormap)
+        blockoutlines!(ax, s)
+        ax.title = @sprintf("%s — t = %.3f, %d blocks", label, s.t, s.nblocks)
+    end
+    return path
+end
+
+"""
+Which observer calls to keep a frame from: `n` of them, evenly spaced over
+the run and always including the first and the last.
+
+Two consumers want different answers, which is why this is a function and
+not a constant. The figure wants four; the movie wants all of them, or
+`--movie-frames=` of them. Selectivity is what makes it necessary rather
+than tidy: the shear layer takes 301 observer calls over a few hundred
+blocks of 64 cells, which is tens of megabytes of `ρ` for a figure that
+draws four.
+
+[`keptframes`](@ref) takes the **union** of the two, so that asking for a
+movie never changes which four frames the figure draws.
 """
 framepicks(ncalls, n=4) = Set(round.(Int, range(1, ncalls; length=n)))
+
+"""
+    keptframes(ncalls; movie, movie_frames) -> (keep, film, mov)
+
+The observer calls worth a frame, split by who wants them.
+
+`film` is the figure's four and is **not** a function of the movie
+settings, which is the whole point: `keep` is the union, so a run with
+`--movie` retains more frames but draws the identical filmstrip from the
+identical four. The figure a viewer gets is the same file either way, and
+the test for that is `cmp`, not inspection.
+"""
+function keptframes(ncalls; movie::Bool, movie_frames)
+    film = framepicks(ncalls, 4)
+    n = movie_frames === nothing ? ncalls : min(movie_frames, ncalls)
+    mov = movie ? framepicks(ncalls, n) : Set{Int}()
+    return (union(film, mov), film, mov)
+end
+
+"""
+Split what the observer kept into the figure's frames and the movie's.
+
+The frames are stored as `(call, frame)` pairs so that this selection is by
+the observer call they came from rather than by position, which is what
+keeps the two independent of each other.
+"""
+filmframes(kept, film) = [f for (i, f) in kept if i in film]
+movieframes(kept, mov) = [f for (i, f) in kept if i in mov]
 
 # --------------------------------------------------------------------------
 # Kelvin-Helmholtz
@@ -210,13 +311,14 @@ The frames come through [`kh_run`](@ref)'s `observer` pass-through, so
 diagnostics recorded and not a second computation of them -- which is the
 whole reason that keyword exists. See "Step 10" in `CODE.md`.
 """
-function khcase(::Type{T}=Float64; ops_order=3, backend=CPU()) where {T}
+function khcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
+                movie_frames=nothing) where {T}
     ncalls = Int(ceil(KH.t_end / KH.chunk)) + 1
-    picks = framepicks(ncalls)
-    snaps, seen = [], Ref(0)
+    keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
+    kept, seen = Tuple{Int,Any}[], Ref(0)
     function grab(p, t, u)
         seen[] += 1
-        seen[] in picks && push!(snaps, frame2d(p, t))
+        seen[] in keep && push!(kept, (seen[], frame2d(p, t)))
     end
     @info "running the tracked shear layer"
     tr = kh_run(T, Val(2); N=KH.N, ops=viewer_ops(ops_order), chunk=KH.chunk,
@@ -242,7 +344,9 @@ function khcase(::Type{T}=Float64; ops_order=3, backend=CPU()) where {T}
                       %.5f, below the incompressible bounds 4.384 and 5.9238",
                      T, KH.cap, tr.r.cells, tr.r.nblocks, fine.r.cells,
                      tr.Ms[1], tr.ts[end], tr.Ms[end], rate)
-    return (snaps=snaps, tr=tr, fine=fine, title=title)
+    return (snaps=filmframes(kept, film), movie=movieframes(kept, mov),
+            tr=tr, fine=fine, title=title,
+            label=@sprintf("Kelvin–Helmholtz, %s, HLLC, cap %d", T, KH.cap))
 end
 
 function khfigure(c)
@@ -303,12 +407,13 @@ There is no `sedov_run` in `src/`: `sedov_static` is the *static*-mesh
 measurement driver and takes no observer, so the tracked run is assembled
 here as `test/sedov_tests.jl` assembles it.
 """
-function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU()) where {T}
+function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
+                   movie_frames=nothing) where {T}
     w = SedovBlast(T, Val(2); r₀=SEDOV2D.r₀)
     case = HydroCase(w; roots=SEDOV2D.roots)
     ncalls = Int(ceil(SEDOV2D.t_end / SEDOV2D.chunk)) + 1
-    picks = framepicks(ncalls)
-    snaps, seen = [], Ref(0)
+    keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
+    kept, seen = Tuple{Int,Any}[], Ref(0)
     ts, rs, peaks, nbs = Float64[], Float64[], Float64[], Int[]
     function watch(p, t, u)
         seen[] += 1
@@ -316,7 +421,7 @@ function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU()) where {T}
         push!(rs, Float64(shock_radius(p.P, w)))
         push!(peaks, Float64(peak_compression(p.P, w)))
         push!(nbs, nblocks(p.P))
-        seen[] in picks && push!(snaps, frame2d(p, t))
+        seen[] in keep && push!(kept, (seen[], frame2d(p, t)))
     end
     @info "running the tracked blast"
     r = evolve!(case, Val(2); N=SEDOV2D.N, ops=viewer_ops(ops_order),
@@ -347,8 +452,10 @@ function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU()) where {T}
                      Float64(TreeHydro.tofloat64(w.E₀)),
                      exponent_fit(ts, rs; from=3 * Float64(TreeHydro.tofloat64(w.r₀))),
                      peaks[end], r.floor_hits, r.ghost_hits)
-    return (snaps=snaps, r=r, w=w, sim=sim, E₀=E₀, ts=ts, rs=rs, peaks=peaks,
-            nbs=nbs, title=title)
+    return (snaps=filmframes(kept, film), movie=movieframes(kept, mov),
+            r=r, w=w, sim=sim, E₀=E₀, ts=ts, rs=rs, peaks=peaks, nbs=nbs,
+            title=title,
+            label=@sprintf("Sedov blast, %s, D = 2, cap %d", T, SEDOV2D.cap))
 end
 
 """
@@ -434,6 +541,13 @@ function main(args)
     T = Float64
     typetag = ""
     backendname = "cpu"
+    movie = false
+    # `nothing` means every observer sample -- 301 on the shear layer, a
+    # ten-second movie at the default rate. `--movie-frames=` is for the CI
+    # smoke test and for anyone who wants a quicker look.
+    movie_frames = nothing
+    movie_fps = 30
+    movie_ext = "mp4"
     # Sixel is for a human looking at a terminal; a pipe gets the paths.
     inline = stdout isa Base.TTY
     for a in args
@@ -453,13 +567,28 @@ function main(args)
             typetag = tag == "f64" ? "" : "_$tag"
         elseif startswith(a, "--backend=")
             backendname = a[11:end]
+        elseif a == "--movie"
+            movie = true
+        elseif startswith(a, "--movie-frames=")
+            movie_frames = parse(Int, a[16:end])
+            movie_frames ≥ 2 ||
+                error("--movie-frames must be at least 2; got $movie_frames")
+            movie = true
+        elseif startswith(a, "--movie-fps=")
+            movie_fps = parse(Int, a[13:end])
+            movie_fps ≥ 1 || error("--movie-fps must be positive; got $movie_fps")
+        elseif startswith(a, "--movie-format=")
+            movie_ext = a[16:end]
+            movie_ext in ("mp4", "gif") ||
+                error("--movie-format must be mp4 or gif; got $movie_ext")
         elseif a == "--display"
             inline = true
         elseif a == "--no-display"
             inline = false
         else
             error("unknown argument $a; expected --case=, --out=, --ops=, \
-                   --type=, --backend=, --display, --no-display")
+                   --type=, --backend=, --movie, --movie-frames=, \
+                   --movie-fps=, --movie-format=, --display, --no-display")
         end
     end
     case in ("both", "kh", "sedov") ||
@@ -475,12 +604,23 @@ function main(args)
         for (name, build, draw) in (("kh", khcase, khfigure),
                                     ("sedov", sedovcase, sedovfigure))
             (case == "both" || case == name) || continue
-            c = build(T; ops_order=ops_order, backend=backend)
+            c = build(T; ops_order=ops_order, backend=backend, movie=movie,
+                      movie_frames=movie_frames)
             fig = draw(c)
             path = joinpath(outdir, "$(name)_2d$(typetag).png")
             save(path, fig)
+            # A still can go to the terminal; a video cannot, so `--display`
+            # says nothing about the movie either way.
             inline && display(fig)
             push!(paths, path)
+            if movie
+                @info "encoding $(length(c.movie)) frames"
+                push!(paths,
+                      moviefile(joinpath(outdir,
+                                         "$(name)_2d$(typetag).$(movie_ext)"),
+                                c.movie; colormap=MOVIECOLORMAPS[name],
+                                fps=movie_fps, label=c.label))
+            end
         end
         paths
     end
