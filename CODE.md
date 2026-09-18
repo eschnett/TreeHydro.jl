@@ -2202,8 +2202,8 @@ two together span a factor of 3.4. Instrumented, whole suite, one thread:
 
 | | Julia 1.11 | Julia 1.13 |
 |---|---|---|
-| macOS arm64 | **12 m 12** | 23 m 22 |
-| ubuntu x86 | 18 m 08 | 42 m 02 |
+| macOS arm64 | **12 m 12**, 17 m 03 | 23 m 22 |
+| ubuntu x86 | 18 m 08, 19 m 52 | 42 m 02 |
 
 macOS is 1.5–1.8× faster than Linux at either version and 1.11 is
 1.9–2.3× faster than 1.13 on either architecture, so each effect is
@@ -2233,15 +2233,18 @@ arrangement:
 
 | | wall clock | critical path |
 |---|---|---|
-| ordinary push or pull request | ~13 m | the threaded cell |
-| push to `main`, coverage collected | ~13 m | the threaded cell |
+| ordinary push or pull request | ~12 m | the threaded cell |
+| push to `main`, coverage collected | 18 m 02 | the instrumented cell |
 
 So the everyday case is no worse than it was and one cell lighter, and
-`main` pays essentially nothing for its coverage — the instrumented cell
-runs 12 m 12, which is no longer than the uninstrumented cells beside it.
-That is true only because coverage sits on the fastest cell: hosted on
-Linux at the current release the same collection took 42 m 45 and was the
-critical path by a wide margin.
+`main` pays about six minutes for its coverage. **The instrumented cell
+is the critical path on a `main` push**, and has been under every
+arrangement tried: 18 m 02 hosted on macOS at 1.11, 20 m 42 on Linux at
+1.11, and 42 m 45 on Linux at the current release. A draft of this
+paragraph predicted ~13 m and the threaded cell, from the 12 m 12 draw
+alone; the next draw of that same cell was 17 m 03. Which cell is slowest
+is exactly the kind of claim the variance note below says needs more than
+one run behind it, and it has now been got wrong twice.
 
 That correction is really a statement about variance, and it is the
 caution to carry away from every CI number here, in the spirit of the one
@@ -2249,17 +2252,20 @@ about this machine being shared: GitHub's runners vary by more than most
 of the effects being measured. The same instrumented cell, unchanged
 configuration, came back at **18 m 08**, **11 m 24** and **19 m 52** on
 three consecutive runs — a factor of 1.7 end to end, which swamps the
-1.04× that instrumenting 1.11 costs in the first place. The orderings
-that decided where coverage goes (12 against 42 minutes, and each of the
-two axes reproduced across the other) are far outside that band and are
-safe; any comparison of two cells within a factor of two is not, and
-should be read as the same measurement twice.
+1.04× that instrumenting 1.11 costs in the first place; the cell that now
+carries the coverage has itself come back at 12 m 12 and 17 m 03. The
+orderings that decided where coverage goes (12–17 against 42 minutes, and
+each of the two axes reproduced across the other) are far outside that
+band and are safe; any comparison of two cells within a factor of two is
+not, and should be read as the same measurement twice. The flat
+`timeout-minutes: 30` has 1.8× of headroom over the slower of the two
+draws, which is about what the uninstrumented cells had before.
 
 Two more economies come from the same measurement, since `timeout` and
 matrix size are both set by what a cell costs. The cap is a flat
 **30 minutes**, and it is flat *because* coverage sits on the fastest
-cell — every healthy run in the matrix is ten to thirteen minutes, so one
-number guards all four the same way. It was briefly per cell,
+cell — every healthy run in the matrix is six to seventeen minutes, so
+one number guards all four the same way. It was briefly per cell,
 `${{ matrix.coverage == true && 40 || 30 }}`, while coverage lived on
 Linux at the current release, where a **healthy** run measured 42 m 45
 and a flat 30 would have failed it. If coverage is ever moved back to a

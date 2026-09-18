@@ -677,7 +677,7 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   collected **once, where it is read, on the fastest cell of the four**:
   `coverage: true` on the `version: "1.11"` / `macOS-latest` entry alone.
   Instrumented on CI, one thread, the four combinations measure **macOS
-  1.11 12 m 12, ubuntu 1.11 18 m 08, macOS 1.13 23 m 22, ubuntu 1.13
+  1.11 12–17 m, ubuntu 1.11 18–20 m, macOS 1.13 23 m 22, ubuntu 1.13
   42 m 02** — macOS 1.5–1.8× faster than Linux at either version, 1.11
   1.9–2.3× faster than 1.13 on either architecture, each effect
   reproduced across the other axis. Most of the version column is
@@ -764,10 +764,12 @@ Match TreeAMR's, since the three packages are read together:
   floor is a property of the version, not of the OS. **Coverage is
   collected on one cell, on `main` or a manual dispatch only**, and never
   on the threaded entry, where it costs a factor of a hundred — see
-  "Things that will bite". End to end, a push costs about **13 m**
-  whether or not coverage is collected, the threaded cell being the
-  critical path either way, against **14 m 20** for the suite before any
-  of this. And treat every CI timing as ±70%: one instrumented cell came
+  "Things that will bite". End to end, an ordinary push costs about
+  **12 m** with the threaded cell on the critical path, and a push to
+  `main` **18 m 02** with the *instrumented* cell on it, against
+  **14 m 20** for the suite before any of this — the instrumented cell
+  has been the critical path under every arrangement tried (18 m 02 on
+  macOS at 1.11, 20 m 42 on Linux at 1.11, 42 m 45 on Linux at 1.13). And treat every CI timing as ±70%: one instrumented cell came
   back at 18 m 08, 11 m 24 and 19 m 52 on three consecutive runs, so only
   orderings wider than that carry a decision, and a claim about which
   cell is slowest needs more than one run behind it.
