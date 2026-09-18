@@ -30,7 +30,7 @@ positional argument and the KernelAbstractions backend it runs on as a
 keyword, so the same study runs at `Float32` on a device as at `Float64`
 on the host, and the answer is bit-identical at any thread count.
 
-*Status: milestones H1, H2, H3 and H4 done, and H5's physics with them. The
+*Status: milestones H1, H2, H3, H4 and H5 done. The
 scheme runs and conserves
 on a mesh that follows the solution: the equation of state, the two state
 conversions and the floors, the MUSCL reconstruction with its three
@@ -47,7 +47,8 @@ dimensions, firing the pressure floor where a strong shock crosses a
 coarse-fine face and running the boundary hook where two Dirichlet faces
 meet, and McNally's Kelvin–Helmholtz shear layer growing at a rate below
 both incompressible bounds on a mesh that follows a feature which grows
-rather than travels. The viewers are what is still to come.*
+rather than travels — and the viewers in `bin/` drawing the last three of
+those, rendered in CI on every push.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for and why it is that way — and `PLAN.md` for the work

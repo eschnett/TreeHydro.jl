@@ -620,3 +620,43 @@ end
           "drift $(b.r.drift) against bounds " *
           "$(ntuple(v -> 8 * eps(Float32) * b.r.scales[v] * b.r.nsteps, 4))"
 end
+
+# A viewer that took `M` and `K` somewhere other than `kh_run` — which is what
+# an `observer` on `evolve!` would have forced, the driver taking only one —
+# or a pass-through wired *instead of* this case's own diagnostics rather than
+# after them. Both would leave every number in this file untouched and would be
+# found only by looking at a figure. `bin/visualize2d.jl --case=kh` is the one
+# caller, and it is outside `src/` and `test/`, so this is where the contract
+# is asserted.
+@testset "kh_run's observer pass-through composes with the diagnostics and changes nothing" begin
+    seen = Tuple{Float64,Int}[]
+    watched = tracked_kh(; t_end=KH_SHORT,
+                         observer=(pr, t, u) -> push!(seen, (Float64(t),
+                                                             nblocks(pr.P))))
+    a = SHORT_KH
+
+    # It is called, once per sample, with the state the case's own hook saw:
+    # same times, same mesh, and the diagnostics already taken — which is what
+    # lets the viewer push a frame beside the `M` it belongs to.
+    @test length(seen) == length(a.ts)
+    @test [s[1] for s in seen] == a.ts
+    @test [s[2] for s in seen] == a.nbs
+
+    # And passing one changes nothing: not the curves, not the mesh history,
+    # not the step count, not a single conserved integral. Bit for bit, because
+    # `observer === nothing` is a branch and not an approximation.
+    @test watched.Ms == a.Ms
+    @test watched.Ks == a.Ks
+    @test watched.nbs == a.nbs
+    @test watched.ts == a.ts
+    @test watched.r.drift == a.r.drift
+    @test watched.r.nsteps == a.r.nsteps
+    @test watched.r.nblocks == a.r.nblocks
+    @test watched.r.levels == a.r.levels
+    @test watched.r.tracking == a.r.tracking
+
+    @info "Kelvin–Helmholtz observer pass-through (t = $(Float64(KH_SHORT))): " *
+          "called $(length(seen)) times at the same times and the same " *
+          "$(a.r.nblocks) blocks as the case's own hook; every returned " *
+          "number bit-identical to the run without it"
+end

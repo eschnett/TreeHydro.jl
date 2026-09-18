@@ -78,3 +78,62 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           # A Codecov outage should not turn a green test run red.
           fail_ci_if_error: false
+
+  # `bin/` has its own environment and its own copy of the TreeAMR pin, so
+  # the test job above cannot exercise it: the viewers can keep building
+  # against an older TreeAMR than the tests until they fail on an API the
+  # tests are already using, which is exactly how TreeWave's `bin/` broke on
+  # the removed `cell_center`. Nothing in `src/` or `test/` would notice.
+  # This job runs them for real and keeps the figures, so a plot that
+  # silently stops making sense is visible rather than merely unbroken.
+  #
+  # Ungated, unlike the coverage step: coverage is a report whose consumer
+  # only reads `main`, while this is a check, and a pull request is exactly
+  # where a broken viewer should be caught. It runs beside the four test
+  # cells rather than after them, so it is not on the critical path.
+  viewer:
+    name: Viewer (bin/)
+    runs-on: ubuntu-latest
+    # As on the test job: a guard against a runtime regression, not a
+    # budget. Measured cold on the first run, 11 m 43 -- of which 7 m 31 is
+    # instantiating CairoMakie and 3 m 50 the four renders -- so 30 leaves
+    # 2.5x of headroom over a cold draw, and a warm one skips most of the
+    # precompilation.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1"
+      # The default cache key carries the job name, so this environment --
+      # which is CairoMakie and a second TreeAMR checkout, and the test
+      # matrix's is neither -- gets its own entry without being told to.
+      - uses: julia-actions/cache@v3
+      - name: Instantiate the viewer environment
+        run: julia --project=bin -e 'using Pkg; Pkg.instantiate()'
+      - name: Render the tracked shock tube
+        run: julia --project=bin bin/visualize1d.jl --no-display
+      # The reduced-precision path has its own conversions -- at the plotting
+      # boundary, and in the host `Float64` exact Riemann solution -- and none
+      # of them are exercised by the default render. The tube is the cheap
+      # case to do it on.
+      - name: Render the shock tube at Float32
+        run: julia --project=bin bin/visualize1d.jl --type=f32 --no-display
+      - name: Render the Kelvin-Helmholtz filmstrip and diagnostics
+        run: julia --project=bin bin/visualize2d.jl --case=kh --no-display
+      - name: Render the Sedov filmstrip and radial scatter
+        run: julia --project=bin bin/visualize2d.jl --case=sedov --no-display
+      # Four separate processes on purpose, and not one `julia -e` that
+      # includes both scripts: each defines `main`, `snapshot`/`frame2d` and
+      # `const LEVELCOLORS` at top level in `Main`, and Julia 1.11 -- the
+      # floor this package is pinned to -- refuses to redefine a `const`.
+      - name: Check that every figure was written
+        run: |
+          test -s bin/output/sod_1d.png
+          test -s bin/output/sod_1d_f32.png
+          test -s bin/output/kh_2d.png
+          test -s bin/output/sedov_2d.png
+      - uses: actions/upload-artifact@v7
+        with:
+          name: figures
+          path: bin/output/*.png

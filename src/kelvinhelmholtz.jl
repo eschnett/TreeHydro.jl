@@ -441,6 +441,15 @@ default in [`HydroProblem`](@ref) and [`evolve!`](@ref) stays `:hlle`, which is
 driver, the injection is one of the numbers it exists to report, and on this
 case it is expected to be exactly zero.
 
+`observer` is handed through to the run and called **after** the three
+diagnostics have been taken, with the same `(problem, t, u)` the driver gives
+its own hook — which is what the viewer of step 11 uses for its filmstrip
+*(added in step 11)*. It is a pass-through and not a second observer on
+[`evolve!`](@ref) on purpose: the driver takes only one, and a caller who
+installed its own there would be taking `M` and `K` somewhere other than here,
+which is exactly what the paragraph above says must not happen. Passing
+nothing leaves the run bit-identical to one that never had the keyword.
+
 `refine_tol`, `coarsen_tol`, `chunk`, `maxlevel_cap`, `N` and `ops` have no
 defaults, for the reason [`evolve!`](@ref) gives; anything not listed goes to
 [`KelvinHelmholtz`](@ref).
@@ -451,7 +460,7 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
                 coarsen_tol, t_end=3 // 2, roots=4, scale=1, limiter=:minmod,
                 riemann=:hllc, fixup=true, reset=:stage, cfl=2 // 5,
                 speed_headroom=1, accounting::Bool=true, backend=CPU(),
-                params...) where {T,D}
+                observer=nothing, params...) where {T,D}
     w = KelvinHelmholtz(T, Val(D); params...)
     case = HydroCase(w; roots=roots, speed_headroom=speed_headroom)
     ts, Ms, Ks, nbs = Float64[], Float64[], Float64[], Int[]
@@ -460,6 +469,9 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
         push!(Ms, mode_amplitude(pr.P, w))
         push!(Ks, max_y_kinetic_energy(pr.P))
         push!(nbs, nblocks(pr.P))
+        # After the diagnostics, so that a viewer's frame is pushed beside
+        # the `M` and `K` that belong to it rather than one sample ahead.
+        observer === nothing || observer(pr, t, u)
     end
     r = evolve!(case, Val(D); N=N, ops=ops, t_end=t_end, chunk=chunk,
                 limiter=limiter, refine_tol=refine_tol,

@@ -1,0 +1,23 @@
+# The viewers have their own environment so that CairoMakie -- a heavy
+# dependency that nothing in `src/` needs -- never becomes a dependency of
+# the package. The `[sources]` entries make
+# `julia --project=bin bin/visualize1d.jl` work from a fresh checkout with
+# no manual `Pkg.develop`.
+#
+# There are now **two** TreeAMR pins, this one and the package's own, and a
+# change that updates only one leaves the viewers resolving a branch the
+# tests are not using. Grep for `rev =` rather than editing from memory.
+#
+# `KernelAbstractions` is here because `bin/backend.jl` needs it, and that
+# file must work in this environment as well as the package one.
+
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+SixelTerm = "65edfddc-f399-4499-8369-a1bd38eee2ea"
+TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
+TreeHydro = "18f621c7-d3c4-4697-8f68-54143cdddff7"
+
+[sources]
+TreeAMR = {url = "https://github.com/eschnett/TreeAMR.jl", rev = "main"}
+TreeHydro = {path = ".."}
