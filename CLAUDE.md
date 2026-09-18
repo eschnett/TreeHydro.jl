@@ -358,8 +358,18 @@ julia --project=bin bin/visualize2d.jl --case=kh --movie
 ```
 
 with `--movie-frames=`, `--movie-fps=` and `--movie-format=mp4|gif` beside
-it. The shear layer's 301 frames cost minutes, not seconds; see "Step 11"
-in `CODE.md` for the measured number before being surprised by it. PNGs land in `bin/output/`, which is
+it. The shear layer's 301 frames cost about **a minute all in**, most of it
+the two evolutions rather than the encoding — the movie draws one heatmap
+over a uniform fine grid and pushes into `Observable`s, which is twelve
+times cheaper a frame than one heatmap per block rebuilt each frame, and
+what `--threads=auto` cannot help with. See "A movie" in `CODE.md`.
+
+`--cap=` and `--chunk=` open up the mesh, and **they move together**: the
+buffer's margin is `speed_headroom · λ · chunk` at the cap's spacing, so
+halve the chunk for each level added or the margin widens and more of the
+box is refined. `--cap=5` at the default chunk throws out of
+`refinement_buffer` naming the constraint. A non-default mesh writes its own
+filenames, so a `--cap=3` render cannot overwrite what CI checks. PNGs land in `bin/output/`, which is
 gitignored, and a terminal also gets them inline through SixelTerm — a
 pipe does not, which is what `--no-display` makes explicit in CI. Roughly
 26 s, 28 s and 53 s per figure, most of the first 20 s of each being
