@@ -364,6 +364,12 @@ over a uniform fine grid and pushes into `Observable`s, which is twelve
 times cheaper a frame than one heatmap per block rebuilt each frame, and
 what `--threads=auto` cannot help with. See "A movie" in `CODE.md`.
 
+`--speed-headroom=` and `--no-reference` are the two a deeper mesh needs:
+the first because the CFL recheck has no margin at headroom 1 (see "Things
+that will bite"), the second because the uniform fine reference quadruples
+per level, supplies only the figure's dashed overlay curves, and is nothing
+a movie needs.
+
 `--cap=` and `--chunk=` open up the mesh, and **they move together**: the
 buffer's margin is `speed_headroom · λ · chunk` at the cap's spacing, so
 halve the chunk for each level added or the margin widens and more of the
@@ -780,6 +786,32 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   order-one totals — every drift in this package — cannot be made
   relatively at all. Assert such a quantity against its bound instead,
   which is what the suite does and why it travels.
+- **At `speed_headroom = 1` the CFL recheck is protected by nothing but
+  integer-step quantization, and that protection shrinks as the mesh
+  refines** (found after step 11, running the shear layer at `--cap=4`).
+  `check_cfl` allows `8 eps` of slack, so a headroom of exactly 1 tolerates
+  *no* growth of `λ` within a chunk except what the step rounding gives:
+  the step taken is `chunk / ceil(chunk / dt_requested)`, which at cap 2 is
+  8.34% under the step asked for and at cap 4 was **0.0083%** under it. The
+  shear layer's `λ` grows 1.00033 within a chunk at every cap — that number
+  is in `CODE.md` and always was — so cap 2 passes and cap 4 throws on the
+  *same* physics. Remedy: `--speed-headroom=1.05`, which is 150× the
+  growth for 5% more steps. **Shortening the chunk is not the remedy**,
+  though it is the remedy for the buffer margin — it scales the growth down
+  linearly and leaves the tolerance a lottery on where `chunk / dt` falls
+  relative to an integer. Two constraints, two different fixes, and it is
+  easy to reach for the wrong one.
+- **And the two fixes fight each other: raising the headroom spends the
+  buffer margin.** The margin is `ceil(speed_headroom · λ · chunk / h_cap)
+  + 1`, so the headroom that fixes the CFL recheck widens the very quantity
+  the margin bounds. Measured: `--cap=4 --chunk=1/200` derives exactly 8
+  cells at headroom 1 — `N`, with nothing to spare — and
+  `--speed-headroom=1.05` takes it to 9 and throws out of
+  `refinement_buffer`. The margin is also derived from the `λ` *then
+  current*, which on the shear layer reaches 2.6048 against the initial
+  data's 2.5412, so any table computed from the initial `λ` is a lower
+  bound. At cap 4 the combination that works is `--chunk=1/400`: a 5-cell
+  margin, and room left for whatever headroom the recheck needs.
 - **CI's artifact glob is extension-specific, and it silently drops what it
   does not match.** It was `path: bin/output/*.png` until the movie
   arrived, so an `.mp4` rendered in CI would have been produced, asserted

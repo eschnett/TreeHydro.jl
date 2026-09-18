@@ -1768,6 +1768,35 @@ assumed, and each recorded with its number under "Step 10" below:
   `λ_max`, which is the mechanism that forces `2` on Sod and on Sedov.
   Measured worst growth over 300 chunks: **1.00031**. The entropy wave is
   the only other case at `1`.
+
+  **(Amended after step 11: this holds at the calibrated cap and not at
+  deeper ones, and the reason is not the physics.)** `λ` does grow within a
+  chunk here — the recorded 1.00031 says so — and at `speed_headroom = 1`
+  the step is sized for exactly `λ`, so the *only* thing absorbing that
+  growth is integer-step quantization: the step actually taken is
+  `chunk / ceil(chunk / dt_requested)`, which is at most the step asked for
+  and usually less. That incidental slack is what the case has been running
+  on, and it shrinks as the mesh refines because a chunk holds more steps:
+
+  | cap | steps per chunk | slack | growth it tolerates |
+  |---|---|---|---|
+  | 2 (calibrated) | 9 | 8.34% | 270× the observed growth |
+  | 3 | 17 | 2.95% | 95× |
+  | 4 | 33 | **0.0083%** | **0.25× — throws** |
+
+  Measured: `--cap=4 --chunk=1/200` throws out of [`check_cfl`](@ref) in
+  chunk 228 with a CFL number of 0.40010 against 0.4, on a growth of
+  1.00033 — the same growth the case has always had, against a quarter of
+  the slack it needs. So `speed_headroom = 1` was never a statement that
+  `λ` does not grow; it was a statement that the quantization happened to
+  cover the growth at `cap = 2`, and the cover is a lottery on where
+  `chunk / dt` falls relative to an integer rather than a margin anyone
+  chose. A deeper cap needs a headroom above 1 — `1.05` is 150× the
+  observed growth and costs 5% more steps — and **shortening the chunk is
+  not the remedy here**, which is worth saying because it *is* the remedy
+  for the buffer margin: it scales the growth down linearly while leaving
+  the tolerance a lottery. `bin/visualize2d.jl` exposes
+  `--speed-headroom=` for this.
 - **`chunk = 1/200`, and it is the *margin* that sets it, not the CFL
   condition.** The derived buffer is `ceil(headroom·λ·chunk/h_cap) + 1`,
   and on this case the buffer is what decides how much of the box is
@@ -3843,7 +3872,7 @@ wider than one block, and the shear layer's `λ_max` is
 |---|---|---|
 | 2 (default) | 3 cells | 2 cells |
 | 3 | 5 cells | 3 cells |
-| 4 | 8 cells (at the limit) | 5 cells |
+| 4 | 8 cells — **the limit, with nothing to spare** | 5 cells |
 | 5 | **throws**, 15 cells | 8 cells |
 
 Verified at the top and bottom: the recorded default really is a 3-cell
@@ -3853,14 +3882,33 @@ N = 8"*. So the rule is **halve the chunk for each level added**, which
 holds the margin where it was; a cap raised on its own widens the margin
 instead, and the margin is what decides how much of the box is refined.
 
-It is worth doing. At `--cap=3` on the default chunk the shear layer ends at
-604 blocks — 38656 cells against the 65536 of the uniform fine mesh it is
-now being compared with, **59%**, where cap 2 sits at 91%. The saving
-improves with depth because the feature occupies less of the box as the
-resolution rises. The cost is the other way: the uniform fine reference is
-`scale = 2^cap`, so it quadruples per level, and at cap 3 a 60-frame movie
-takes 3 m 36 of which almost all is the two evolutions. That reference is
-only there for the figure's dashed overlay curves; a movie does not need it.
+**Two corrections to that table, both learned by running it.** It is
+computed from the initial data's `λ = 2.5412`, and the margin is derived at
+each regrid from the `λ` *then current* — which on this case reaches
+**2.6048**, 2.5% higher, so every entry is a lower bound rather than the
+value. And the margin is `speed_headroom · λ · chunk`, so **the headroom
+multiplies it too**: at `cap = 4, chunk = 1/200` the 8-cell entry is
+exactly `N`, and asking for `--speed-headroom=1.05` there takes it to 9 and
+throws. The two remedies therefore interact, which is the thing to know:
+*raising the headroom spends the margin*. At cap 4 the combination that
+works is `--chunk=1/400`, which buys a 5-cell margin and leaves room for
+any headroom the CFL recheck needs.
+
+It is worth doing, and the saving *improves* with depth because the feature
+occupies less of the box as the resolution rises:
+
+| cap | blocks | cells | uniform fine | share |
+|---|---|---|---|---|
+| 2 | 232 | 14848 | 16384 | 91% |
+| 3 | 604 | 38656 | 65536 | 59% |
+| 4 | 1564 | 100096 | 262144 | **38%** |
+
+The cost runs the other way. The uniform fine reference is `scale = 2^cap`
+and quadruples per level — at cap 4 it is a uniform 512² — and it exists
+only for the figure's dashed overlay curves and the block-count line.
+Nothing in the *movie* needs it, so `--no-reference` skips it: the cap-4
+run above is 2 m 14 for 200 frames without it, against 3 m 36 for a 60-frame
+cap-3 run with it.
 
 One trap fixed while adding it: the artifact upload globbed
 `bin/output/*.png`, so a movie rendered in CI would have been produced,

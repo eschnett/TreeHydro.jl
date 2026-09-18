@@ -9,6 +9,7 @@
 #     julia --project=bin bin/visualize2d.jl --case=kh --movie
 #     julia --project=bin bin/visualize2d.jl --movie --movie-frames=60 --movie-format=gif
 #     julia --project=bin bin/visualize2d.jl --case=kh --cap=3 --chunk=1/400 --movie
+#     julia --project=bin bin/visualize2d.jl --case=kh --cap=4 --chunk=1/400 --speed-headroom=1.05 --no-reference --movie
 #     julia --project=bin bin/visualize2d.jl --type=f32
 #     julia --project=bin bin/visualize2d.jl --backend=metal --type=f32
 #
@@ -60,6 +61,21 @@
 # container; `FFMPEG_jll` comes with Makie, so none of this is a new
 # dependency. The figure is byte-identical whether or not a movie is asked
 # for, which is what `keptframes` is for.
+#
+# Two more that a deeper mesh needs. `--speed-headroom=` multiplies the `λ`
+# the step is sized from: at exactly 1 -- this case's calibrated value --
+# the end-of-chunk CFL recheck is protected by nothing but integer-step
+# quantization, which is 8.3% of slack at cap 2 and 0.008% at cap 4, so the
+# *same* 1.00033 growth of `λ` that cap 2 has always had throws there.
+# 1.05 is 150x the growth for 5% more steps. Shortening the chunk is **not**
+# the remedy for that, though it is the remedy for the margin below --
+# and the two interact: the margin is `speed_headroom * lambda * chunk`, so
+# **raising the headroom spends the margin**. At cap 4 with the default
+# chunk the margin is already exactly `N`, and a headroom of 1.05 takes it
+# over; `--chunk=1/400` is what leaves room for both.
+# `--no-reference` skips the uniform fine run, which quadruples per level,
+# feeds only the figure's dashed overlay curves, and is nothing a movie
+# needs.
 #
 # `--cap=` deepens the hierarchy and `--chunk=` sets the regrid cadence,
 # and **they move together**: the buffer's margin is
@@ -411,7 +427,8 @@ diagnostics recorded and not a second computation of them -- which is the
 whole reason that keyword exists. See "Step 10" in `CODE.md`.
 """
 function khcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
-                movie_frames=nothing, cap=KH.cap, chunk=KH.chunk) where {T}
+                movie_frames=nothing, cap=KH.cap, chunk=KH.chunk,
+                speed_headroom=1, reference=true) where {T}
     ncalls = Int(ceil(KH.t_end / chunk)) + 1
     keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
     kept, seen = Tuple{Int,Any}[], Ref(0)
@@ -423,25 +440,37 @@ function khcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
     tr = kh_run(T, Val(2); N=KH.N, ops=viewer_ops(ops_order), chunk=chunk,
                 maxlevel_cap=cap, refine_tol=REFINE_TOL,
                 coarsen_tol=COARSEN_TOL, t_end=KH.t_end, roots=KH.roots,
-                riemann=:hllc, backend=backend, observer=grab)
-    @info "running the uniform fine reference"
+                riemann=:hllc, speed_headroom=speed_headroom, backend=backend,
+                observer=grab)
     # `scale = 2^cap` shares the tracked run's *finest* spacing, and the
     # same `chunk` makes the two sample `M(t)` at the same times -- which is
     # what makes the two curves comparable at all.
-    fine = kh_uniform(T, Val(2); N=KH.N, ops=viewer_ops(ops_order),
-                      chunk=chunk, t_end=KH.t_end, roots=KH.roots,
-                      scale=2^cap, riemann=:hllc, backend=backend)
+    #
+    # It is also the expensive half, and it quadruples per level: at cap 4 it
+    # is a uniform 512^2. Nothing in the *movie* needs it -- it supplies the
+    # figure's dashed overlay curves and the block-count reference line and
+    # nothing else -- so `--no-reference` skips it and the figure says so.
+    fine = nothing
+    if reference
+        @info "running the uniform fine reference"
+        fine = kh_uniform(T, Val(2); N=KH.N, ops=viewer_ops(ops_order),
+                          chunk=chunk, t_end=KH.t_end, roots=KH.roots,
+                          scale=2^cap, riemann=:hllc,
+                          speed_headroom=speed_headroom, backend=backend)
+    end
     # The fit window is a range of `M` and not of `t`, so that it means the
     # same phase of the instability at every resolution: `2a ≤ M ≤ 6a` on the
     # seeded amplitude `a`, which is `test/kelvinhelmholtz_tests.jl`'s
     # `KH_WINDOW` and the window every rate in `CODE.md` was fitted over.
     a = Float64(TreeHydro.tofloat64(tr.w.a))
     rate = growth_rate(tr.ts, tr.Ms; from=2a, to=6a)
+    against = fine === nothing ? "no uniform reference (--no-reference)" :
+              @sprintf("%d uniformly fine", fine.r.cells)
     title = @sprintf("Kelvin–Helmholtz shear layer, %s, HLLC — tracked at cap \
-                      %d, %d cells in %d blocks against %d uniformly fine\n\
+                      %d, %d cells in %d blocks against %s\n\
                       M(0) = %.4f grows to M(%.2f) = %.5f at a fitted rate of \
                       %.5f, below the incompressible bounds 4.384 and 5.9238",
-                     T, cap, tr.r.cells, tr.r.nblocks, fine.r.cells,
+                     T, cap, tr.r.cells, tr.r.nblocks, against,
                      tr.Ms[1], tr.ts[end], tr.Ms[end], rate)
     return (snaps=filmframes(kept, film), movie=movieframes(kept, mov),
             tr=tr, fine=fine, title=title,
@@ -454,7 +483,7 @@ function khfigure(c)
     Label(fig[0, 1:2], c.title; fontsize=15, padding=(0, 0, 8, 0))
     filmstrip!(GridLayout(fig[1, 1:2]), c.snaps; colormap=:viridis)
 
-    tr, fine = c.tr, c.fine
+    tr, fine = c.tr, c.fine        # `fine === nothing` under --no-reference
     a = Float64(TreeHydro.tofloat64(tr.w.a))
     # The two diagnostics side by side in a layout of their own, so that
     # neither is squeezed into the legend column's width.
@@ -465,22 +494,26 @@ function khfigure(c)
     # rate is a property of this band and of nothing outside it.
     hspan!(axM, 2a, 6a; color=(:steelblue, 0.10))
     lines!(axM, tr.ts, tr.Ms; linewidth=2, label="tracked, cap $(KH.cap)")
-    lines!(axM, fine.ts, fine.Ms; linewidth=2, linestyle=:dash, color=:black,
-           label="uniform fine")
+    fine === nothing ||
+        lines!(axM, fine.ts, fine.Ms; linewidth=2, linestyle=:dash,
+               color=:black, label="uniform fine")
     axislegend(axM; position=:rb, framevisible=false, labelsize=10)
 
     axK = Axis(series[1, 2]; yscale=log10, xlabel="t",
                ylabel="max ½ρv_y²",
                title="the kinetic-energy diagnostic")
     lines!(axK, tr.ts, tr.Ks; linewidth=2)
-    lines!(axK, fine.ts, fine.Ks; linewidth=2, linestyle=:dash, color=:black)
+    fine === nothing ||
+        lines!(axK, fine.ts, fine.Ks; linewidth=2, linestyle=:dash,
+               color=:black)
 
     axn = Axis(fig[3, 1]; xlabel="t", ylabel="blocks",
                title="the refined region grows with the rolls")
     lines!(axn, tr.ts, Float64.(tr.nbs); color=:seagreen, linewidth=2,
            label="tracked")
-    hlines!(axn, [Float64(fine.nbs[1])]; color=:black, linestyle=:dash,
-            linewidth=2, label="uniform fine")
+    fine === nothing ||
+        hlines!(axn, [Float64(fine.nbs[1])]; color=:black, linestyle=:dash,
+                linewidth=2, label="uniform fine")
     axislegend(axn; position=:rb, framevisible=false, labelsize=10)
 
     levels = sort(unique(b.lvl for b in c.snaps[end].blocks))
@@ -509,9 +542,10 @@ here as `test/sedov_tests.jl` assembles it.
 """
 function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
                    movie_frames=nothing, cap=SEDOV2D.cap,
-                   chunk=SEDOV2D.chunk) where {T}
+                   chunk=SEDOV2D.chunk, speed_headroom=2,
+                   reference=true) where {T}
     w = SedovBlast(T, Val(2); r₀=SEDOV2D.r₀)
-    case = HydroCase(w; roots=SEDOV2D.roots)
+    case = HydroCase(w; roots=SEDOV2D.roots, speed_headroom=speed_headroom)
     ncalls = Int(ceil(SEDOV2D.t_end / chunk)) + 1
     keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
     kept, seen = Tuple{Int,Any}[], Ref(0)
@@ -655,6 +689,12 @@ function main(args)
     # what decides how much of the box is refined -- see the header.
     cap = nothing
     chunk = nothing
+    # `nothing` means each case's own measured value -- 1 for the shear
+    # layer, 2 for the blast. The end-of-chunk CFL recheck has only a few
+    # ulp of slack, so a headroom of exactly 1 tolerates *no* growth of λ
+    # within a chunk; see the header.
+    headroom = nothing
+    reference = true
     # Sixel is for a human looking at a terminal; a pipe gets the paths.
     inline = stdout isa Base.TTY
     for a in args
@@ -694,13 +734,20 @@ function main(args)
         elseif startswith(a, "--chunk=")
             chunk = parsechunk(a[9:end])
             chunk > 0 || error("--chunk must be positive; got $chunk")
+        elseif startswith(a, "--speed-headroom=")
+            headroom = parse(Float64, a[18:end])
+            headroom ≥ 1 ||
+                error("--speed-headroom must be at least 1; got $headroom")
+        elseif a == "--no-reference"
+            reference = false
         elseif a == "--display"
             inline = true
         elseif a == "--no-display"
             inline = false
         else
             error("unknown argument $a; expected --case=, --out=, --ops=, \
-                   --type=, --backend=, --cap=, --chunk=, --movie, \
+                   --type=, --backend=, --cap=, --chunk=, \
+                   --speed-headroom=, --no-reference, --movie, \
                    --movie-frames=, --movie-fps=, --movie-format=, \
                    --display, --no-display")
         end
@@ -728,6 +775,8 @@ function main(args)
                   movie_frames=movie_frames)
             cap === nothing || (kw = (; kw..., cap=cap))
             chunk === nothing || (kw = (; kw..., chunk=chunk))
+            headroom === nothing || (kw = (; kw..., speed_headroom=headroom))
+            reference || (kw = (; kw..., reference=false))
             c = build(T; kw...)
             fig = draw(c)
             path = joinpath(outdir, "$(name)_2d$(typetag)$(meshtag).png")
