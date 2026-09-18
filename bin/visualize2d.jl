@@ -8,6 +8,8 @@
 #     julia --project=bin bin/visualize2d.jl --case=sedov --out=/tmp
 #     julia --project=bin bin/visualize2d.jl --case=kh --movie
 #     julia --project=bin bin/visualize2d.jl --movie --movie-frames=60 --movie-format=gif
+#     julia --project=bin bin/visualize2d.jl --case=kh --cap=3 --chunk=1/400 --movie
+#     julia --project=bin bin/visualize2d.jl --case=kh --cap=4 --chunk=1/400 --speed-headroom=1.05 --no-reference --movie
 #     julia --project=bin bin/visualize2d.jl --type=f32
 #     julia --project=bin bin/visualize2d.jl --backend=metal --type=f32
 #
@@ -60,6 +62,29 @@
 # dependency. The figure is byte-identical whether or not a movie is asked
 # for, which is what `keptframes` is for.
 #
+# Two more that a deeper mesh needs. `--speed-headroom=` multiplies the `λ`
+# the step is sized from: at exactly 1 -- this case's calibrated value --
+# the end-of-chunk CFL recheck is protected by nothing but integer-step
+# quantization, which is 8.3% of slack at cap 2 and 0.008% at cap 4, so the
+# *same* 1.00033 growth of `λ` that cap 2 has always had throws there.
+# 1.05 is 150x the growth for 5% more steps. Shortening the chunk is **not**
+# the remedy for that, though it is the remedy for the margin below --
+# and the two interact: the margin is `speed_headroom * lambda * chunk`, so
+# **raising the headroom spends the margin**. At cap 4 with the default
+# chunk the margin is already exactly `N`, and a headroom of 1.05 takes it
+# over; `--chunk=1/400` is what leaves room for both.
+# `--no-reference` skips the uniform fine run, which quadruples per level,
+# feeds only the figure's dashed overlay curves, and is nothing a movie
+# needs.
+#
+# `--cap=` deepens the hierarchy and `--chunk=` sets the regrid cadence,
+# and **they move together**: the buffer's margin is
+# `speed_headroom * lambda * chunk` at the cap's spacing, so a level added
+# without halving the chunk widens the margin -- which is what decides how
+# much of the box is refined -- and two levels added without it throws out
+# of `refinement_buffer` naming the constraint. A non-default mesh writes
+# its own filenames, so it cannot overwrite the default render.
+#
 # The runs come from `kh_run` and `evolve!` via their `observer` keyword,
 # so this script contains no time-stepping loop of its own. See `CODE.md`.
 
@@ -98,6 +123,20 @@ const KH = (roots=4, N=8, cap=2, chunk=1 // 200, t_end=3 // 2)
 const SEDOV2D = (roots=4, N=8, cap=2, r₀=1 // 16, chunk=1 // 400, t_end=1 // 10)
 
 viewer_ops(p=3) = Operators(family=Conservative, prolongation=p, restriction=2)
+
+"""
+`--chunk=1/400` as the `Rational` the drivers want.
+
+A `Rational` and not a `Float64` because the chunk is a cadence the whole
+run is counted in — `ceilint(t_end / chunk)` has to come out exact, and
+`1/400` as a binary float does not.
+"""
+function parsechunk(str)
+    parts = split(str, '/')
+    length(parts) == 2 || error(
+        "--chunk must be written as a fraction, e.g. --chunk=1/400; got $str")
+    return parse(Int, parts[1]) // parse(Int, parts[2])
+end
 
 """
 One frame: every block's `ρ`, the geometry a heatmap needs, and its level.
@@ -174,17 +213,29 @@ figure time for a picture that draws in one.
 """
 function blockoutlines!(ax, snap)
     for lvl in sort(unique(b.lvl for b in snap.blocks))
-        pts = Point2f[]
-        for b in snap.blocks
-            b.lvl == lvl || continue
-            (x0, x1), (y0, y1) = b.ext[1], b.ext[2]
-            append!(pts, [Point2f(x0, y0), Point2f(x1, y0), Point2f(x1, y1),
-                          Point2f(x0, y1), Point2f(x0, y0),
-                          Point2f(NaN, NaN)])
-        end
-        lines!(ax, pts; color=levelcolor(lvl), linewidth=0.6)
+        lines!(ax, outlinepoints(snap, lvl); color=levelcolor(lvl),
+               linewidth=0.6)
     end
     return ax
+end
+
+"""
+The rectangles of every block at one level, as one `NaN`-broken polyline.
+
+Split out of [`blockoutlines!`](@ref) so that the movie can push new points
+into a `lines!` it built once instead of building a new one every frame.
+The points are the same ones in the same order, so the filmstrip draws
+exactly what it drew before -- which `cmp` on the PNG is what checks.
+"""
+function outlinepoints(snap, lvl)
+    pts = Point2f[]
+    for b in snap.blocks
+        b.lvl == lvl || continue
+        (x0, x1), (y0, y1) = b.ext[1], b.ext[2]
+        append!(pts, [Point2f(x0, y0), Point2f(x1, y0), Point2f(x1, y1),
+                      Point2f(x0, y1), Point2f(x0, y0), Point2f(NaN, NaN)])
+    end
+    return pts
 end
 
 """The four frames laid out with a shared colour range and one colorbar."""
@@ -206,10 +257,52 @@ function filmstrip!(layout, snaps; colormap)
 end
 
 """
+    moviegrid(snaps) -> (x, y, Mx, My, h)
+
+The uniform grid at the *finest* spacing any frame uses, and the cell edges
+of it.
+
+The movie draws one heatmap over this grid instead of one per block, which
+is what makes it affordable. That is a rasterization choice and not an
+approximation: a heatmap is piecewise constant over each cell, so painting a
+level-`l` cell onto the `2^(cap-l)` square of fine cells it covers puts
+exactly the same colour on exactly the same pixels that one heatmap per
+block did. The mesh is a 2:1 quadtree, so that ratio is always a whole
+number and the cells always line up.
+"""
+function moviegrid(snaps)
+    h = minimum(b.h for s in snaps for b in s.blocks)
+    x0 = minimum(b.ext[1][1] for s in snaps for b in s.blocks)
+    y0 = minimum(b.ext[2][1] for s in snaps for b in s.blocks)
+    x1 = maximum(b.ext[1][2] for s in snaps for b in s.blocks)
+    y1 = maximum(b.ext[2][2] for s in snaps for b in s.blocks)
+    Mx, My = round(Int, (x1 - x0) / h), round(Int, (y1 - y0) / h)
+    return (range(x0, x1; length=Mx + 1), range(y0, y1; length=My + 1),
+            Mx, My, h)
+end
+
+"""One frame's blocks painted onto the uniform fine grid of [`moviegrid`](@ref)."""
+function rasterize!(img, snap, xs, ys, h)
+    N = snap.N
+    fill!(img, NaN)
+    for b in snap.blocks
+        c = round(Int, b.h / h)                  # fine cells per block cell
+        i0 = round(Int, (b.ext[1][1] - first(xs)) / h)
+        j0 = round(Int, (b.ext[2][1] - first(ys)) / h)
+        for jj in 1:N, ii in 1:N
+            v = b.ρ[ii, jj]
+            @inbounds img[(i0 + (ii - 1) * c + 1):(i0 + ii * c),
+                          (j0 + (jj - 1) * c + 1):(j0 + jj * c)] .= v
+        end
+    end
+    return img
+end
+
+"""
     moviefile(path, snaps; colormap, fps, label) -> path
 
-Every retained frame as a video, one heatmap per block with the block
-outlines over it -- the filmstrip's panel, animated.
+Every retained frame as a video, over the uniform fine grid with the block
+outlines on top -- the filmstrip's panel, animated.
 
 This is what the four-frame strip cannot show: the shear layer *evolves*,
 and its whole interest is the order in which things happen. The seeded mode
@@ -217,40 +310,62 @@ decays while the ramp sheds its transient, takes off around `t = 0.5`, and
 rolls up; the refined region thickens with the rolls rather than travelling
 with them. Four stills sample that; 301 frames are the thing itself.
 
-Three details that are not free choices:
+**Every plot object is built once and then fed new data**, which is the
+whole of why this is fast enough to use. The obvious way -- `empty!(ax)` and
+one `heatmap!` per block per frame -- costs 0.29 s a frame at 200 blocks and
+does not stay linear: 301 frames took 7 m 31 that way, against 2 m 45 for
+151. Drawing one heatmap over [`moviegrid`](@ref)'s uniform grid and pushing
+into `Observable`s instead is **about twelve times cheaper a frame** and
+leaves four plot objects alive rather than two hundred per frame. The
+picture is identical; see [`moviegrid`](@ref) for why that is exact rather
+than close.
 
-- **`empty!(ax)` every frame.** [`fieldpanel!`](@ref) emits one `heatmap!`
-  per block and the mesh is not fixed -- the shear layer grows 160 -> 232
-  blocks over three regrids -- so a frame drawn on top of the last would
-  keep the previous mesh's blocks underneath it wherever the new one is
-  coarser.
-- **The colour range is fixed over the whole movie**, taken from the frames
-  that will actually be drawn, exactly as [`filmstrip!`](@ref) takes it. A
-  per-frame range would renormalize every frame and turn a growing
-  instability into a constant-looking one.
-- **The `Colorbar` is built from `colorrange` and not from a plot handle.**
-  The handle a `heatmap!` returns is deleted by the next `empty!`, so a
-  colorbar attached to one would be pointing at a dead plot from frame two
-  onward.
+Two details that are still not free choices. The colour range is fixed over
+the whole movie, taken from the frames that will be drawn exactly as
+[`filmstrip!`](@ref) takes it, because a per-frame range renormalizes every
+frame and turns a growing instability into a constant-looking one. And the
+`Colorbar` is built from `colorrange` rather than from a plot handle, which
+also spares it any dependence on how the frames are drawn.
 
-`Makie.record` picks the container from the extension, and both `.mp4` and
-`.gif` work here: `FFMPEG_jll` arrives as a dependency of Makie, so the
+`px_per_unit` drops to 1 for the recording and is put back afterwards: the
+figures want the denser raster and a video does not, and at 1800x1900 the
+frames cost about 1.6x what they cost at 900x950 for nothing a player will
+show. `Makie.record` picks the container from the extension, and both `.mp4`
+and `.gif` work here: `FFMPEG_jll` arrives as a dependency of Makie, so the
 movie costs `bin/Project.toml` nothing.
 """
 function moviefile(path, snaps; colormap, fps, label)
     lo = minimum(minimum(minimum(b.ρ) for b in s.blocks) for s in snaps)
     hi = maximum(maximum(maximum(b.ρ) for b in s.blocks) for s in snaps)
-    fig = Figure(; size=(900, 950))
-    ax = Axis(fig[1, 1]; aspect=DataAspect(), titlesize=13)
-    hidedecorations!(ax)
-    Colorbar(fig[1, 2]; colorrange=(lo, hi), colormap=colormap, label="ρ",
-             width=12, height=Relative(0.9))
-    record(fig, path, eachindex(snaps); framerate=fps) do k
-        s = snaps[k]
-        empty!(ax)
-        fieldpanel!(ax, s; colorrange=(lo, hi), colormap=colormap)
-        blockoutlines!(ax, s)
-        ax.title = @sprintf("%s — t = %.3f, %d blocks", label, s.t, s.nblocks)
+    xs, ys, Mx, My, h = moviegrid(snaps)
+    # Every level any frame holds, so that a regrid changes what the
+    # outlines say and not how many plots there are.
+    levels = sort(unique(b.lvl for s in snaps for b in s.blocks))
+    img = Observable(fill(NaN, Mx, My))
+    outlines = Dict(l => Observable(Point2f[]) for l in levels)
+
+    CairoMakie.activate!(; type="png", px_per_unit=1)
+    try
+        fig = Figure(; size=(900, 950))
+        ax = Axis(fig[1, 1]; aspect=DataAspect(), titlesize=13)
+        hidedecorations!(ax)
+        heatmap!(ax, xs, ys, img; colormap=colormap, colorrange=(lo, hi))
+        for l in levels
+            lines!(ax, outlines[l]; color=levelcolor(l), linewidth=0.6)
+        end
+        Colorbar(fig[1, 2]; colorrange=(lo, hi), colormap=colormap, label="ρ",
+                 width=12, height=Relative(0.9))
+        record(fig, path, eachindex(snaps); framerate=fps) do k
+            s = snaps[k]
+            img[] = rasterize!(img[], s, xs, ys, h)
+            for l in levels
+                outlines[l][] = outlinepoints(s, l)
+            end
+            ax.title = @sprintf("%s — t = %.3f, %d blocks", label, s.t,
+                                s.nblocks)
+        end
+    finally
+        CairoMakie.activate!(; type="png", px_per_unit=2)
     end
     return path
 end
@@ -312,8 +427,9 @@ diagnostics recorded and not a second computation of them -- which is the
 whole reason that keyword exists. See "Step 10" in `CODE.md`.
 """
 function khcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
-                movie_frames=nothing) where {T}
-    ncalls = Int(ceil(KH.t_end / KH.chunk)) + 1
+                movie_frames=nothing, cap=KH.cap, chunk=KH.chunk,
+                speed_headroom=1, reference=true) where {T}
+    ncalls = Int(ceil(KH.t_end / chunk)) + 1
     keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
     kept, seen = Tuple{Int,Any}[], Ref(0)
     function grab(p, t, u)
@@ -321,32 +437,45 @@ function khcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
         seen[] in keep && push!(kept, (seen[], frame2d(p, t)))
     end
     @info "running the tracked shear layer"
-    tr = kh_run(T, Val(2); N=KH.N, ops=viewer_ops(ops_order), chunk=KH.chunk,
-                maxlevel_cap=KH.cap, refine_tol=REFINE_TOL,
+    tr = kh_run(T, Val(2); N=KH.N, ops=viewer_ops(ops_order), chunk=chunk,
+                maxlevel_cap=cap, refine_tol=REFINE_TOL,
                 coarsen_tol=COARSEN_TOL, t_end=KH.t_end, roots=KH.roots,
-                riemann=:hllc, backend=backend, observer=grab)
-    @info "running the uniform fine reference"
+                riemann=:hllc, speed_headroom=speed_headroom, backend=backend,
+                observer=grab)
     # `scale = 2^cap` shares the tracked run's *finest* spacing, and the
     # same `chunk` makes the two sample `M(t)` at the same times -- which is
     # what makes the two curves comparable at all.
-    fine = kh_uniform(T, Val(2); N=KH.N, ops=viewer_ops(ops_order),
-                      chunk=KH.chunk, t_end=KH.t_end, roots=KH.roots,
-                      scale=2^KH.cap, riemann=:hllc, backend=backend)
+    #
+    # It is also the expensive half, and it quadruples per level: at cap 4 it
+    # is a uniform 512^2. Nothing in the *movie* needs it -- it supplies the
+    # figure's dashed overlay curves and the block-count reference line and
+    # nothing else -- so `--no-reference` skips it and the figure says so.
+    fine = nothing
+    if reference
+        @info "running the uniform fine reference"
+        fine = kh_uniform(T, Val(2); N=KH.N, ops=viewer_ops(ops_order),
+                          chunk=chunk, t_end=KH.t_end, roots=KH.roots,
+                          scale=2^cap, riemann=:hllc,
+                          speed_headroom=speed_headroom, backend=backend)
+    end
     # The fit window is a range of `M` and not of `t`, so that it means the
     # same phase of the instability at every resolution: `2a ≤ M ≤ 6a` on the
     # seeded amplitude `a`, which is `test/kelvinhelmholtz_tests.jl`'s
     # `KH_WINDOW` and the window every rate in `CODE.md` was fitted over.
     a = Float64(TreeHydro.tofloat64(tr.w.a))
     rate = growth_rate(tr.ts, tr.Ms; from=2a, to=6a)
+    against = fine === nothing ? "no uniform reference (--no-reference)" :
+              @sprintf("%d uniformly fine", fine.r.cells)
     title = @sprintf("Kelvin–Helmholtz shear layer, %s, HLLC — tracked at cap \
-                      %d, %d cells in %d blocks against %d uniformly fine\n\
+                      %d, %d cells in %d blocks against %s\n\
                       M(0) = %.4f grows to M(%.2f) = %.5f at a fitted rate of \
                       %.5f, below the incompressible bounds 4.384 and 5.9238",
-                     T, KH.cap, tr.r.cells, tr.r.nblocks, fine.r.cells,
+                     T, cap, tr.r.cells, tr.r.nblocks, against,
                      tr.Ms[1], tr.ts[end], tr.Ms[end], rate)
     return (snaps=filmframes(kept, film), movie=movieframes(kept, mov),
             tr=tr, fine=fine, title=title,
-            label=@sprintf("Kelvin–Helmholtz, %s, HLLC, cap %d", T, KH.cap))
+            cap=cap,
+            label=@sprintf("Kelvin–Helmholtz, %s, HLLC, cap %d", T, cap))
 end
 
 function khfigure(c)
@@ -354,7 +483,7 @@ function khfigure(c)
     Label(fig[0, 1:2], c.title; fontsize=15, padding=(0, 0, 8, 0))
     filmstrip!(GridLayout(fig[1, 1:2]), c.snaps; colormap=:viridis)
 
-    tr, fine = c.tr, c.fine
+    tr, fine = c.tr, c.fine        # `fine === nothing` under --no-reference
     a = Float64(TreeHydro.tofloat64(tr.w.a))
     # The two diagnostics side by side in a layout of their own, so that
     # neither is squeezed into the legend column's width.
@@ -365,22 +494,26 @@ function khfigure(c)
     # rate is a property of this band and of nothing outside it.
     hspan!(axM, 2a, 6a; color=(:steelblue, 0.10))
     lines!(axM, tr.ts, tr.Ms; linewidth=2, label="tracked, cap $(KH.cap)")
-    lines!(axM, fine.ts, fine.Ms; linewidth=2, linestyle=:dash, color=:black,
-           label="uniform fine")
+    fine === nothing ||
+        lines!(axM, fine.ts, fine.Ms; linewidth=2, linestyle=:dash,
+               color=:black, label="uniform fine")
     axislegend(axM; position=:rb, framevisible=false, labelsize=10)
 
     axK = Axis(series[1, 2]; yscale=log10, xlabel="t",
                ylabel="max ½ρv_y²",
                title="the kinetic-energy diagnostic")
     lines!(axK, tr.ts, tr.Ks; linewidth=2)
-    lines!(axK, fine.ts, fine.Ks; linewidth=2, linestyle=:dash, color=:black)
+    fine === nothing ||
+        lines!(axK, fine.ts, fine.Ks; linewidth=2, linestyle=:dash,
+               color=:black)
 
     axn = Axis(fig[3, 1]; xlabel="t", ylabel="blocks",
                title="the refined region grows with the rolls")
     lines!(axn, tr.ts, Float64.(tr.nbs); color=:seagreen, linewidth=2,
            label="tracked")
-    hlines!(axn, [Float64(fine.nbs[1])]; color=:black, linestyle=:dash,
-            linewidth=2, label="uniform fine")
+    fine === nothing ||
+        hlines!(axn, [Float64(fine.nbs[1])]; color=:black, linestyle=:dash,
+                linewidth=2, label="uniform fine")
     axislegend(axn; position=:rb, framevisible=false, labelsize=10)
 
     levels = sort(unique(b.lvl for b in c.snaps[end].blocks))
@@ -408,10 +541,12 @@ measurement driver and takes no observer, so the tracked run is assembled
 here as `test/sedov_tests.jl` assembles it.
 """
 function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
-                   movie_frames=nothing) where {T}
+                   movie_frames=nothing, cap=SEDOV2D.cap,
+                   chunk=SEDOV2D.chunk, speed_headroom=2,
+                   reference=true) where {T}
     w = SedovBlast(T, Val(2); r₀=SEDOV2D.r₀)
-    case = HydroCase(w; roots=SEDOV2D.roots)
-    ncalls = Int(ceil(SEDOV2D.t_end / SEDOV2D.chunk)) + 1
+    case = HydroCase(w; roots=SEDOV2D.roots, speed_headroom=speed_headroom)
+    ncalls = Int(ceil(SEDOV2D.t_end / chunk)) + 1
     keep, film, mov = keptframes(ncalls; movie=movie, movie_frames=movie_frames)
     kept, seen = Tuple{Int,Any}[], Ref(0)
     ts, rs, peaks, nbs = Float64[], Float64[], Float64[], Int[]
@@ -425,9 +560,9 @@ function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
     end
     @info "running the tracked blast"
     r = evolve!(case, Val(2); N=SEDOV2D.N, ops=viewer_ops(ops_order),
-                t_end=SEDOV2D.t_end, chunk=SEDOV2D.chunk, limiter=:minmod,
+                t_end=SEDOV2D.t_end, chunk=chunk, limiter=:minmod,
                 refine_tol=REFINE_TOL, coarsen_tol=COARSEN_TOL,
-                maxlevel_cap=SEDOV2D.cap, accounting=true, backend=backend,
+                maxlevel_cap=cap, accounting=true, backend=backend,
                 observer=watch)
     # The *measured* energy and not the nominal: which cell centres fall
     # inside `r₀` is a property of the mesh, and the ratio is 1.0345 in
@@ -448,14 +583,15 @@ function sedovcase(::Type{T}=Float64; ops_order=3, backend=CPU(), movie=false,
                       the strong-shock 6\nfloor hits %d owned / %d ghost — \
                       tracking keeps every coarse-fine face in undisturbed \
                       ambient, which is why a tracked mesh cannot measure them",
-                     T, SEDOV2D.cap, r.cells, r.nblocks, r.nsteps, E₀,
+                     T, cap, r.cells, r.nblocks, r.nsteps, E₀,
                      Float64(TreeHydro.tofloat64(w.E₀)),
                      exponent_fit(ts, rs; from=3 * Float64(TreeHydro.tofloat64(w.r₀))),
                      peaks[end], r.floor_hits, r.ghost_hits)
     return (snaps=filmframes(kept, film), movie=movieframes(kept, mov),
             r=r, w=w, sim=sim, E₀=E₀, ts=ts, rs=rs, peaks=peaks, nbs=nbs,
             title=title,
-            label=@sprintf("Sedov blast, %s, D = 2, cap %d", T, SEDOV2D.cap))
+            cap=cap,
+            label=@sprintf("Sedov blast, %s, D = 2, cap %d", T, cap))
 end
 
 """
@@ -548,6 +684,17 @@ function main(args)
     movie_frames = nothing
     movie_fps = 30
     movie_ext = "mp4"
+    # `nothing` means each case's own calibrated value. Raising the cap
+    # without shortening the chunk widens the travelling margin, which is
+    # what decides how much of the box is refined -- see the header.
+    cap = nothing
+    chunk = nothing
+    # `nothing` means each case's own measured value -- 1 for the shear
+    # layer, 2 for the blast. The end-of-chunk CFL recheck has only a few
+    # ulp of slack, so a headroom of exactly 1 tolerates *no* growth of λ
+    # within a chunk; see the header.
+    headroom = nothing
+    reference = true
     # Sixel is for a human looking at a terminal; a pipe gets the paths.
     inline = stdout isa Base.TTY
     for a in args
@@ -581,14 +728,28 @@ function main(args)
             movie_ext = a[16:end]
             movie_ext in ("mp4", "gif") ||
                 error("--movie-format must be mp4 or gif; got $movie_ext")
+        elseif startswith(a, "--cap=")
+            cap = parse(Int, a[7:end])
+            cap ≥ 0 || error("--cap must be non-negative; got $cap")
+        elseif startswith(a, "--chunk=")
+            chunk = parsechunk(a[9:end])
+            chunk > 0 || error("--chunk must be positive; got $chunk")
+        elseif startswith(a, "--speed-headroom=")
+            headroom = parse(Float64, a[18:end])
+            headroom ≥ 1 ||
+                error("--speed-headroom must be at least 1; got $headroom")
+        elseif a == "--no-reference"
+            reference = false
         elseif a == "--display"
             inline = true
         elseif a == "--no-display"
             inline = false
         else
             error("unknown argument $a; expected --case=, --out=, --ops=, \
-                   --type=, --backend=, --movie, --movie-frames=, \
-                   --movie-fps=, --movie-format=, --display, --no-display")
+                   --type=, --backend=, --cap=, --chunk=, \
+                   --speed-headroom=, --no-reference, --movie, \
+                   --movie-frames=, --movie-fps=, --movie-format=, \
+                   --display, --no-display")
         end
     end
     case in ("both", "kh", "sedov") ||
@@ -604,10 +765,21 @@ function main(args)
         for (name, build, draw) in (("kh", khcase, khfigure),
                                     ("sedov", sedovcase, sedovfigure))
             (case == "both" || case == name) || continue
-            c = build(T; ops_order=ops_order, backend=backend, movie=movie,
-                      movie_frames=movie_frames)
+            # A non-default mesh keeps its own filenames, for the reason
+            # `--type=` does: a `--cap=3` render must not overwrite the
+            # figure CI checks.
+            meshtag = ""
+            cap === nothing || (meshtag *= "_cap$(cap)")
+            chunk === nothing || (meshtag *= "_chunk$(denominator(chunk))")
+            kw = (; ops_order=ops_order, backend=backend, movie=movie,
+                  movie_frames=movie_frames)
+            cap === nothing || (kw = (; kw..., cap=cap))
+            chunk === nothing || (kw = (; kw..., chunk=chunk))
+            headroom === nothing || (kw = (; kw..., speed_headroom=headroom))
+            reference || (kw = (; kw..., reference=false))
+            c = build(T; kw...)
             fig = draw(c)
-            path = joinpath(outdir, "$(name)_2d$(typetag).png")
+            path = joinpath(outdir, "$(name)_2d$(typetag)$(meshtag).png")
             save(path, fig)
             # A still can go to the terminal; a video cannot, so `--display`
             # says nothing about the movie either way.
@@ -617,7 +789,7 @@ function main(args)
                 @info "encoding $(length(c.movie)) frames"
                 push!(paths,
                       moviefile(joinpath(outdir,
-                                         "$(name)_2d$(typetag).$(movie_ext)"),
+                                         "$(name)_2d$(typetag)$(meshtag).$(movie_ext)"),
                                 c.movie; colormap=MOVIECOLORMAPS[name],
                                 fps=movie_fps, label=c.label))
             end
