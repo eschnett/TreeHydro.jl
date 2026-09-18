@@ -23,17 +23,15 @@ smooth entropy wave (an exact solution, so the convergence order and the
 interface-order rule can be measured), Sod's shock tube (against an exact
 Riemann solver), the Sedov blast (a strong shock through the floors and
 the atmosphere reset, in 3D), and the Kelvin–Helmholtz instability (a
-contact-dominated flow, refinement following a structure that grows, and
-the picture — which is the one part still to come).
+contact-dominated flow, and refinement following a structure that grows).
 
 Every numerical method is chosen to have a direct counterpart in a
 relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: all four cases run — milestones H1, H2, H3 and H4 are done and
-H5 has its physics; the viewers and the figure job are what is left of
-it.** What exists is
+**Status: all four cases run and all four are drawn — milestones H1, H2,
+H3, H4 and H5 are done.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the pinned TreeAMR still
 provides what the scheme is written against, the ideal-gas equation of
@@ -130,7 +128,6 @@ And HLLE against HLLC is not close: the shear layer *is* a contact, HLLE's
 two-wave average is what smears it, and HLLC at half the linear resolution
 is further along than HLLE at full resolution. HLLC becomes this case's
 default; the package-wide default stays HLLE, which is *the* GRMHD flux.
-Still missing: the picture.
 
 There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the
@@ -149,6 +146,40 @@ be passed explicitly:
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
+
+**And there are pictures.** `bin/` holds the viewers, in an environment of
+their own so that CairoMakie is never a dependency of the package. They
+contain no time-stepping loop: every frame and every curve comes through
+the one driver's `observer` hook, which exists for exactly that. The first
+call instantiates the environment, and the `[sources]` entries mean no
+manual `Pkg.develop`:
+
+```bash
+julia --project=bin -e 'using Pkg; Pkg.instantiate()'
+```
+
+The shock tube against the exact Riemann solution, drawn one line per block
+and coloured by refinement level, with the Löhner indicator that built the
+mesh under it and the conserved integrals beside it:
+
+```bash
+julia --project=bin bin/visualize1d.jl
+```
+
+The shear layer rolling up, one heatmap per block with the block outlines
+on top, with McNally's two diagnostics against the uniformly fine run and
+the block count that shows what the refinement saved — and, under
+`--case=sedov`, the blast's filmstrip and the radial scatter against the
+similarity profile:
+
+```bash
+julia --project=bin bin/visualize2d.jl --case=kh
+```
+
+Both take `--type=f32` and `--backend=cuda|metal`; no device package is a
+dependency of this one. CI renders every figure on every push and uploads
+them, because `bin/` sits outside `src/` and `test/` and nothing else would
+notice it breaking.
 
 See [CODE.md](CODE.md) for the design document — the equations, the
 scheme, the cases, and the measured results as they arrive — and

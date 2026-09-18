@@ -1540,7 +1540,11 @@ Timmes 2007), as host `Float64` reference code; the classical value
 The profile is the second part and is **an extension, not a milestone**
 (decided): the exponent, the jump, and the comparison against a uniform
 fine run are the acceptance, and the profile is what makes the
-radial-scatter figure (below) quantitative rather than qualitative.
+radial-scatter figure (below) quantitative rather than qualitative
+**(drawn in step 11: `bin/visualize2d.jl --case=sedov` sweeps the
+profile parametrically in `u` and draws it against the *measured* `E₀`,
+stopping at the shock, the law being the strong-shock limit and
+describing nothing outside it)**.
 
 **What it measures:**
 
@@ -1739,8 +1743,14 @@ a number.
   block with the block boundaries drawn and coloured by level, in the
   manner of TreeWave's `visualize2d.jl`; `M(t)` and the maximum
   `y`-kinetic energy against time with the uniform reference over them;
-  block count against time. *(Step 11; the diagnostics it plots are
-  recorded through the observer by `kh_run`, which step 10 wrote.)*
+  block count against time. **(Implemented in step 11 as
+  `bin/visualize2d.jl --case=kh`, exactly as described.** The diagnostics
+  are the ones `kh_run` records, reached through the `observer`
+  pass-through step 11 added to it, so the figure plots the run's own
+  curves rather than a second computation of them. The four frames are
+  `t = 0, 1/2, 1, 3/2` on one colour range, the fit window `2a ≤ M ≤ 6a`
+  is shaded under `M(t)`, and the uniform fine run's 256 blocks are drawn
+  across the block count as the mesh the 232 are being compared with.)
 
 **What step 10 decided, beside the flux** — each measured rather than
 assumed, and each recorded with its number under "Step 10" below:
@@ -2082,7 +2092,8 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `.github/workflows/CI.yml` | the one workflow: the whole suite on every push, over the Julia × OS matrix, at one thread and at four |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`) |
-| `bin/backend.jl`, `bin/benchmark.jl`, `bin/Project.toml` | as in TreeWave |
+| `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
+| `bin/benchmark.jl` | as in TreeWave, and it arrives with `src/benchmark.jl` in H6c — step 11 shipped the other two and not this one |
 
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
 `OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats`; `bin/`
@@ -2616,7 +2627,7 @@ Each has an acceptance test; serial `Float64` correctness first.
   mesh that follows a closed expanding surface, at a real saving — which is
   met; a criterion that would produce a shell is listed under
   [Possible extensions](#possible-extensions).
-- **H5 — Kelvin–Helmholtz.** The McNally setup, `M(t)` and the kinetic
+- **H5 — Kelvin–Helmholtz.** *(Done.)* The McNally setup, `M(t)` and the kinetic
   energy diagnostic, HLLC, the viewer. *Accept:* `M(t)` grows below the
   incompressible bound and converges toward the uniform fine run as the
   cap rises; conservation through regrids; HLLE against HLLC measured and
@@ -2630,11 +2641,12 @@ Each has an acceptance test; serial `Float64` correctness first.
   through the regrids with a five-to-six-order leak without the fixup, the
   cap sweep converging onto the uniform fine run, the `Float32` claim, and
   the HLLE/HLLC measurement with HLLC chosen as this case's default. Not
-  done, and what the milestone still waits on: the **viewer and the
-  filmstrip in CI** — `bin/visualize2d.jl --case=kh`, its `bin/Project.toml`
-  and the CI figure job — which is step 11. The diagnostics the figure plots
-  are already recorded through the observer by `kh_run`, so the viewer adds
-  no time stepping of its own.
+  done when step 10 closed: the **viewer and the filmstrip in CI**.
+  **Step 11 built it and H5 is done.** `bin/visualize2d.jl --case=kh`,
+  `bin/Project.toml` and the `viewer` job in `CI.yml` render the filmstrip,
+  the two diagnostics against the uniform fine run, and the block count, on
+  every push. The viewer adds no time stepping of its own: it reads
+  `kh_run`'s observer through the pass-through step 11 gave it.
 - **H6 — Precision, threads, device.** `T` and `backend` on every
   driver, the type table above, the thread workload, device tests, the
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
@@ -3615,6 +3627,112 @@ printed **byte-identically** after it, and the 11 new ones are identical at
 one thread and at four. The clean-checkout check — a `git archive` tree
 with no `Manifest.toml`, resolving TreeAMR from GitHub `main`, which is
 what CI does and what the `[sources]` pin exists for — passes.
+
+### Step 11 — the viewers and the figure job
+
+The step that closes H5b and H5, and it is the first in this package whose
+deliverable is a picture rather than a number. What it built:
+`bin/Project.toml` (CairoMakie and SixelTerm in an environment of their
+own, with `[sources]` for *both* packages), `bin/backend.jl` after
+TreeWave's, `bin/visualize1d.jl` (the tracked tube) and
+`bin/visualize2d.jl` (`--case=kh|sedov|both`), and the `viewer` job in
+`CI.yml`.
+
+**Every figure reproduces the recorded numbers**, which is the check that
+the viewers are drawing the runs this document is about and not
+configurations of their own. The tube renders 200 cells in 25 blocks over
+588 steps, 40 chunks and 9 regrids at L1 `4.54e-3` and `tracking == 1` with
+zero floor hits in either population — step 7's row. The blast renders
+12544 cells in 196 blocks, measured `E₀ = 1.03451` against a nominal 1, a
+fitted exponent of **0.50443** against `1/2` and a peak compression of
+**3.7653** against the strong-shock 6 — step 9's row, to every digit it
+records. The shear layer renders 14848 cells in 232 blocks against 16384
+uniformly fine, with `M(0) = 0.0100` growing to `M(1.5) = 0.12346` at a
+fitted **2.58036** — step 10's row.
+
+**Three things the implementation settled:**
+
+- **`kh_run` needed an `observer` pass-through, and the design did not say
+  so** *(amended here)*. `evolve!` takes exactly one observer and `kh_run`
+  installs it; the design had the viewer reading `kh_run`'s returned curves
+  and never said how it would also get *frames*. A viewer that installed
+  its own observer on `evolve!` would have displaced `kh_run`'s and taken
+  `M` and `K` somewhere other than the one place this document says they
+  may be taken. So `kh_run` gained `observer = nothing`, called after its
+  own three diagnostics; a run that passes nothing is bit-identical to one
+  from before the keyword. Asserted rather than assumed: the new testset in
+  `test/kelvinhelmholtz_tests.jl` sees the hook called **81 times** on the
+  `t = 2/5` control, at the same times and the same 160 blocks the case's
+  own hook saw, with `Ms`, `Ks`, `nbs`, `ts`, the drift, the step count and
+  the mesh history all equal — and every one of this file's recorded
+  numbers is unchanged, `M → 0.1234566379057999` and the rate
+  `2.5803559556363127` included. The suite goes from **11610 tests in
+  4 m 13.6 to 11622 in 4 m 31.9** at one thread.
+- **A tracked Sedov run floors nothing, and the figure has to say so.** The
+  render reports `0` owned and `0` ghost floor hits, which is not a
+  contradiction of step 9 but its central correction restated: tracking
+  puts the refined region's boundary ahead of the shock, so a tracked run's
+  coarse-fine faces stand in undisturbed ambient. The 4096 owned and 40
+  ghost hits of step 9 are the *static* `sedov_forest(:center)` mesh's. The
+  figure's title says which of the two it is showing, because a reader who
+  knows the recorded number and sees a zero would otherwise conclude the
+  floors had stopped working.
+- **Two exported names collide with Makie, and one is new.** TreeAMR
+  exports `scatter!` (the state-vector one) and Makie exports the plot
+  recipe; TreeHydro exports `density` and Makie's `@recipe` exports
+  `density`/`density!` too. Julia errors on any *use* of an ambiguous
+  name, so `bin/` writes `CairoMakie.scatter!` in full and never writes
+  `density` at all — it reads slot 1 of `P` directly. TreeWave met the
+  first; the second is this package's own.
+
+**Cost.** Locally, on a machine also running the suite: the tube renders in
+**26 s**, the blast in **28 s**, and the shear layer in **53 s** — of which
+roughly 20 s each is process start and `using CairoMakie`, and the rest is
+the arithmetic (the shear layer runs *two* evolutions, the tracked one and
+its uniform fine reference). A bare `visualize2d.jl`, which is
+`--case=both`, does the pair in **66 s** rather than 81, that load being
+paid once; CI still runs them as two steps, because a failure then names
+which case failed. Instantiating `bin/` cold cost **98 s** of
+precompilation on top of an already-warm depot; on a CI runner with nothing
+cached, CairoMakie's stack is minutes and is expected to dominate the job.
+The `viewer` job is therefore given the same `timeout-minutes: 30` the test
+job has, as a regression guard rather than a budget. It needs no cache
+configuration of its own: `julia-actions/cache`'s default key carries the
+job name, so this environment gets its own entry without being told to.
+
+**What was checked, beyond the figures looking right.** The suite is green
+at 11622 tests both on the current release and — the check that matters for
+a step which adds files — on the **floor version from a clean checkout**:
+`git archive` into an empty tree, TreeAMR resolved from GitHub `main`,
+`julia +1.11`, 6 m 32.2 and every number identical to the 1.13 run's. The
+viewer environment was instantiated and rendered from that same clean tree,
+which is the only thing that proves `bin/Project.toml`'s two `[sources]`
+entries resolve — a local run, with a depot that already has everything,
+proves nothing about it.
+
+And **the device path works through the viewer**, which was not planned for
+this step and is worth recording because it is the first time anything in
+this package has run on one. `bin/visualize1d.jl --backend=metal
+--type=f32` renders, and it renders the *same run*: 200 cells in 25 blocks,
+588 steps over 40 chunks and 9 regrids, L1 `4.54e-3`, `tracking == 1`, zero
+floor hits — every figure on it indistinguishable from the host `Float32`
+render. That exercises `withbackend`'s `invokelatest`, and it exercises
+`hostcopy` doing the thing it exists for rather than the CPU short-circuit
+it usually takes. It is **not** the device milestone: H6c still owes the
+per-phase table, the opt-in device tests and the benchmark, and nothing
+here was measured for speed. It is one case, at one precision, saying the
+plumbing is connected.
+
+**Why the job is ungated**, unlike the coverage step: coverage is a
+*report* whose consumer reads only `main`, while this is a *check*, and a
+pull request is exactly where a broken viewer should surface. `bin/` sits
+outside `src/` and `test/` with its own environment and its own copy of the
+TreeAMR pin, so nothing else in CI would notice it breaking — which is how
+TreeWave's `bin/` went on building against a TreeAMR older than its own
+tests until it failed on the removed `cell_center`. The four renders run as
+four separate processes rather than one, because both scripts define
+`main` and `const LEVELCOLORS` at top level in `Main` and Julia 1.11 — this
+package's floor — refuses to redefine a `const`.
 
 ## Possible extensions
 

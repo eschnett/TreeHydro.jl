@@ -216,7 +216,9 @@ milestone.
 
 It is here because it **came for free** with the energy integral: `α` is a
 quadrature over exactly these three functions, so having them is not a cost,
-and the radial-scatter panel of step 11 will want them. Nothing in the package
+and the radial-scatter panel of `bin/visualize2d.jl --case=sedov` wants them
+(step 11 built it, and it sweeps `u` log-spaced on `(0, u₂]`, never *at* zero,
+where this is singular). Nothing in the package
 asserts it beyond what `α` and the momentum-equation residual assert, which is
 what "untested" means for it.
 

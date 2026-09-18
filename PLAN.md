@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–10, 7b and 7c are done; step 11 is next.**
+**Steps 0–11, 7b and 7c are done; step 12 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -459,6 +459,22 @@ figure job with its artifact upload.
 
 Accept: every figure written in CI; the viewers contain no time-stepping
 loop of their own (they use `observer`).
+
+**Done.** `bin/Project.toml`, `bin/backend.jl`, `bin/visualize1d.jl` and
+`bin/visualize2d.jl` (`--case=kh|sedov|both`), with the `viewer` job in
+`CI.yml` rendering all four figures on every push and uploading them.
+Two deviations from the list above, both recorded in `CODE.md` under
+"Step 11":
+
+- **`kh_run` gained an `observer = nothing` pass-through** (a `src/`
+  change this step did not plan for). `evolve!` takes one observer and
+  `kh_run` already installs it; a viewer that had installed its own would
+  have been taking `M` and `K` somewhere other than the one place
+  `kh_run`'s docstring says they may be taken. The pass-through is called
+  after the diagnostics and leaves a run without it bit-identical.
+- **The Sedov viewer is `D = 2` only.** `CODE.md`'s "`bin/` runs it at
+  demo size" about the 3D blast stays a forward reference; a 3D render
+  needs a midplane slice and is not what this step accepted.
 
 ## Step 12 — Precision (H6a)
 

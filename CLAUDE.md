@@ -35,8 +35,8 @@ Two rules follow from `CODE.md` and govern every change here:
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
 faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
-reset (H4) and the Kelvin–Helmholtz physics (H5a) are done; the viewers
-and the figure job (H5b) are step 11, and H5 is *not* done until they are.**
+reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; precision
+(H6a) is step 12 and is next.**
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with the
 `[sources]` pin to TreeAMR's GitHub
 `main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
@@ -111,15 +111,28 @@ order by `test/runtests.jl` — Sedov late, because the order is the
 dependency order and the blast uses both the chunked driver and a static
 `hydro_solve!` run, and Kelvin–Helmholtz last, being the only case whose
 reference is a uniform fine run of this code rather than a closed form.
-One workflow, `CI.yml`, and a `README.md`.
+And from step 11 the viewers: `bin/Project.toml` (CairoMakie and SixelTerm
+in an environment of their own, with `[sources]` for *both* packages),
+`bin/backend.jl` (`resolvebackend`, `withbackend`, `checkprecision`, after
+TreeWave's), `bin/visualize1d.jl` (the tracked tube against the exact
+solution, per block coloured by level, with `τ` and the conserved totals
+against time) and `bin/visualize2d.jl` (`--case=kh|sedov|both`: the
+filmstrip with block outlines, and per case the two McNally diagnostics
+against the uniform fine run or the radial scatter against the similarity
+profile) — plus the one `src/` change the step needed, an `observer`
+pass-through on `kh_run`.
+`test/kelvinhelmholtz_tests.jl` gained the testset that asserts the
+pass-through composes rather than replaces, which is the only thing in the
+suite that exercises it — the other caller is `bin/`, and CI's `viewer` job
+is what runs that. One workflow with two jobs, `CI.yml`'s `test` and
+`viewer`, and a `README.md`.
 The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6, H3b step 7, H4a step 8, H4b step 9 and H5a step 10; step 7b
-split the suite
+H3a step 6, H3b step 7, H4a step 8, H4b step 9, H5a step 10 and H5b
+step 11; step 7b split the suite
 into a short tier and a
 long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; and `PLAN.md`'s step 11
-(the viewers and the figure job, H5b — which is what H5 still waits on) is
-next.
+was code coverage under threads and not the runner; and `PLAN.md`'s step 12
+(precision, H6a) is next.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -283,7 +296,10 @@ any one file holds, which is why the two thread counts diverge as much as
 they do. The blast before it cost 50 s and 30 s). **This machine is
 shared**, and runs taken while something else was on it came back at 4 m 10
 and 3 m 12 — a fifth slower — so a timing is worth comparing only against
-another taken under the same load.
+another taken under the same load. Step 11's one extra testset was measured
+that way and not against the number above: **4 m 13.6 before and 4 m 31.9
+after**, back to back at one thread on a machine that was also rendering
+figures, 11610 tests against 11622.
 `Pkg.test` does not inherit `-t`, so the thread
 count has to be passed explicitly:
 
@@ -315,13 +331,44 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
   julia +1.11 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
+The viewers, in their own environment so that CairoMakie never becomes a
+dependency of the package. The first call instantiates it; `[sources]`
+means no manual `Pkg.develop`:
+
+```bash
+julia --project=bin -e 'using Pkg; Pkg.instantiate()'
+```
+
+```bash
+julia --project=bin bin/visualize1d.jl
+```
+
+```bash
+julia --project=bin bin/visualize2d.jl --case=kh
+```
+
+`--case=sedov` and the default `--case=both` are the other two; every
+script takes `--out=`, `--ops=`, `--type=f32|f64`, `--backend=`,
+`--display` and `--no-display`. PNGs land in `bin/output/`, which is
+gitignored, and a terminal also gets them inline through SixelTerm — a
+pipe does not, which is what `--no-display` makes explicit in CI. Roughly
+26 s, 28 s and 53 s per figure, most of the first 20 s of each being
+`using CairoMakie`. The `viewer` job in `CI.yml` runs all four renders on
+every push and uploads them, because `bin/` is outside `src/` and `test/`
+and nothing else would notice it breaking.
+
+`--backend=metal --type=f32` renders too, and reproduces the host
+`Float32` run exactly — measured in step 11 on this machine. That is the
+plumbing working, not the device milestone: H6c still owes the per-phase
+table and the opt-in device tests, and nothing was measured for speed.
+
 Not yet real, and listed so the section can be filled in rather than
-rewritten: the viewer (`julia --project=bin bin/visualize2d.jl --case=kh`)
-arrives in step 11, the thread-independence test — which spawns its own
-subprocess at another count either way — in step 13, and device tests,
-opt-in behind `TREEHYDRO_TEST_BACKEND` (`metal`, `cuda`) in an environment
-of your own that has the device package, in step 14. Neither this package
-nor TreeAMR depends on a device package.
+rewritten: the thread-independence test — which spawns its own
+subprocess at another count either way — arrives in step 13, and device
+tests, opt-in behind `TREEHYDRO_TEST_BACKEND` (`metal`, `cuda`) in an
+environment of your own that has the device package, in step 14.
+`bin/benchmark.jl` comes with `src/benchmark.jl` in step 14 as well.
+Neither this package nor TreeAMR depends on a device package.
 
 ## Things that will bite
 
@@ -713,6 +760,36 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   order-one totals — every drift in this package — cannot be made
   relatively at all. Assert such a quantity against its bound instead,
   which is what the suite does and why it travels.
+- **In `bin/`, two exported names collide with Makie** (found in step 11).
+  TreeAMR exports `scatter!` — the state-vector-into-field-set one — and
+  Makie exports the plot recipe; TreeHydro exports `density` and Makie's
+  `@recipe` exports `density`/`density!` too. Julia errors on any *use* of
+  an ambiguous name, not on the `using`, so the failure arrives at the
+  first plot call and names neither package helpfully. Write
+  `CairoMakie.scatter!` in full, and never write `density` in `bin/` at
+  all — the viewers read slot 1 of `P` directly. TreeWave met the first of
+  these; the second is this package's own, and any new `bin/` script
+  inherits both.
+- **A viewer snapshot must *materialize* everything it keeps** (step 11).
+  `hostcopy(fs)` returns `fs` **itself** on the CPU — deliberately, since
+  the viewer only reads — and `regrid!` reuses and resizes the working
+  array, so a frame that stored a view or a bare `Array(work)` comes back
+  holding the *last* frame in every slot and the filmstrip shows four
+  copies of the final one. `Float64.(interiorview(fs, b, v))` does the
+  materializing and doubles as the one place a `Float32` run stops being
+  one; everything below it is a figure. The same applies to the `τ` a
+  viewer computes with `cell_tau`: take the number, not the array.
+- **`P` has `D + 4` variables and only `D + 2` of them are primitives.**
+  Slots `1 … D+2` are `(ρ, v₁…v_D, p)`; slot `D+3` is the cell's signal
+  speed and `D+4` its floor-hit flag, both written by the `con2prim`
+  kernel. A loop over `1:P.nvars` calling them primitives plots two
+  diagnostics as physics.
+- **`evolve!` records no time vector, and its histories are off by one
+  against the observer.** `nblocks_history`, `λ_history` and
+  `buffer_history` are per *chunk*, while the observer fires `nchunks + 1`
+  times — once at `t = 0` and once per chunk — so zipping the two is a
+  frame-shifted plot. Take `t` and the block count from your own observer,
+  as `kh_run` does with `ts` and `nbs` and as both viewers do.
 - **Measured numbers go into `CODE.md`**, beside the prediction they
   confirm or correct, so a regression shows up as a changed number and
   not as a test that merely still passes. The test that produces one runs
@@ -754,8 +831,21 @@ Match TreeAMR's, since the three packages are read together:
   committed.
 - No generated file is tracked. Everything in the tree is written by hand
   and reviewed as such; `test/references/*.toml`, which step 7b generated
-  and step 7c removed, were the one exception and are gone.
-- One workflow: `.github/workflows/CI.yml` runs the whole suite on every
+  and step 7c removed, were the one exception and are gone. `bin/output/`
+  is gitignored and the viewers write PNGs there.
+- **There are two TreeAMR pins and two Manifests**, `Project.toml`'s and
+  `bin/Project.toml`'s. A change that updates only the first leaves
+  `julia --project=bin bin/visualize1d.jl` resolving a branch the tests are
+  not using — grep for `rev =` rather than editing from memory. `bin/` has
+  its own `Manifest.toml` (gitignored, like the root's), so
+  `Pkg.update("TreeAMR")` at the root does not touch it.
+- **`bin/backend.jl` is `include`d by both viewers**, and step 14 will add
+  a third script that runs against the *package* environment instead. So it
+  may use only what both environments have, which today is
+  `KernelAbstractions` — which is why that is a dependency of
+  `bin/Project.toml` at all.
+- One workflow with two jobs: `.github/workflows/CI.yml`. `test` runs the
+  whole suite on every
   push that touches something other than Markdown, over **four cells
   spelled out one at a time** rather than a product — 1.11 on macOS (the
   floor, and the cell that carries the coverage), 1 on Linux, 1 on macOS
@@ -775,6 +865,12 @@ Match TreeAMR's, since the three packages are read together:
   cell is slowest needs more than one run behind it.
   `.github/workflows/CI.yml`'s comments state the arrangement, not how it
   was arrived at; the history lives in `CODE.md`'s "Testing".
+  The second job, `viewer`, instantiates `bin/` and renders all four
+  figures, and is **ungated** — it runs on pull requests too, because
+  unlike coverage it is a check rather than a report, and `bin/` is the one
+  part of the tree no test would notice breaking. It runs beside the four
+  test cells rather than after them, so it is not on the critical path;
+  cold, CairoMakie's precompilation is expected to be most of it.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,
