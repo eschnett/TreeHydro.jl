@@ -3703,36 +3703,40 @@ cached, CairoMakie's stack is minutes and is expected to dominate the job.
 35367816414), and the prediction that precompilation would dominate is the
 one thing it confirms:
 
-| step | cold |
-|---|---|
-| instantiate `bin/` | **7 m 31** |
-| render the tube | 37 s |
-| render the tube at `Float32` | 36 s |
-| render Kelvin–Helmholtz | 1 m 49 |
-| render Sedov | 48 s |
-| checkout, setup, cache, upload | ~20 s |
-| **job total** | **11 m 43** |
+| step | cold | warm |
+|---|---|---|
+| instantiate `bin/` | **7 m 31** | **5 s** |
+| render the tube | 37 s | 35 s |
+| render the tube at `Float32` | 36 s | 34 s |
+| render Kelvin–Helmholtz | 1 m 49 | 1 m 31 |
+| render Sedov | 48 s | 41 s |
+| checkout, setup, cache, upload | ~20 s | ~28 s |
+| **job total** | **11 m 43** | **3 m 57** |
 
-So instantiating the environment is **64%** of a cold run and the four
-renders together are 3 m 50. The renders themselves cost 1.4–2.1× their
-local times, which is what a 2-vCPU runner does to this arithmetic. The
-guard is therefore the test job's `timeout-minutes: 30`, which leaves 2.5×
-of headroom over a cold draw; it needs no cache configuration of its own,
-`julia-actions/cache`'s default key carrying the job name, and a warm run
-should skip most of the 7 m 31.
+So instantiating the environment is **64% of a cold run and 2% of a warm
+one**: the cache is the whole story, and `julia-actions/cache` needs no
+configuration to do it, its default key carrying the job name. The renders
+are the same work either way, 3 m 50 cold against 3 m 21 warm, and cost
+1.4–2.1× their local times — which is what a 2-vCPU runner does to this
+arithmetic. The guard is the test job's `timeout-minutes: 30`, 2.5× a cold
+draw and 7.6× a warm one.
 
 **Two things this corrects.** The `--case=both` lever recorded above as the
 fallback if the job ran long is the **wrong lever**: it saves one `using
 CairoMakie`, which is ~20 s against a 451 s precompilation, under 3% of the
 job. What actually governs this job's cost is the cache, and nothing in the
-rendering. And the claim that the job "is not on the critical path" because
-it runs beside the four test cells is **wrong as measured**: on this run
-the four cells came in at 8 m 28, 9 m 52, 10 m 36 and 11 m 09, so at
-11 m 43 the viewer was the *longest* job in the run. It beat the slowest
-test cell by 34 s, which is well inside the ±70% these runners show, so the
-honest statement is that it is level with the test matrix rather than
-hidden behind it — and that a PR now costs what its slowest cell costs,
-whichever that turns out to be on the day.
+rendering. And the claim that the job "is not on the critical
+path" because it runs beside the four test cells was **stated without a
+cache state, which is the only thing that decides it**. Cold, the four
+cells came in at 8 m 28, 9 m 52, 10 m 36 and 11 m 09 and the viewer's
+11 m 43 was the *longest* job in the run. Warm, on the next run, the cells
+came in at 7 m 55, 10 m 28, 12 m 34 and 10 m 37 and the viewer's 3 m 57 was
+the *shortest* by a factor of two. So it is on the critical path only when
+its cache is cold — a first run, or the first after a CairoMakie release
+evicts the entry — and off it every other time. Note also the 4-thread cell
+at 9 m 52 and then 12 m 34 on two consecutive runs of the same commit
+range: 27%, and a reminder that none of these single draws is worth more
+than an ordering.
 
 **What was checked, beyond the figures looking right.** The suite is green
 at 11622 tests both on the current release and — the check that matters for

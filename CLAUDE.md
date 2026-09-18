@@ -869,17 +869,18 @@ Match TreeAMR's, since the three packages are read together:
   figures, and is **ungated** — it runs on pull requests too, because
   unlike coverage it is a check rather than a report, and `bin/` is the one
   part of the tree no test would notice breaking. It runs beside the four
-  test cells rather than after them. **Measured cold on its first run
-  (PR #1): 11 m 43, of which 7 m 31 — 64% — is instantiating CairoMakie and
-  3 m 50 the four renders.** So it is *not* hidden behind the test matrix:
-  the four cells came in at 8 m 28, 9 m 52, 10 m 36 and 11 m 09 on that same
-  run, making the viewer the longest job of the five by 34 s. That is well
-  inside the ±70% these runners show, so it is level with them rather than
-  the critical path, but the earlier note claiming it was off the critical
-  path was wrong. `timeout-minutes: 30`, as on the test job, is 2.5× a cold
-  draw. If it ever does run long, the lever is the **cache** and not the
-  renders — `--case=both` would save one `using CairoMakie`, about 20 s
-  against a 451 s precompilation.
+  test cells rather than after them. **Measured on PR #1: 11 m 43 cold and
+  3 m 57 warm**, the difference being entirely the instantiate step —
+  7 m 31 against 5 s, 64% of a cold run and 2% of a warm one. The four
+  renders are 3 m 50 / 3 m 21 either way. So **whether it is on the critical
+  path depends only on its cache**: cold it was the longest of the five
+  jobs (cells at 8 m 28, 9 m 52, 10 m 36, 11 m 09), warm it was the shortest
+  by a factor of two (cells at 7 m 55, 10 m 28, 12 m 34, 10 m 37). It is
+  therefore slow on a first run and after a CairoMakie release evicts the
+  entry, and cheap otherwise. `timeout-minutes: 30`, as on the test job, is
+  2.5× a cold draw. If it ever does run long the lever is the **cache** and
+  never the renders: `--case=both` would save one `using CairoMakie`, about
+  20 s against a 451 s precompilation.
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,
