@@ -674,17 +674,17 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   both jobs had on. Measured since, on the **whole suite** at one thread,
   locally and back to back: **4 m 01 without coverage and 12 m 38 with
   it**, a factor of **3.14**, both green at 11609 tests. So coverage is
-  collected **once, where it is read, on the cheapest host**:
-  `coverage: true` on the `version: "1.11"` / `ubuntu-latest` matrix
-  entry alone — instrumented, that cell measures **18 m 08** against
-  **42 m 02** for the same suite on `version: "1"`. Measured on this
-  machine at one thread, back to back, coverage costs **1.04× on 1.11 and
-  3.14× on 1.13** (8 m 55 → 9 m 17 against 4 m 01 → 12 m 38) — it is very
-  nearly free on the floor version, and under coverage 1.11 is faster in
-  absolute terms than 1.13 despite being 2.2× slower without it. The
-  factor is not measurable on CI, where 1.04× sits below the runners'
-  scatter. With no `VERSION` check anywhere in `src/` or `test/` the lines
-  reported are identical either way.
+  collected **once, where it is read, on the fastest cell of the four**:
+  `coverage: true` on the `version: "1.11"` / `macOS-latest` entry alone.
+  Instrumented on CI, one thread, the four combinations measure **macOS
+  1.11 12 m 12, ubuntu 1.11 18 m 08, macOS 1.13 23 m 22, ubuntu 1.13
+  42 m 02** — macOS 1.5–1.8× faster than Linux at either version, 1.11
+  1.9–2.3× faster than 1.13 on either architecture, each effect
+  reproduced across the other axis. Most of the version column is
+  instrumentation itself: measured locally, back to back, coverage costs
+  **1.04× on 1.11 and 3.14× on 1.13** (8 m 55 → 9 m 17 against 4 m 01 →
+  12 m 38). With no `VERSION` check anywhere in `src/` or `test/` the
+  lines reported are identical whichever cell carries it.
   The step's condition is `matrix.coverage == true && (github.ref ==
   'refs/heads/main' || github.event_name == 'workflow_dispatch')`, with
   `julia-processcoverage` and the Codecov upload under the same
@@ -694,8 +694,11 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   the upload path can be exercised on purpose, because a reporting step
   that runs nowhere reports nothing. **Never put coverage on the threaded
   entry.** A `D ≥ 2` sweep costs its local seconds and may go anywhere
-  the claim belongs. `timeout-minutes: 30` is there so that a runtime regression
-  fails loudly rather than billing an hour.
+  the claim belongs. `timeout-minutes: 30` is there so that a runtime
+  regression fails loudly rather than billing an hour; it is a flat
+  number only because the instrumented cell is the fast one, and moving
+  coverage to a 1.13 or Linux cell needs the per-cell form back (there a
+  *healthy* run measured 42 m 45).
 - **Base's reductions are not bit-identical across machines, and that is
   measured** (step 7b, kept in step 7c). On all four CI runners — macOS
   arm64 on the same Julia 1.13 and the same packages as this machine
@@ -754,24 +757,22 @@ Match TreeAMR's, since the three packages are read together:
   and step 7c removed, were the one exception and are gone.
 - One workflow: `.github/workflows/CI.yml` runs the whole suite on every
   push that touches something other than Markdown, over **four cells
-  spelled out one at a time** rather than a product — 1.11 on Linux (the
-  floor), 1 on Linux (which carries the coverage), 1 on macOS (which
-  carries the arm64 reduction claim) and 1 on Linux at 4 threads. Julia
-  1.11 on macOS was dropped: it covered no axis the other three did not.
-  **Coverage is collected on one cell, on `main` or a manual dispatch
-  only**, and never on the threaded entry, where it costs a factor of a
-  hundred — see "Things that will bite". The timeout guard is
-  `${{ matrix.coverage == true && 40 || 30 }}` minutes, the instrumented
-  cell getting the same ratio of guard to healthy run as the others. Do
-  not flatten it back to one number: coverage on `version: "1"` measured
-  42 m 45 and would have gone red under a flat 30. End to end: an ordinary push or
-  pull request costs about **13 m** with the threaded cell on the
-  critical path, and a push to `main` **20 m 42** with the *instrumented*
-  cell on it, against **14 m 20** for the suite before any of this. And
-  treat every CI timing here as ±70%: the same instrumented cell came
+  spelled out one at a time** rather than a product — 1.11 on macOS (the
+  floor, and the cell that carries the coverage), 1 on Linux, 1 on macOS
+  (which carries the arm64 reduction claim) and 1 on Linux at 4 threads.
+  The redundant fourth pair of the product is the floor on Linux; the
+  floor is a property of the version, not of the OS. **Coverage is
+  collected on one cell, on `main` or a manual dispatch only**, and never
+  on the threaded entry, where it costs a factor of a hundred — see
+  "Things that will bite". End to end, a push costs about **13 m**
+  whether or not coverage is collected, the threaded cell being the
+  critical path either way, against **14 m 20** for the suite before any
+  of this. And treat every CI timing as ±70%: one instrumented cell came
   back at 18 m 08, 11 m 24 and 19 m 52 on three consecutive runs, so only
-  orderings wider than that (18 against 42) carry a decision, and a
-  claim about which cell is slowest needs more than one run behind it.
+  orderings wider than that carry a decision, and a claim about which
+  cell is slowest needs more than one run behind it.
+  `.github/workflows/CI.yml`'s comments state the arrangement, not how it
+  was arrived at; the history lives in `CODE.md`'s "Testing".
 - Sibling checkouts: `~/src/jl/TreeAMR` (the mesh; read its `CLAUDE.md`
   and `CODE.md` for the API and its sharp edges) and `~/src/jl/TreeWave`
   (the other application; copy the *patterns* of its `precision.jl`,

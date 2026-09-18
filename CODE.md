@@ -2195,11 +2195,25 @@ absolute terms than 1.13, though it is 2.2× slower without it. On CI the
 same three instrumented cells came back at 18 m 08 on Linux at 1.11,
 23 m 22 on macOS at 1.13 and 42 m 02 on Linux at 1.13, which agrees in
 ordering; the *factor* cannot be measured there at all, because 1.04×
-sits far below the runners' own scatter. No file here contains a `VERSION` check
-or an `@static`, so the lines reported are the same lines whichever cell
-carries it; the `matrix` therefore puts `coverage: true` on the
-`version: "1.11"`, `ubuntu-latest` entry and the step reads
-`matrix.coverage == true`.
+sits far below the runners' own scatter.
+
+On CI the choice has a second axis, the runner's architecture, and the
+two together span a factor of 3.4. Instrumented, whole suite, one thread:
+
+| | Julia 1.11 | Julia 1.13 |
+|---|---|---|
+| macOS arm64 | **12 m 12** | 23 m 22 |
+| ubuntu x86 | 18 m 08 | 42 m 02 |
+
+macOS is 1.5–1.8× faster than Linux at either version and 1.11 is
+1.9–2.3× faster than 1.13 on either architecture, so each effect is
+reproduced across the other axis rather than resting on one draw — which
+matters, given the ±70% scatter recorded below. Coverage therefore goes
+on the **fastest cell of the four**: the `matrix` puts `coverage: true`
+on the `version: "1.11"`, `macOS-latest` entry and the step reads
+`matrix.coverage == true`. No file here contains a `VERSION` check or an
+`@static`, so the lines reported are the same lines whichever cell
+carries it, and Codecov cannot tell which one did.
 
 *Only where it is read.* The badge reflects `main`, so instrumenting a
 branch or a pull request buys nothing and spends the 3.14× on the cell
@@ -2220,13 +2234,14 @@ arrangement:
 | | wall clock | critical path |
 |---|---|---|
 | ordinary push or pull request | ~13 m | the threaded cell |
-| push to `main`, coverage collected | 20 m 42 | the instrumented cell |
+| push to `main`, coverage collected | ~13 m | the threaded cell |
 
 So the everyday case is no worse than it was and one cell lighter, and
-`main` pays about six minutes for its coverage. **The instrumented cell
-is the critical path on a `main` push** — an earlier draft of this
-paragraph said the coverage hid behind the threaded cell, which was true
-of one lucky draw and is not true in general.
+`main` pays essentially nothing for its coverage — the instrumented cell
+runs 12 m 12, which is no longer than the uninstrumented cells beside it.
+That is true only because coverage sits on the fastest cell: hosted on
+Linux at the current release the same collection took 42 m 45 and was the
+critical path by a wide margin.
 
 That correction is really a statement about variance, and it is the
 caution to carry away from every CI number here, in the spirit of the one
@@ -2234,30 +2249,32 @@ about this machine being shared: GitHub's runners vary by more than most
 of the effects being measured. The same instrumented cell, unchanged
 configuration, came back at **18 m 08**, **11 m 24** and **19 m 52** on
 three consecutive runs — a factor of 1.7 end to end, which swamps the
-1.35× that instrumenting 1.11 costs in the first place. The ordering that
-decided where coverage goes (18 against 42 minutes) is far outside that
-band and is safe; any comparison of two cells within a factor of two is
-not, and should be read as the same measurement twice.
-`timeout-minutes: 40` is sized off the pessimistic draw and keeps roughly
-twice the headroom over it.
+1.04× that instrumenting 1.11 costs in the first place. The orderings
+that decided where coverage goes (12 against 42 minutes, and each of the
+two axes reproduced across the other) are far outside that band and are
+safe; any comparison of two cells within a factor of two is not, and
+should be read as the same measurement twice.
 
 Two more economies come from the same measurement, since `timeout` and
-matrix size are both set by what a cell costs. The cap is now
-`${{ matrix.coverage == true && 40 || 30 }}`, which keeps the
-instrumented cell the same ratio of guard to healthy run that 30 gives
-the others (18 m 08 against 13 m 24). That is not slack: the first
-arrangement of this put coverage on Linux at the current release, where a
-healthy run measured **42 m 45** and would have timed out red under a
-flat 30 — the guard had to be scaled per cell before it could be trusted
-at all, and scaling it is what made the cost visible enough to move.
+matrix size are both set by what a cell costs. The cap is a flat
+**30 minutes**, and it is flat *because* coverage sits on the fastest
+cell — every healthy run in the matrix is ten to thirteen minutes, so one
+number guards all four the same way. It was briefly per cell,
+`${{ matrix.coverage == true && 40 || 30 }}`, while coverage lived on
+Linux at the current release, where a **healthy** run measured 42 m 45
+and a flat 30 would have failed it. If coverage is ever moved back to a
+1.13 or a Linux cell, the per-cell form has to come back with it.
 And the
 matrix is spelled out one cell at a time instead of as a
-`version × os` product, because the product's fourth combination —
-Julia 1.11 on macOS — covered no axis the other three did not. Three
-axes, three serial cells: the floor on Linux (which is where the
-`TRACKED_1D` collision was red while 1.13 was green), the current release
-on Linux (which carries the coverage), and the current release on macOS
-(which carries the arm64 reduction claim above). Pushes whose every path
+`version × os` product, because the product's fourth combination is
+redundant whichever one it is, and which one is left out follows from the
+coverage choice above. Three axes, three serial cells: the floor on macOS
+(which carries the coverage, and where a `TRACKED_1D`-style collision is
+red while 1.13 is green), the current release on Linux, and the current
+release on macOS (which carries the arm64 reduction claim above). The
+pair left unbuilt is the floor on Linux: the floor is a property of the
+Julia version rather than of the operating system, so one platform
+exercises it. Pushes whose every path
 matches `**.md` are skipped entirely — half the commits here are
 `Record step N …` and a Markdown change cannot move a measured number —
 while pull requests carry no such filter, so a PR always ends with a

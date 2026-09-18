@@ -4,14 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["*"]
-    # Half the commits on this branch are documentation -- "Record step N
-    # in the specification and the working notes" and the like. A change
-    # confined to Markdown cannot move a measured number, so it does not
-    # need the suite, and skipping it halves the number of runs. The
-    # filter fires only when *every* changed path matches, so a commit
-    # that touches `CODE.md` beside a source file still runs. Pull
-    # requests deliberately carry no such filter: a PR should always end
-    # with a check on it.
+    # A Markdown-only change cannot move a measured number.
     paths-ignore:
       - "**.md"
   pull_request:
@@ -25,60 +18,38 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.threads || 1 }} thread(s)
     runs-on: ${{ matrix.os }}
-    # A guard against a runtime regression, not a guess at the runtime,
-    # and scaled per cell because one cell has a known multiplier on it.
-    # The suite takes 3 m 44 at one thread and 2 m 38 at four locally as
-    # of step 10, a shared runner is a couple of times slower, and setup
-    # is 28 s of it (measured: 447 s of test phase in a 477 s job), so an
-    # uninstrumented cell has no business anywhere near 30 minutes and a
-    # change that makes the suite ten times slower fails here instead of
-    # quietly costing an hour. The instrumented cell's healthy runtime is
-    # a measured 18 m 08 against the uninstrumented 13 m 24 beside it, so
-    # it gets 40: the same ratio of guard to healthy run that 30 gives the
-    # others, rather than the guard given up. This is not slack -- the
-    # first arrangement of this put coverage on Linux at the current
-    # release, where a healthy run measured 42 m 45 and would have
-    # timed out red under a flat 30.
-    timeout-minutes: ${{ matrix.coverage == true && 40 || 30 }}
+    # A guard against a runtime regression, not a budget: every healthy
+    # cell here runs in ten to thirteen minutes.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      # Spelled out one cell at a time rather than as a product, because
-      # the cells are no longer interchangeable: each covers one axis, and
-      # the product's fourth combination covered nothing the other three
-      # did not. Three axes, three serial cells, plus the threaded one.
+      # One cell per axis, spelled out rather than a `version x os`
+      # product: the floor version, the current release, macOS/arm64, and
+      # threads. The floor on Linux is the redundant fourth pair.
       matrix:
         include:
-          # The floor, on Linux. Julia 1.11 is what `[sources]` requires,
-          # and it is a real axis rather than a formality: 1.12 made
-          # redefining a `const` legal, so the `TRACKED_1D` collision
-          # between two test files was invisible on 1.13 and red here.
+          # Julia 1.11 is what `[sources]` requires, and it is stricter
+          # than 1.13 -- it still refuses to redefine a `const`.
           #
-          # This is also the cell that carries coverage, and it is the
-          # cheapest host for it by a factor of two -- measured
-          # instrumented, whole suite: 18 m 08 here, 23 m 22 on macOS at
-          # the current release, 42 m 02 on Linux at the current release.
-          # Instrumentation costs far less on 1.11 than on 1.13 (1.35x
-          # against better than 5x), and since no file here contains a
-          # `VERSION` check or an `@static`, the lines it reports are the
-          # same lines either way. Coverage on the floor is the same
-          # coverage, for less than half the wait.
+          # It also carries the coverage, because instrumented this is the
+          # fastest cell of the four by a factor of up to 3.4 (coverage
+          # costs 1.04x on 1.11 against 3.14x on 1.13, and these runners
+          # are faster than the Linux ones). No file in `src/` or `test/`
+          # has a `VERSION` check, so the lines reported are the same
+          # whichever cell reports them.
           - version: "1.11"
-            os: ubuntu-latest
+            os: macOS-latest
             coverage: true
-          # The current release on Linux. The others execute the same
-          # lines, so instrumenting a second cell would merge an identical
-          # report into the same numbers at more than twice the cost.
           - version: "1"
             os: ubuntu-latest
-          # The second operating system, on the current release. This is
-          # also the arm64 cell, and "Testing" in `CODE.md` rests on it:
-          # Base's `@simd` reductions arrange their partial sums by CPU
-          # target, so the conserved totals here differ from this
-          # machine's by 1 to 4 ulp. That is a claim about macOS arm64 on
-          # a current Julia, which is this cell.
+          # arm64 on the current release: Base's `@simd` reductions
+          # arrange their partial sums by CPU target, which "Testing" in
+          # `CODE.md` rests on.
           - version: "1"
             os: macOS-latest
-          # The threaded cell. Never give this one coverage; see below.
+          # Threaded. Never instrument this one: a coverage hit is an
+          # atomic increment on one counter per line, so threads running
+          # the same kernel contend on one cache line -- 100x.
           - version: "1"
             os: ubuntu-latest
             threads: 4
@@ -91,42 +62,12 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
-          # Coverage on exactly one cell, and only where the result is
-          # read. Two conditions, for two different reasons.
-          #
-          # *Which* cell: instrumenting costs a factor of 3.14 on the
-          # whole suite at one thread (measured locally, back to back:
-          # 4 m 01 without and 12 m 38 with, both green at 11609 tests),
-          # and every serial cell runs the same lines, so a second
-          # instrumented cell would pay that again to tell Codecov what
-          # the first already did. Never the threaded cell: Julia compiles
-          # a coverage hit into an atomic read-modify-write on one global
-          # counter per source line, the counters of 32 neighbouring lines
-          # share a 256-byte block, and a KernelAbstractions launch is one
-          # task per thread over the *same* kernel, so every thread
-          # contends on one cache line -- 100x at four threads, with the
-          # sign of threading inverted. That is what turned a 5-minute
-          # serial job into a 53-minute threaded one before step 7c.
-          #
-          # *When*: the badge reflects `main`, so a branch or pull request
-          # gains nothing from being instrumented and would pay the 3.14x
-          # on the cell that decides how long anyone waits for a green
-          # tick. `workflow_dispatch` is included so that the upload path
-          # can be exercised deliberately from a branch before it is
-          # relied on -- a reporting step that runs nowhere reports
-          # nothing, which is the failure mode this package has met
-          # before with the SSPRK stage limiters.
+          # One cell, and only where the badge reads it. The dispatch arm
+          # keeps the upload path exercisable from a branch.
           coverage: ${{ matrix.coverage == true && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') }}
         env:
-          # The suite must pass, with identical numbers, threaded as well
-          # as serial. One entry of the matrix is enough to guard that:
-          # the thread-independence test spawns a subprocess at the
-          # *other* count either way, so between this job and the serial
-          # ones both directions are covered. (That test arrives in step
-          # 13; the entry is here from the start so that the threaded path
-          # is exercised while it is being written.) Every number the suite
-          # prints must be identical at both counts, which is TreeAMR's
-          # invariant restated for this package.
+          # Every number the suite prints must be identical at one thread
+          # and at four.
           JULIA_NUM_THREADS: ${{ matrix.threads || 1 }}
       - uses: julia-actions/julia-processcoverage@v1
         if: ${{ matrix.coverage == true && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') }}
@@ -137,10 +78,3 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           # A Codecov outage should not turn a green test run red.
           fail_ci_if_error: false
-
-  # There is deliberately no viewer job yet. TreeWave has one because
-  # `bin/` is a second environment with its own copy of the TreeAMR
-  # dependency, which the test job cannot exercise -- during its
-  # development that let `bin/` keep building against an older TreeAMR
-  # than the tests. This package has no `bin/` until step 11, and the job
-  # is added with it.
