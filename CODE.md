@@ -3832,6 +3832,24 @@ One trap fixed while adding it: the artifact upload globbed
 asserted non-empty by `test -s`, and then silently left out of the upload.
 It is `bin/output/*` now.
 
+**Measured in CI on PR #2, and the raw comparison lies.** The viewer job
+came in at **2 m 58** warm with the movie, against 3 m 57 warm without it
+on PR #1 — and the Sedov step that gained the movie took **36 s against
+41 s**. Both numbers say the movie made the job faster, which it obviously
+did not. The whole run was faster: the three steps this change does not
+touch ran at 0.686, 0.735 and 0.703 of their previous times, a mean of
+**0.708**, so the runner was about 30% quicker on this draw. Normalized
+against those, the Sedov step would have been 29.0 s without the movie, so
+twelve frames cost **≈ 7 s, about 0.58 s a frame** — against the ~5 s this
+was sized for, and consistent with the 0.72 s/frame measured locally at 151
+frames. This is the ±70% runner scatter doing exactly what "Testing" warns
+it does, and it is why the untouched steps are worth reading before the
+changed one.
+
+The job was also the **fastest of the five** on that run (the next was
+7 m 16), which confirms the PR #1 finding that it leads the run only when
+its cache is cold, and leaves it at a tenth of its 30-minute guard.
+
 **Why the job is ungated**, unlike the coverage step: coverage is a
 *report* whose consumer reads only `main`, while this is a *check*, and a
 pull request is exactly where a broken viewer should surface. `bin/` sits
