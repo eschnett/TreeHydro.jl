@@ -3944,6 +3944,110 @@ four separate processes rather than one, because both scripts define
 `main` and `const LEVELCOLORS` at top level in `Main` and Julia 1.11 — this
 package's floor — refuses to redefine a `const`.
 
+### Bounds checking in the kernels (added after step 11)
+
+Handed over as a brief from TreeAMR's ghost-performance pass, which found
+the same defect upstream. There was not a single `@inbounds` in `src/`, and
+the three kernels of the right-hand side read a great many indices per
+cell — `flux_kernel!` four stencil points of `D + 2` primitives per
+direction, 60 checked reads a cell in `D = 3`; `divergence_kernel!`
+`2·D·(D + 2)` = 30; `con2prim_kernel!` `D + 2` over the *stored* extent —
+every one of them checked twice, once by the scheme's own index arithmetic
+and once by Julia.
+
+Measured on the two-level mesh, `D = 3`, `N = 16`, `roots = 3`, 34 blocks,
+`EntropyWave`, `limiter = :none`, `riemann = :hlle`, one thread, Julia
+1.13, best of 20 calls to `hydro_rhs!` and the best of seven interleaved
+rounds, because this machine is shared and a single pair of runs does not
+resolve the smaller effects:
+
+| | ms | share of the available gain |
+|---|---|---|
+| as it was | 19.34 | — |
+| the five closure reads alone | 18.17 | 21% |
+| the `@inbounds for` blocks alone | 15.90 | 61% |
+| **both — what is in the tree** | **15.63** | **66%** |
+| every check off (`--check-bounds=no`) | 13.72 | 100% |
+
+So the change is worth **19%** of a right-hand-side evaluation against a
+ceiling of 29%. The brief predicted 21% against 32% and 65% of the
+available gain; the share is confirmed exactly, and the two absolute
+figures differ only because this machine is slower than the one the brief
+was written on.
+
+**The trap, and a correction to the brief's account of it.** `@inbounds`
+propagates into an inlined callee only when that callee is marked
+`@propagate_inbounds`, and an anonymous closure is not — so
+
+```julia
+P₋₂ = @inbounds ntuple(v -> prim[m2..., v, b], Val(D + 2))   # inert
+P₋₂ = ntuple(v -> @inbounds(prim[m2..., v, b]), Val(D + 2))  # what works
+```
+
+differ, and the first removes nothing. This matters here more than
+anywhere else, because reading `D + 2` values through
+`ntuple(v -> …, Val(D + 2))` is the package's characteristic idiom: it is
+how `con2prim`, `face_states` and `riemann_flux` all get their arguments,
+and there are five such sites in the two cell kernels. The annotation that
+is outside the closure is not wrong, merely *inert*, which is the dangerous
+part — it looks done.
+
+The brief priced that distinction at about a millisecond in sixteen
+(15.88 against 14.89). **That is the right sign and roughly twice the
+magnitude.** Paired across seven interleaved rounds the difference is
+**0.51 ms**, negative in six of the seven, against a round-to-round scatter
+of about 1.3 ms — which is why the first pair measured here came back
+*inverted*, and why the claim is not one a stopwatch should be asked to
+settle alone. It was settled instead by reading the IR: on the idiom in
+isolation, `code_llvm` carries **5** bounds-error references with no
+annotation, **5** with the annotation outside the closure, and **0** with
+it inside. The checks are certainly removed; they are merely cheaper than
+the brief's single pair of runs suggested, most of them being hoisted or
+shared across the `D + 2` reads that differ only in the variable slot.
+The larger half of the gain is in the `@inbounds for` blocks — above all
+`divergence_kernel!`'s, which covers all 30 of its flux reads.
+
+**Why this is safe.** Every index these kernels form comes from
+`map_blocks!`, whose contract fixes the range — owned, closed, or under
+`stored = true` the stored extent — and the offsets they then apply are
+exactly what the ghost widths in "Field sets" are chosen to accommodate.
+`flux_kernel!`'s `c[d] − 2` is the binding one and is why `U` and `P`
+carry `G = 2`: at `I[d] ∈ 1 … N+1` and `GP = 2` the reads span
+`1 … N+4`, which is the stored extent exactly.
+
+That makes `@inbounds` an **assertion**, and an assertion wants to be
+falsifiable. `--check-bounds=yes` overrides it package-wide and re-checks
+every index, so `.github/workflows/CI.yml` now passes `check_bounds: 'yes'`
+to `julia-actions/julia-runtest` *explicitly*. It was already the action's
+default, so it changes nothing today; the point is that the package now
+depends on it, and a default that silently changed would turn an unchecked
+`@inbounds` into memory corruption rather than a test failure. TreeAMR
+carries the same line for the same reason. **The two test runs prove
+different things and neither covers the other:** the checked run proves the
+assertion is true and, precisely because it disables `@inbounds`, never
+runs the code the change produces, while the plain run is the only one that
+exercises the optimized path and the only one that can catch a wrong
+*answer*.
+
+Both are green: **11622 tests passing with `@inbounds` live, and 11622
+under `--check-bounds=yes`** (3 m 44.8 and 5 m 19.9). And the change moves
+**not one bit** — all 136 `@info` lines the suite prints, every
+conservation bound, convergence rate, drift and `Float32` Kelvin–Helmholtz
+figure among them, are **byte-identical** to the unpatched run's.
+
+The suite gets *shorter*, which removes the usual objection that an
+assertion's benefit lands in production runs while its cost lands on
+everyone reading the code. Measured back to back at one thread on a quiet
+machine, **4 m 23.9 unpatched against 3 m 44.8 patched**, a **15%** saving
+on every CI cell and every local `Pkg.test` — the brief predicted 13%. The
+suite is itself a heavy user of the right-hand side.
+
+**Where it stops.** After the patch a flat profile of `hydro_rhs!` shows
+the residual spread thin across code the patch did not touch — other reads
+in the RHS path and TreeAMR's own host-side code — with nothing in it a
+single change worth making. Three kernels, five closures, four loops; the
+brief's advice to stop there is taken.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:

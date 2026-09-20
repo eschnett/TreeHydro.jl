@@ -65,6 +65,17 @@ jobs:
           # One cell, and only where the badge reads it. The dispatch arm
           # keeps the upload path exercisable from a branch.
           coverage: ${{ matrix.coverage == true && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') }}
+          # Explicit because the package now depends on it. The three RHS
+          # kernels carry `@inbounds`, which makes their index arithmetic an
+          # assertion rather than a check; this is the only thing that
+          # falsifies it, since `--check-bounds=yes` overrides `@inbounds`
+          # package-wide and re-checks every index they form. It is already
+          # this action's default, so it changes nothing today -- the point
+          # is that a default which silently changed would turn an unchecked
+          # `@inbounds` into memory corruption rather than a test failure.
+          # See "Bounds checking in the kernels" in `CODE.md`; TreeAMR's
+          # CI.yml carries the same line for the same reason.
+          check_bounds: 'yes'
         env:
           # Every number the suite prints must be identical at one thread
           # and at four.

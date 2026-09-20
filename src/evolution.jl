@@ -206,16 +206,23 @@ end
     I = @index(Global, NTuple)                     # already a stored index
     b = I[D + 1]
     c = ntuple(d -> I[d], Val(D))
-    Ucell = ntuple(v -> cons[c..., v, b], Val(D + 2))
+    # `@inbounds` *inside* the closure, not around the `ntuple`. The
+    # annotation propagates into an inlined callee only when that callee is
+    # marked `@propagate_inbounds`, and an anonymous closure is not — so
+    # `@inbounds ntuple(v -> cons[...], …)` compiles to the checked reads it
+    # looks like it removed. This is the package's characteristic idiom, so
+    # the mistake would be made `D + 2` values at a time; see "Bounds
+    # checking in the kernels" in `CODE.md`.
+    Ucell = ntuple(v -> @inbounds(cons[c..., v, b]), Val(D + 2))
     Pcell, hit = con2prim(eos, floors, Ucell)
-    for v in 1:(D + 2)
+    @inbounds for v in 1:(D + 2)
         prim[c..., v, b] = Pcell[v]
     end
-    prim[c..., D + 3, b] = signal_speed(eos, Pcell)
+    @inbounds prim[c..., D + 3, b] = signal_speed(eos, Pcell)
     # `one`/`zero` of a value rather than of a captured type: a `Type` in a
     # kernel closure is the leak "Running on a device" in `CODE.md` warns
     # about.
-    prim[c..., D + 4, b] = hit ? one(first(Pcell)) : zero(first(Pcell))
+    @inbounds prim[c..., D + 4, b] = hit ? one(first(Pcell)) : zero(first(Pcell))
 end
 
 # Step (3): reconstruction and Riemann solve fused into one kernel per
@@ -240,16 +247,16 @@ end
     m2 = Base.setindex(c, c[d] - 2, d)
     p1 = Base.setindex(c, c[d] + 1, d)
 
-    P₋₂ = ntuple(v -> prim[m2..., v, b], Val(D + 2))
-    P₋₁ = ntuple(v -> prim[m1..., v, b], Val(D + 2))
-    P₀ = ntuple(v -> prim[c..., v, b], Val(D + 2))
-    P₊₁ = ntuple(v -> prim[p1..., v, b], Val(D + 2))
+    P₋₂ = ntuple(v -> @inbounds(prim[m2..., v, b]), Val(D + 2))
+    P₋₁ = ntuple(v -> @inbounds(prim[m1..., v, b]), Val(D + 2))
+    P₀ = ntuple(v -> @inbounds(prim[c..., v, b]), Val(D + 2))
+    P₊₁ = ntuple(v -> @inbounds(prim[p1..., v, b]), Val(D + 2))
 
     P_L, P_R = face_states(lim, eos, floors, P₋₂, P₋₁, P₀, P₊₁)
     F = riemann_flux(solver, eos, P_L, P_R, Val(d))
 
     f = ntuple(e -> I[e] + GF[e], Val(D))
-    for v in 1:(D + 2)
+    @inbounds for v in 1:(D + 2)
         flux[f..., v, b] = F[v]
     end
 end
@@ -267,8 +274,8 @@ end
     b = I[D + 1]
     c = ntuple(e -> I[e] + GF[e], Val(D))
     o = ntuple(e -> I[e], Val(D))
-    h = spacings[b]
-    for v in 1:(D + 2)
+    h = @inbounds spacings[b]
+    @inbounds for v in 1:(D + 2)
         acc = zero(eltype(du))
         for d in 1:D
             hi = Base.setindex(c, c[d] + 1, d)
