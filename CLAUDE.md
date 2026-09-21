@@ -37,11 +37,13 @@ Two rules follow from `CODE.md` and govern every change here:
 faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
 reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; precision
 (H6a) is step 12 and is next.**
-`CODE.md` is complete and reviewed. What exists: `Project.toml` with the
-`[sources]` pin to TreeAMR's GitHub
-`main`; `src/TreeHydro.jl`, the module shell; `src/precision.jl` (`wrap`,
-`ceilint`, `floorint`, `tofloat64`) and `src/device.jl` (`to_backend`,
-`hostcopy`, `hostcopy!`), both ported from TreeWave; `src/floors.jl`
+`CODE.md` is complete and reviewed. What exists: `Project.toml` with
+`TreeAMR = "0.1.1"` from the General registry — TreeAMR was released, and
+the `[sources]` pin to its GitHub `main` is gone, which also lowered the
+Julia floor from 1.11 to 1.10; `src/TreeHydro.jl`, the module shell;
+`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
+`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
+TreeWave; `src/floors.jl`
 (`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
 `src/eos.jl` (`EquationOfState`, `IdealGas`, `pressure`,
 `internal_energy`, `soundspeed`, the state accessors `statedims`,
@@ -112,7 +114,8 @@ dependency order and the blast uses both the chunked driver and a static
 `hydro_solve!` run, and Kelvin–Helmholtz last, being the only case whose
 reference is a uniform fine run of this code rather than a closed form.
 And from step 11 the viewers: `bin/Project.toml` (CairoMakie and SixelTerm
-in an environment of their own, with `[sources]` for *both* packages),
+in an environment of their own, with a `[sources]` entry for TreeHydro —
+it had one for TreeAMR too until that package was released),
 `bin/backend.jl` (`resolvebackend`, `withbackend`, `checkprecision`, after
 TreeWave's), `bin/visualize1d.jl` (the tracked tube against the exact
 solution, per block coloured by level, with `τ` and the conserved totals
@@ -327,9 +330,11 @@ tests either way.
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
 ```
 
-The clean-checkout check, which is what the `[sources]` pin exists for: a
-tree with no `Manifest.toml` resolves TreeAMR from GitHub and passes.
-This is what CI does, and a local run that passes proves nothing about it:
+The clean-checkout check: a tree with no `Manifest.toml` resolves TreeAMR
+from the General registry and passes. This is what CI does, and a local
+run that passes proves nothing about it — a depot that already has
+everything, and a `Manifest.toml` that pins what a fresh resolve would
+have to choose, are exactly what it is checking around:
 
 ```bash
 d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
@@ -337,19 +342,30 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
 ```
 
 The same check **under the floor version**, before a step is merged. CI
-runs Julia 1.11 as well as the current release, and 1.11 is stricter in at
-least one way that matters here — it refuses to redefine a `const`, which
-1.12 and later allow — so a suite that is green at 1.13 can be red at 1.11
-(see "Things that will bite"). With `juliaup`:
+runs Julia 1.10 — the floor since TreeAMR's release — as well as the
+current release, and 1.10 is stricter in at least one way that matters
+here: it refuses to redefine a `const`, which 1.12 and later allow, so a
+suite that is green at 1.13 can be red at the floor (see "Things that will
+bite"). With `juliaup`:
 
 ```bash
 d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
-  julia +1.11 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+  julia +1.10 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
+The floor costs **4 m 25.5 at one thread** against the release's 3 m 32.3,
+measured back to back when the floor moved — so it is 1.25× the run you
+have just done and not a different afternoon. Checked it costs **4 m 11.6**
+there, which is *not* slower than its own plain run and is the one thing
+about the move that inverted; see `CODE.md`. (It is also the *cheap* one
+under coverage, which is the opposite way round and is why the
+instrumented cell is the floor cell; see "Things that will bite".)
+
 The viewers, in their own environment so that CairoMakie never becomes a
-dependency of the package. The first call instantiates it; `[sources]`
-means no manual `Pkg.develop`:
+dependency of the package. The first call instantiates it; the
+`[sources]` entry for TreeHydro means no manual `Pkg.develop`, and it is
+also why `bin/` still needs **Julia 1.11** while the package itself runs
+at 1.10:
 
 ```bash
 julia --project=bin -e 'using Pkg; Pkg.instantiate()'
@@ -417,11 +433,19 @@ Neither this package nor TreeAMR depends on a device package.
 Carried over from TreeAMR and TreeWave where they apply here, plus what is
 specific to a hydro code. Each is in `CODE.md` with its reason.
 
-- **TreeAMR will be pinned to the GitHub `main`, not the local checkout.**
-  Once H0 adds the `[sources]` entry, `~/src/jl/TreeAMR` is *not* what the
-  tests see; an unpushed TreeAMR change is invisible here. Say so rather
-  than editing that checkout and assuming the tests see it. The
-  `[sources]` entry is also why the Julia floor is 1.11.
+- **TreeAMR comes from the registry, not from the local checkout**
+  (amended when TreeAMR 0.1.1 was released). `Project.toml` has no
+  `[sources]` entry any more: the compat bound is `TreeAMR = "0.1.1"` and
+  a clean checkout resolves it from General. So `~/src/jl/TreeAMR` is
+  still *not* what the tests see, and the bar is now higher than it was —
+  it used to be that an unpushed change there was invisible here, and now
+  an **unreleased** one is. A TreeAMR change this package needs has to be
+  tagged and registered before it can be used; say so rather than editing
+  that checkout and assuming the tests see it. Dropping the entry is also
+  what lowered the Julia floor from 1.11 to 1.10, `[sources]` being a 1.11
+  feature. `bin/Project.toml` still has one, for *this* package, which is
+  unregistered — so the viewer environment keeps 1.11 as its floor and
+  says so in its own `[compat]`.
 - **Three ghost widths, three off-by-`G`s.** The state `U` has `G = 2`,
   the primitives `P` have `G = 2`, the fluxes `F_d` have `G = 0`. Face `i`
   of a block (in `1 … N+1`) lies between cells `i−1` and `i`; cell `i` is
@@ -687,9 +711,10 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   `3.125e-6` being the ambient share of the top hat that `measured_E₀`
   subtracts along with the rest of the box.
 - **Every test file is `include`d into the same `Main`, so a top-level
-  `const` name must be unique across files — and only Julia 1.11 will tell
-  you** (found in step 10b, when the merge of steps 8–10 went red on the
-  two 1.11 entries of CI and green on the two 1.13 ones). `driver_tests.jl`
+  `const` name must be unique across files — and only the floor version
+  will tell you** (found in step 10b, when the merge of steps 8–10 went
+  red on the two 1.11 entries of CI and green on the two 1.13 ones; the
+  floor cell is 1.10 now and behaves the same way). `driver_tests.jl`
   and `sedov_tests.jl` both defined `TRACKED_1D`, `TRACKED_2D`, `FINE_2D`,
   `COARSE_2D` and `NOFIX_2D`. Julia 1.12 and later quietly allow a `const`
   to be redefined, so every local run at 1.13 and the clean-checkout check
@@ -698,8 +723,8 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   (`TRACKED_SEDOV_1D`, `TRACKED_KH`); `runtests.jl` now fails on any
   duplicate, from the source text, before anything is included; and a step
   that adds a test file runs once under the floor version before it is
-  merged — the "Commands" section has the line. The floor is 1.11 because
-  of the `[sources]` pin, and 1.11 is the version that checks this.
+  merged — the "Commands" section has the line. The floor is 1.10, and
+  every Julia before 1.12 checks this.
 - **Don't name a keyword `maxlevel`.** It shadows TreeAMR's exported
   `maxlevel(forest)` inside the function body. Use `maxlevel_cap`.
 - **A decimal literal in a `T` expression is a leak.** `T(7//5)`, not
@@ -784,16 +809,25 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   locally and back to back: **4 m 01 without coverage and 12 m 38 with
   it**, a factor of **3.14**, both green at 11609 tests. So coverage is
   collected **once, where it is read, on the fastest cell of the four**:
-  `coverage: true` on the `version: "1.11"` / `macOS-latest` entry alone.
+  `coverage: true` on the floor version's `macOS-latest` entry alone
+  (`version: "1.11"` when it was measured, `version: "1.10"` since).
   Instrumented on CI, one thread, the four combinations measure **macOS
   1.11 12–17 m, ubuntu 1.11 18–20 m, macOS 1.13 23 m 22, ubuntu 1.13
   42 m 02** — macOS 1.5–1.8× faster than Linux at either version, 1.11
   1.9–2.3× faster than 1.13 on either architecture, each effect
   reproduced across the other axis. Most of the version column is
-  instrumentation itself: measured locally, back to back, coverage costs
+  instrumentation itself: measured locally, back to back, coverage cost
   **1.04× on 1.11 and 3.14× on 1.13** (8 m 55 → 9 m 17 against 4 m 01 →
-  12 m 38). With no `VERSION` check anywhere in `src/` or `test/` the
-  lines reported are identical whichever cell carries it.
+  12 m 38). **Re-measured when the floor moved to 1.10**, the same way and
+  at 11622 tests: **4 m 25.5 → 8 m 05.4 on 1.10 (1.83×)** against
+  **3 m 32.3 → 12 m 38.3 on 1.13 (3.58×)**. So the *conclusion* holds —
+  the floor cell runs instrumented in 8 m 05 against 12 m 38, a factor of
+  1.56 — and the reason given for it does not: instrumentation is nearly
+  free on **1.11**, not on floors, and 1.10 is the slower version
+  uninstrumented. Do not repeat the 1.04× as though it were a property of
+  whichever version is the floor. With no `VERSION` check anywhere in
+  `src/` or `test/` the lines reported are identical whichever cell
+  carries it.
   The step's condition is `matrix.coverage == true && (github.ref ==
   'refs/heads/main' || github.event_name == 'workflow_dispatch')`, with
   `julia-processcoverage` and the Codecov upload under the same
@@ -927,12 +961,16 @@ Match TreeAMR's, since the three packages are read together:
   and reviewed as such; `test/references/*.toml`, which step 7b generated
   and step 7c removed, were the one exception and are gone. `bin/output/`
   is gitignored and the viewers write PNGs there.
-- **There are two TreeAMR pins and two Manifests**, `Project.toml`'s and
-  `bin/Project.toml`'s. A change that updates only the first leaves
-  `julia --project=bin bin/visualize1d.jl` resolving a branch the tests are
-  not using — grep for `rev =` rather than editing from memory. `bin/` has
-  its own `Manifest.toml` (gitignored, like the root's), so
-  `Pkg.update("TreeAMR")` at the root does not touch it.
+- **There is one TreeAMR pin now and still two Manifests** (amended when
+  TreeAMR 0.1.1 was released). Both environments resolve TreeAMR from the
+  registry, so the two `rev = "main"` entries that had to be kept in step
+  are gone; what is left is a compat bound in each `Project.toml`, and
+  `bin/` still has its own `Manifest.toml` (gitignored, like the root's),
+  so `Pkg.update("TreeAMR")` at the root does not touch it. The viewers
+  can therefore still resolve a *different* TreeAMR from the tests — an
+  older one, if `bin/`'s Manifest is stale — which is what the `viewer`
+  job in CI exists to catch. Grep for `TreeAMR =` across both files rather
+  than editing from memory.
 - **`bin/backend.jl` is `include`d by both viewers**, and step 14 will add
   a third script that runs against the *package* environment instead. So it
   may use only what both environments have, which today is
@@ -941,7 +979,7 @@ Match TreeAMR's, since the three packages are read together:
 - One workflow with two jobs: `.github/workflows/CI.yml`. `test` runs the
   whole suite on every
   push that touches something other than Markdown, over **four cells
-  spelled out one at a time** rather than a product — 1.11 on macOS (the
+  spelled out one at a time** rather than a product — 1.10 on macOS (the
   floor, and the cell that carries the coverage), 1 on Linux, 1 on macOS
   (which carries the arm64 reduction claim) and 1 on Linux at 4 threads.
   The redundant fourth pair of the product is the floor on Linux; the

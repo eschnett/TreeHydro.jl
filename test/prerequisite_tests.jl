@@ -1,12 +1,13 @@
-# What the pinned TreeAMR has to provide before any of the scheme can be
+# What the resolved TreeAMR has to provide before any of the scheme can be
 # written.
 #
-# `Project.toml` pins TreeAMR to GitHub `main` through a `[sources]` entry,
-# so what these tests run against is a resolved commit of that branch and
-# *not* the checkout at `~/src/jl/TreeAMR`. Two things landed upstream as
-# this package's prerequisites (see "Upstream prerequisites" in `CODE.md`),
-# and a `main` that lost either of them would otherwise be found by a
-# `MethodError` in the middle of step 1 rather than here. The rest of the
+# `Project.toml` takes TreeAMR from the General registry at `0.1.1`, so
+# what these tests run against is a released version and *not* the checkout
+# at `~/src/jl/TreeAMR` — nor, since that release, whatever is on its
+# `main`. Two things landed upstream as this package's prerequisites (see
+# "Upstream prerequisites" in `CODE.md`), and a release that lost either of
+# them would otherwise be found by a `MethodError` in the middle of step 1
+# rather than here. The rest of the
 # M8 surface the scheme is written against is checked as a list of names,
 # which is the cheapest thing that fails when a signature is renamed
 # upstream.
@@ -151,10 +152,10 @@ end
     @test_throws "same layout" TreeHydro.hostcopy!(thin, src)
 end
 
-@testset "The pinned TreeAMR exports the M8 names the scheme needs" begin
+@testset "The resolved TreeAMR exports the M8 names the scheme needs" begin
     # A name list rather than a call: every one of these is reached for in
-    # steps 1–9, and the cheapest place to find out that `main` renamed one
-    # is here. `AllVariables` and the stored launch are exercised above;
+    # steps 1–9, and the cheapest place to find out that an upstream
+    # release renamed one is here. `AllVariables` and the stored launch are exercised above;
     # these are the rest of the surface — the flux fixup, the
     # physical-boundary hook (this package is its first caller anywhere),
     # and the two reductions the criterion and the diagnostics go through.

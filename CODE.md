@@ -121,8 +121,11 @@ they go upstream instead of being spelled out here:
    be evaluated `D + 2` times per cell, and in the boundary hook's case
    at every RHS evaluation.
 
-`m8` has since been merged, so both land on TreeAMR's `main`, which is
-what the `[sources]` entry pins.
+`m8` has since been merged, so both are in TreeAMR's releases. *(Amended
+when TreeAMR 0.1.1 was released.)* The `[sources]` entry that used to pin
+`main` is gone: TreeAMR is in the General registry and this package's
+compat bound is `TreeAMR = "0.1.1"`, so what the tests see is a released
+version and a change upstream arrives here only with a release.
 
 ## The equations
 
@@ -2135,10 +2138,22 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
 `OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats`; `bin/`
 adds `CairoMakie` and `SixelTerm` in its own environment. TreeAMR is
-unregistered and is located through a `[sources]` entry, which puts the
-Julia floor at 1.11 as it does for TreeWave. **The entry pins
-`rev = "main"`**, as TreeWave's does (decided; the design was written
-against the `m8` branch, which has since been merged).
+resolved from the General registry at `TreeAMR = "0.1.1"`.
+
+*(Amended when TreeAMR 0.1.1 was released; it says here for the record
+what it used to say, because two of this package's arrangements were built
+on it.)* TreeAMR was unregistered, and was located through a `[sources]`
+entry pinning `rev = "main"`, as TreeWave's does. Two things followed from
+that and no longer do. The Julia floor was **1.11**, because `[sources]`
+is a 1.11 feature; it is now **1.10**, which is TreeAMR's own floor, and
+`CI.yml`'s floor cell moves with it. And the tests saw whatever was on
+TreeAMR's `main`, so an unpushed change there was invisible here; they now
+see a released version, so an **unreleased** change is invisible here,
+which is the higher bar and is worth knowing before a step plans on an
+upstream fix. `bin/Project.toml` keeps a `[sources]` entry for *this*
+package, which is unregistered, and therefore keeps 1.11 as its own floor
+— stated there as a compat bound rather than left to be discovered, since
+a 1.10 Pkg ignores `[sources]` and then fails to find TreeHydro at all.
 
 Testset names are claims, each opening with the failure mode it guards;
 measured numbers are recorded in this file when they change. Conventions
@@ -2258,9 +2273,11 @@ macOS is 1.5–1.8× faster than Linux at either version and 1.11 is
 reproduced across the other axis rather than resting on one draw — which
 matters, given the ±70% scatter recorded below. Coverage therefore goes
 on the **fastest cell of the four**: the `matrix` puts `coverage: true`
-on the `version: "1.11"`, `macOS-latest` entry and the step reads
-`matrix.coverage == true`. No file here contains a `VERSION` check or an
-`@static`, so the lines reported are the same lines whichever cell
+on the floor version's `macOS-latest` entry and the step reads
+`matrix.coverage == true` — `version: "1.11"` when this was measured,
+`version: "1.10"` since TreeAMR's release moved the floor, and re-measured
+there (below) rather than assumed. No file
+here contains a `VERSION` check or an `@static`, so the lines reported are the same lines whichever cell
 carries it, and Codecov cannot tell which one did.
 
 *Only where it is read.* The badge reflects `main`, so instrumenting a
@@ -2273,6 +2290,34 @@ that runs nowhere reports nothing — the same failure mode as an SSPRK
 stage limiter installed in a field nobody reads.
 
 *Never the threaded cell*, which is the whole of the history above.
+
+*(Re-measured when the floor moved to 1.10.)* Dropping the `[sources]`
+entry moved the floor cell from 1.11 to 1.10, and the cell that carries
+the coverage moved with it — so the table above was taken again, whole
+suite, one thread, back to back on a quiet machine, 11622 tests in every
+entry:
+
+| | Julia 1.10 | Julia 1.13 |
+|---|---|---|
+| no coverage | 4 m 25.5 | 3 m 32.3 |
+| with coverage | 8 m 05.4 | 12 m 38.3 |
+| factor | **1.83×** | **3.58×** |
+
+**The conclusion survives and the reason for it does not.** Instrumenting
+the floor is no longer nearly free: 1.04× was a property of *1.11*, not of
+floor versions, and 1.10 pays 1.83×. Nor is the floor the faster version
+here — uninstrumented it is 1.25× *slower* than 1.13, where 1.11 was 2.2×
+slower. What decides the cell is the instrumented column, and there 1.10
+comes in at 8 m 05 against 12 m 38, a factor of **1.56**, which is the
+same ordering the original measurement found and is far outside the local
+back-to-back scatter. So `coverage: true` stays on the floor cell, and it
+stays there for a measurement taken on the version that now carries it
+rather than for an inherited one. The 1.11 column is left above as the
+record of what was measured then; it was not re-taken, because no cell
+runs 1.11 any more. And the 1.13 instrumented entry reading **12 m 38**
+both times is a coincidence and not a number carried over: the
+uninstrumented one moved from 4 m 01 to 3 m 32 over the same interval,
+which is about what the `@inbounds` pass took off everything else.
 
 Measured end to end afterwards, against **14 m 20** for the same suite
 before any of this (the last all-cells-green run under the old matrix)
@@ -2410,6 +2455,9 @@ Each has an acceptance test; serial `Float64` correctness first.
     `SciMLBase = "3.50.1"` follow TreeWave's, `OrdinaryDiffEqSSPRK =
     "2.3.2"` the version TreeAMR's test environment resolves,
     `TreeAMR = "0.1.0"`, `julia = "1.11"` for the `[sources]` entry.
+    *(Amended when TreeAMR 0.1.1 was released: the entry is gone,
+    `TreeAMR = "0.1.1"` comes from the registry and the floor is
+    `julia = "1.10"`.)*
     `OrdinaryDiffEqSSPRK` and `SciMLBase` are dependencies from H0 and
     unused until H1c, so that the floor is fixed before anything relies
     on it.
@@ -4048,6 +4096,74 @@ in the RHS path and TreeAMR's own host-side code — with nothing in it a
 single change worth making. Three kernels, five closures, four loops; the
 brief's advice to stop there is taken.
 
+### TreeAMR's release and the 1.10 floor (added after step 11)
+
+TreeAMR 0.1.1 was registered in General, which ends the arrangement that
+H0 built and that three of this package's notes were written around.
+`Project.toml` loses its `[sources]` entry and gains
+`TreeAMR = "0.1.1"`; `bin/Project.toml` loses its copy of the same entry
+and keeps the one for *this* package, which is unregistered.
+
+**What actually changed, as against what it looks like.** It looks like a
+dependency bump. Three things move with it.
+
+- **The bar for an upstream change rose.** The pin was `rev = "main"`, so
+  a TreeAMR change was visible here as soon as it was *pushed*. It is now
+  visible only once it is tagged and registered. The old note — "an
+  unpushed TreeAMR change is invisible here" — understates the new
+  situation rather than merely restating it, and `CLAUDE.md` and
+  `PLAN.md` say so.
+- **The Julia floor fell from 1.11 to 1.10.** `[sources]` is a 1.11
+  feature and was the *only* reason the floor was 1.11; TreeAMR's own
+  floor is 1.10, and that is now this package's. The suite is green there
+  at **11622 tests**, the same count as at the current release, from a
+  clean resolve with no `Manifest.toml`. Nothing in `src/` or `test/`
+  needed changing for it, which is the outcome worth recording: the
+  package had no 1.11-only construct in it, and nobody had checked.
+- **`bin/` did not follow.** Its `[sources]` entry for TreeHydro cannot
+  go anywhere, so the viewer environment keeps 1.11 — stated there as a
+  `[compat]` bound, because a 1.10 Pkg does not reject `[sources]`, it
+  *ignores* it, and then fails to find TreeHydro with an error about the
+  wrong thing. The environment re-resolves to TreeAMR 0.1.1 and
+  `bin/visualize1d.jl` renders unchanged.
+
+**The measurements.** Whole suite, one thread, back to back on a quiet
+machine, 11622 tests in every entry; the coverage column is in "Testing"
+above and the argument it settles is which CI cell carries the
+instrumentation:
+
+| | Julia 1.10 | Julia 1.13 |
+|---|---|---|
+| no coverage | 4 m 25.5 | 3 m 32.3 |
+| with coverage | 8 m 05.4 | 12 m 38.3 |
+
+The floor is now the *slower* version uninstrumented — 1.25×, where 1.11
+was 2.2× slower — and the cheaper one instrumented, by 1.56×. Coverage
+therefore stays on the floor cell, for a reason re-measured on the version
+that carries it.
+
+**One thing that inverted, and is left as an observation.** CI passes
+`check_bounds: 'yes'` on every cell, so what the floor cell actually runs
+is the *checked* suite — and at 1.10 that costs nothing: **4 m 11.6
+checked against 4 m 25.5 plain**, where at the current release it costs
+1.4× (5 m 19.9 against 3 m 44.8, measured after step 11). Both
+environments resolve the same KernelAbstractions 0.9.42, so that is not
+it. One draw each, not investigated, and recorded because the `@inbounds`
+saving in "Bounds checking in the kernels" was measured at the *release*
+and there is now a reason to think it is not the same size at the floor.
+It changes nothing: the annotation is a correctness assertion that CI
+checks, and its cost is not what justifies it.
+
+**What was checked.** The suite at 1.10 from a clean resolve (green,
+11622); the same suite at 1.10 under `--check-bounds=yes`, which is what
+CI's floor cell runs (green, 11622); the suite at the current release
+(green, 11622); the viewer
+environment re-resolved from a removed `Manifest.toml`, taking
+TreeAMR 0.1.1 from the registry, and the tracked tube rendered from it.
+The `[compat]` bound in `bin/` is not exercised by any of that — nothing
+runs `bin/` at 1.10 — and is there to turn a confusing failure into a
+clear one.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:
@@ -4107,7 +4223,8 @@ one `evolve!` driver with cases as data; the two
 order `p = 3`, with `p = 1` measured beside it; the McNally smooth-ramp
 Kelvin–Helmholtz setup; Sedov acceptance on the exponent, the jump and a
 uniform reference, the full profile an extension; and the `[sources]`
-pin to TreeAMR's `main` (`m8` having been merged).
+pin to TreeAMR's `main` (`m8` having been merged) — which TreeAMR's 0.1.1
+release has since replaced with an ordinary registry dependency.
 
 Still proposed:
 

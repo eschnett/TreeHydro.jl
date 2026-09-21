@@ -33,7 +33,7 @@ better here.
 **Status: all four cases run and all four are drawn — milestones H1, H2,
 H3, H4 and H5 are done.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
-the host-copy helpers, the tests that say the pinned TreeAMR still
+the host-copy helpers, the tests that say the TreeAMR release still
 provides what the scheme is written against, the ideal-gas equation of
 state, the conversions between the conserved and primitive states, the two
 floor rules and the reset that imposes them on the conserved state from
@@ -151,8 +151,9 @@ julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 their own so that CairoMakie is never a dependency of the package. They
 contain no time-stepping loop: every frame and every curve comes through
 the one driver's `observer` hook, which exists for exactly that. The first
-call instantiates the environment, and the `[sources]` entries mean no
-manual `Pkg.develop`:
+call instantiates the environment, and the `[sources]` entry for this
+package means no manual `Pkg.develop` — it is also why `bin/` needs Julia
+1.11 while the package itself runs at 1.10:
 
 ```bash
 julia --project=bin -e 'using Pkg; Pkg.instantiate()'

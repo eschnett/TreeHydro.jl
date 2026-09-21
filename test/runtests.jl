@@ -17,10 +17,11 @@ using TreeHydro
 
 @testset "TreeHydro.jl" begin
     # Every test file below is `include`d into this one module, so a top-level
-    # name defined in two of them is one name. Julia 1.11 refuses to redefine
-    # a `const` and 1.12 and later quietly allow it, so a collision passes
-    # every local run at the newer version and fails only the 1.11 entries of
-    # CI — which is how the blast's `TRACKED_1D` reached `main` in step 10.
+    # name defined in two of them is one name. Julia before 1.12 refuses to
+    # redefine a `const` and 1.12 and later quietly allow it, so a collision
+    # passes every local run at the newer version and fails only the floor
+    # entries of CI — which is how the blast's `TRACKED_1D` reached `main` in
+    # step 10.
     # Checked from the source text, once, before anything is included, so
     # that it fails at every version and not only at the floor.
     @testset "No two test files define the same top-level constant" begin

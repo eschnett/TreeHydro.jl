@@ -21,10 +21,13 @@ brief a single session can carry. The order is the dependency order.
   measured numbers in the commit body). **Do not merge into `main` and
   do not push**; report the branch and its commits. There is no remote
   yet; when there is one, the rule stands.
-- **TreeAMR is pinned to GitHub `main`** through `[sources]`. The
-  checkout at `~/src/jl/TreeAMR` is *not* what the tests see. If a step
-  turns out to need something from TreeAMR, stop, describe exactly what
-  and why, and report — do not edit that checkout and carry on.
+- **TreeAMR is a registry dependency** at `TreeAMR = "0.1.1"` (amended
+  when TreeAMR was released; it was pinned to GitHub `main` through
+  `[sources]` until then). The checkout at `~/src/jl/TreeAMR` is *not*
+  what the tests see, and neither is its `main` any more — only a
+  released version is. If a step turns out to need something from
+  TreeAMR, stop, describe exactly what and why, and report — do not edit
+  that checkout and carry on.
 - **Generic in `T` and in the backend from the first line.** Every driver
   takes `T` as a leading positional argument (default `Float64`) and
   `backend` as a keyword (default `CPU()`); no floating-point literal in
@@ -108,7 +111,8 @@ Changes:
 - `Project.toml`: deps `TreeAMR`, `KernelAbstractions`,
   `OrdinaryDiffEqSSPRK`, `SciMLBase`; compat bounds; `julia = "1.11"`;
   the `[sources]` entry pinning TreeAMR to GitHub `main`, with TreeWave's
-  comment on why it exists.
+  comment on why it exists. *(Superseded: TreeAMR 0.1.1 was released, the
+  entry is gone and the floor is `julia = "1.10"`.)*
 - `.gitignore` in TreeWave's image: `*~`, `*.swp`, `.DS_Store`,
   `/docs/build/`, `Manifest.toml`, `/bin/output/`, `TODO.md`.
 - `src/TreeHydro.jl`: the module shell with its docstring and the

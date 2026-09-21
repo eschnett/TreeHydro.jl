@@ -28,16 +28,23 @@ jobs:
       # threads. The floor on Linux is the redundant fourth pair.
       matrix:
         include:
-          # Julia 1.11 is what `[sources]` requires, and it is stricter
-          # than 1.13 -- it still refuses to redefine a `const`.
+          # Julia 1.10 is the floor -- TreeAMR's own, inherited now that
+          # this package resolves it from the General registry and has no
+          # `[sources]` entry to require 1.11. Like 1.11 it is stricter
+          # than 1.13: it still refuses to redefine a `const`, which is
+          # the thing the floor cell has actually caught.
           #
-          # It also carries the coverage, because instrumented this is the
-          # fastest cell of the four by a factor of up to 3.4 (coverage
-          # costs 1.04x on 1.11 against 3.14x on 1.13, and these runners
-          # are faster than the Linux ones). No file in `src/` or `test/`
-          # has a `VERSION` check, so the lines reported are the same
-          # whichever cell reports them.
-          - version: "1.11"
+          # It also carries the coverage, because instrumented it is the
+          # fastest cell of the four: measured locally, back to back,
+          # coverage costs 1.83x on 1.10 against 3.58x on 1.13, so 1.10
+          # runs instrumented in 8 m 05 against 1.13's 12 m 38 even though
+          # it is the slower of the two uninstrumented. Instrumentation is
+          # not nearly free on the floor -- that was a property of 1.11 and
+          # did not survive the move -- but the ordering is what decides
+          # this, and it did. No file in `src/` or `test/` has a `VERSION`
+          # check, so the lines reported are the same whichever cell
+          # reports them.
+          - version: "1.10"
             os: macOS-latest
             coverage: true
           - version: "1"
@@ -90,11 +97,12 @@ jobs:
           # A Codecov outage should not turn a green test run red.
           fail_ci_if_error: false
 
-  # `bin/` has its own environment and its own copy of the TreeAMR pin, so
-  # the test job above cannot exercise it: the viewers can keep building
-  # against an older TreeAMR than the tests until they fail on an API the
-  # tests are already using, which is exactly how TreeWave's `bin/` broke on
-  # the removed `cell_center`. Nothing in `src/` or `test/` would notice.
+  # `bin/` has its own environment, so the test job above cannot exercise
+  # it: the viewers can keep building against a different TreeAMR from the
+  # tests -- they no longer carry a second pin, but they do resolve
+  # separately -- until they fail on an API the tests are already using,
+  # which is exactly how TreeWave's `bin/` broke on the removed
+  # `cell_center`. Nothing in `src/` or `test/` would notice.
   # This job runs them for real and keeps the figures, so a plot that
   # silently stops making sense is visible rather than merely unbroken.
   #
@@ -145,8 +153,9 @@ jobs:
             --movie-frames=12 --no-display
       # Four separate processes on purpose, and not one `julia -e` that
       # includes both scripts: each defines `main`, `snapshot`/`frame2d` and
-      # `const LEVELCOLORS` at top level in `Main`, and Julia 1.11 -- the
-      # floor this package is pinned to -- refuses to redefine a `const`.
+      # `const LEVELCOLORS` at top level in `Main`, and Julia 1.10 and 1.11
+      # -- the package's floor, and this environment's -- refuse to redefine
+      # a `const`.
       - name: Check that every figure was written
         run: |
           test -s bin/output/sod_1d.png
