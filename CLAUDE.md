@@ -293,7 +293,10 @@ recording a number. About **3 m 44 at one thread and 2 m 38 at four**
 and thirty seconds at four — twelve two-dimensional evolutions, four
 of them 2700 steps on 128²-equivalent meshes, and the most parallel work
 any one file holds, which is why the two thread counts diverge as much as
-they do. The blast before it cost 50 s and 30 s). **This machine is
+they do. The blast before it cost 50 s and 30 s). Every figure in this
+paragraph **predates the `@inbounds` pass**, which took 15% off the suite
+(4 m 23.9 against 3 m 44.8, measured back to back at one thread after step
+11), so read them as an ordering rather than as a target. **This machine is
 shared**, and runs taken while something else was on it came back at 4 m 10
 and 3 m 12 — a fifth slower — so a timing is worth comparing only against
 another taken under the same load. Step 11's one extra testset was measured
@@ -309,6 +312,19 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
+```
+
+And the checked run, which is a *different* claim rather than a slower
+version of the same one: the three RHS kernels carry `@inbounds`, so their
+indices are an assertion, and this is the only thing that falsifies it.
+Because it overrides `@inbounds` package-wide it never runs the code the
+package actually ships — so it does not replace a plain run, which is the
+only one that can catch a wrong answer. Run both before recording a
+number. Measured at one thread: 3 m 44.8 plain, 5 m 19.9 checked, 11622
+tests either way.
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
 ```
 
 The clean-checkout check, which is what the `[sources]` pin exists for: a
@@ -417,6 +433,26 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   every stored point including ghosts, and the kernel's index *is* the
   stored index — nothing to add. `con2prim!` is the `stored = true`
   kernel; a kernel written for one form is wrong under another.
+- **The three RHS kernels carry `@inbounds`, and `@inbounds` does not
+  reach into an `ntuple` closure** (measured after step 11). Two things in
+  one place. The annotation propagates into an inlined callee only when
+  that callee is marked `@propagate_inbounds`, and an anonymous closure is
+  not — so `@inbounds ntuple(v -> prim[i..., v, b], Val(D+2))` is *inert*
+  and `ntuple(v -> @inbounds(prim[i..., v, b]), Val(D+2))` is the one that
+  works. Reading `D + 2` values that way is this package's characteristic
+  idiom, so the mistake is made a tuple at a time, and it looks done. The
+  IR is what settles it, not a stopwatch: `code_llvm` on the idiom carries
+  5 bounds-error references unannotated, 5 with the annotation outside the
+  closure and 0 with it inside, while the *timing* difference is 0.51 ms
+  against a round-to-round scatter of 1.3 ms and came back inverted on the
+  first pair of runs. And because the kernels' indices are now an
+  assertion rather than a check, **`CI.yml` passes `check_bounds: 'yes'`
+  explicitly** — it is already the action's default, and the point is that
+  the package now depends on it. Do not remove that line, and do not add
+  `@inbounds` anywhere else in `src/` without the same argument from
+  `map_blocks!`'s contract and the ghost widths. The whole thing is worth
+  19% of an RHS evaluation and 15% of the suite, and it changes not one
+  bit; see "Bounds checking in the kernels" in `CODE.md`.
 - **The RHS never mutates `u`.** The atmosphere reset lives in the
   integrator's `stage_limiter!` hook and in the driver after `regrid!`,
   never inside the RHS. The RHS-level floor on `P` and the stage reset on
