@@ -55,7 +55,15 @@ TreeAMR before its first milestone are under
 - **Run in the caller's floating-point type, on the caller's backend, on
   any thread count with bit-identical results**, as TreeWave does and
   for the same reasons. Nothing here is new in that respect; it is
-  inherited discipline.
+  inherited discipline — and so is the one qualification it now carries
+  (amended after step 11, when TreeAMR narrowed its M5 guarantee). The
+  state, the mesh, the schedule, every per-block value and every max, min
+  or integer reduction are bit-identical across thread counts; a
+  floating-point *sum* — the conserved totals, the L1 norms, the injection
+  — is promised to roundoff only, across thread counts, rank counts,
+  backends and machines. Today those sums are exact as well, because the
+  CPU fold under `block_mapreduce` is unchanged; the promise is what a
+  test may lean on. See [Multi-threading](#multi-threading).
 - **Produce a picture worth looking at.** The 2D Kelvin–Helmholtz
   instability is the case that exists for this, alongside what it
   measures.
@@ -231,13 +239,42 @@ from three of them — the reduction would need the velocity and the sound
 speed of the same cell at once, which its signature does not offer. The
 kernel that already holds all `D + 2` primitives writes the number once,
 after which `λ_max` and the owned-cell floor count are plain
-`block_mapreduce` calls over one slot each, deterministic upstream and
-with no second pass over the data. The alternative — a reduction kernel of
+`block_mapreduce` calls over one slot each, exact across thread counts (a
+`max` and an integer-valued sum; see the next paragraph) and with no
+second pass over the data. The alternative — a reduction kernel of
 this package's own over the stored extent — would be mesh machinery
 written downstream, which `CLAUDE.md` rules out. (The *ghost*-cell floor
 count does need the stored extent, which `block_mapreduce` does not cover;
 that one is a one-item-per-block kernel summing slot `D+4`, and it arrives
 with the atmosphere reset.)
+
+**(Amended after step 11, when TreeAMR narrowed its M5 guarantee.)** The
+"deterministic upstream" the paragraph above used to say has become two
+statements, and only one of them is still a guarantee. Every work item
+owning its output slot is race freedom and stays: the per-block values
+`block_mapreduce` returns are bit-identical across thread counts, and so is
+any reduction whose `op` is a `max`, a `min` or an integer sum. Combining
+the partials of a floating-point *sum* in block order is what upstream no
+longer promises — a sum is reproducible to roundoff only, across thread
+counts, rank counts, backends and machines, because a hierarchical device
+reduction and a plain `Allreduce` both need the association to be theirs.
+Of the two reductions above, `λ_max` is a `max` and the floor count is a
+sum of `1`s and `0`s that `round(Int, …)` closes, an exact integer per block
+and in total, so neither can move whatever the fold does; the same holds
+for `indicator_scales`, `peak_compression`, the `p = ∞` norms and the ghost
+count. The conserved totals, `conserved_scales`, the injection and the
+`p = 1` norms *are* floating-point sums. They are exact across thread
+counts today because the CPU fold under `block_mapreduce` and `total_mass`
+is unchanged, and they are promised roundoff; what that means for the
+thread workload is under [Multi-threading](#multi-threading). And the
+totals should stop combining by hand: TreeAMR plans a global scalar form,
+`mesh_mapreduce(f, op, init, fs[, u]; vars, weight)`, the per-block values
+scaled by `weight(key)` and combined over the mesh — on one process now,
+with the M7 `Allreduce` inside it later — and `conserved_totals` is that
+call with `weight = key -> spacing(key)^D`. Once it exists the totals go
+through it (the field-set form already does, through `total_mass`, which
+upstream will reroute), which is how they turn global without a
+communicator appearing in this package.
 
 `U` is the **only evolved set**, so the state vector is `statevector(U)`
 and the several-set form TreeAMR has specified is not needed. `G = 2` on
@@ -774,6 +811,15 @@ settled:
   block's stored cells and skipping the owned range, with the per-block
   values combined on the host in block order. `block_mapreduce` reduces a
   block's *interior*, which is exactly the range this count must not use.
+  The block order is this package's own discipline here and not an
+  inheritance (amended after step 11, when TreeAMR narrowed its M5
+  guarantee to everything but floating-point sums), and for this count it
+  is not even load-bearing: the flags are `1`s and `0`s, each block's
+  partial is an exact integer and the host closes each with
+  `round(Int, …)`, so the total is the same under any association. Both
+  floor counts stay exact whatever upstream's fold becomes; the
+  reductions the narrowing does reach are listed under
+  [Multi-threading](#multi-threading).
 - **The record is host-side, mutable, and held by the problem.** A run
   rebuilds its `HydroProblem` after every regrid, so a record the problem
   made for itself would start again at every mesh change; `evolve!` makes
@@ -2075,17 +2121,67 @@ comparison, exactly as TreeWave's Hankel table does.
 
 Nothing to configure and nothing to write: every kernel goes through
 `map_blocks!` or is a KernelAbstractions launch of its own, every
-reduction — `λ_max`, the conserved totals, the floor counts, the mode
-amplitude — goes through `block_mapreduce` or `firing_boxes`, and the
-per-cell callbacks (initial data, boundary, flagging) are pure. So the
-package inherits TreeAMR's bit-identity across thread counts, and holds
-itself to it the way TreeWave does: `test/thread_workload.jl` runs a
-tracked Sod tube and a short Kelvin–Helmholtz and prints digests per
-chunk, and `test/threading_tests.jl` compares a subprocess at another
-thread count character for character. The Kelvin–Helmholtz is in the
-workload on purpose: an instability is the case where a summation-order
-difference would be *amplified* into a visible one, so it is the sharpest
-place to guard the invariant.
+reduction — `λ_max`, the conserved totals, the floor counts — goes through
+`block_mapreduce` or `firing_boxes` (the mode amplitude and the peak
+`y`-kinetic energy are host loops in block order, as their section says,
+and never left this package), and the per-cell callbacks (initial data,
+boundary, flagging) are pure. So the package inherits TreeAMR's
+bit-identity across thread counts, and holds itself to it the way TreeWave
+does: `test/thread_workload.jl` runs a tracked Sod tube and a short
+Kelvin–Helmholtz and prints digests per chunk, and
+`test/threading_tests.jl` compares a subprocess at another thread count
+character for character. The Kelvin–Helmholtz is in the workload on
+purpose: an instability is the case where a summation-order difference
+would be *amplified* into a visible one, so it is the sharpest place to
+guard the invariant.
+
+**What is inherited is narrower than the paragraph above says** (amended
+after step 11, when TreeAMR narrowed its M5 guarantee; the statement is
+"Floating-point sums are promised to roundoff only" under its
+"Parallelism"). Upstream now separates two rules that one name used to
+cover. That every work item owns its output slot, and every collecting pass
+fills a buffer per task and concatenates in block order, is race freedom:
+it costs nothing, it stays, and it keeps the state vector, the leaf array,
+the mesh, the schedule, every per-block value `block_mapreduce` returns and
+every max, min or integer reduction bit-identical across thread counts —
+and, once M7 exists, across rank counts. That the partials of a
+floating-point *sum* are combined in block order is what is no longer
+promised: a sum is reproducible to roundoff only, across thread counts,
+rank counts, backends and machines, because a hierarchical device
+reduction (one workgroup per block, the weak row of upstream's device
+table) and a plain `Allreduce` under MPI both need the association to be
+theirs. The CPU fold is unchanged for now, so nothing here moves today.
+
+For this package the line falls as follows. **Exact whatever the fold
+does**: `λ_max`, `indicator_scales`, `peak_compression` and every `p = ∞`
+norm, all of them a `max`; the two floor counts, which sum `1`s and `0`s
+into an exact integer per block and close with `round(Int, …)` — no
+association changes an integer-valued sum while it fits the mantissa,
+`2^24` at `Float32`, which no mesh here approaches — and of which the
+ghost count is this package's own kernel and host loop besides; and every
+host loop in block order, `M(t)`, `max ½ρv_y²`, `shock_radius`,
+`reduce_to_grid`. **Floating-point sums, promised roundoff**: the
+conserved totals in both forms, `conserved_scales`, the injection (a
+difference of totals), `measured_E₀`, and the `p = 1` norm behind every L1
+error. These are bit-identical across thread counts *today*, because the
+CPU fold under `block_mapreduce` and `total_mass` is the one the M5 table
+was measured with, so the digests compare character for character and
+nothing in the suite has to change. But they are exact by the current
+implementation and not by contract. **When upstream's fold changes, the
+digest lines that carry a floating-point sum — the conserved totals, and
+any L1 error or injection the workload prints — are the ones to give an
+ulp tolerance, and only those**: a few ulp of `conserved_scales`, as the
+cross-machine measurement under [Testing](#testing) already demands of
+anything compared against a stored number. The mesh history, the step
+count, `λ` and both floor counts stay character for character, and a
+tolerance on any of *those* would be hiding a bug. The totals should also
+stop combining by hand: TreeAMR plans `mesh_mapreduce(f, op, init,
+fs[, u]; vars, weight)`, one number for the mesh — `block_mapreduce`'s
+per-block values scaled by `weight(key)` and combined over the local
+blocks, with the M7 `Allreduce` inside it and nowhere else — and
+`conserved_totals` is that call with `weight = key -> spacing(key)^D`.
+Once it exists the totals go through it, which is how they turn global
+without a communicator ever appearing in this package.
 
 ## Running on a device
 
@@ -2408,7 +2504,13 @@ partial sums follows the CPU target the code was compiled for, and
 TreeAMR's `block_mapreduce` — hence every conserved total and every
 volume-weighted norm here — rests on them. TreeAMR's bit-identity across
 *thread counts* is untouched by this and is asserted; it is bit-identity
-across *microarchitectures* that Base's reductions never offered. So a
+across *microarchitectures* that Base's reductions never offered. (TreeAMR
+has since narrowed what it promises across thread counts for a
+floating-point sum to roundoff as well, citing this measurement as the
+thing SIMD does break; its CPU fold is unchanged, so the totals here are
+still exact across thread counts, by implementation rather than by
+contract — amended after step 11, see
+[Multi-threading](#multi-threading).) So a
 claim of the form "this run produces this number" needs a tolerance of a
 few hundred ulp of the quantity's own scale *and* an absolute floor, and a
 claim about a *difference* of two order-one totals — every drift in this
