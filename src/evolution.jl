@@ -508,7 +508,7 @@ end
 The global time step, `cfl · h_min / (D · λ_max)`.
 
 One step for the whole hierarchy, from the finest spacing and the fastest
-signal: TreeAMR has no subcycling, ever. The `D` is the sum over
+signal: TreeAMR has no subcycling. The `D` is the sum over
 directions of an unsplit scheme's CFL condition, bounded above by
 `D · λ_max` — slightly conservative, and simpler than a per-cell sum. See
 "Time integration and the time step" in `CODE.md`, which is also where the

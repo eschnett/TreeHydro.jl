@@ -521,7 +521,7 @@ reason for an SSPRK method, since a positivity-preserving correction
 after each stage is what those hooks exist for.
 
 One global time step for the whole hierarchy — TreeAMR has no
-subcycling, ever — from the finest spacing and the fastest signal:
+subcycling — from the finest spacing and the fastest signal:
 
     λ_max = max over cells and d of (|v_d| + c_s)         # a block_mapreduce over P
     dt    = cfl · minimum_spacing / (D · λ_max)           # cfl ≈ 0.4
