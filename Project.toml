@@ -9,16 +9,9 @@ OrdinaryDiffEqSSPRK = "669c94d9-1f4b-4b64-b377-1aa079aa2388"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
 
-# TreeAMR 0.1.1 is in the General registry, so a clean clone resolves it
-# like any other dependency and this package no longer carries a
-# `[sources]` entry. Two things follow. The tests now see a *released*
-# TreeAMR rather than whatever is on its `main`, so a change there is
-# invisible here until it is tagged and registered -- a higher bar than
-# the old one, which only asked that it be pushed. And the Julia floor is no longer held up at 1.11 by
-# `[sources]`: it is 1.10, which is what TreeAMR itself requires.
-#
-# `bin/Project.toml` still has a `[sources]` entry, for *this* package,
-# which is unregistered; the viewers therefore still need 1.11.
+[sources]
+TreeAMR = {rev = "main", url = "https://github.com/eschnett/TreeAMR.jl"}
+
 [compat]
 KernelAbstractions = "0.9.42, 1"
 OrdinaryDiffEqSSPRK = "2.3.2"
