@@ -112,7 +112,8 @@ Changes:
   `OrdinaryDiffEqSSPRK`, `SciMLBase`; compat bounds; `julia = "1.11"`;
   the `[sources]` entry pinning TreeAMR to GitHub `main`, with TreeWave's
   comment on why it exists. *(Superseded: TreeAMR 0.1.1 was released, the
-  entry is gone and the floor is `julia = "1.10"`.)*
+  entry is gone and the floor became `julia = "1.10"`; it went back to
+  `julia = "1.11"` on 2026-09-25, with all the Tree* packages.)*
 - `.gitignore` in TreeWave's image: `*~`, `*.swp`, `.DS_Store`,
   `/docs/build/`, `Manifest.toml`, `/bin/output/`, `TODO.md`.
 - `src/TreeHydro.jl`: the module shell with its docstring and the

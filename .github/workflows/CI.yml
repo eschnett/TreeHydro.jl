@@ -28,23 +28,21 @@ jobs:
       # threads. The floor on Linux is the redundant fourth pair.
       matrix:
         include:
-          # Julia 1.10 is the floor -- TreeAMR's own, inherited now that
-          # this package resolves it from the General registry and has no
-          # `[sources]` entry to require 1.11. Like 1.11 it is stricter
-          # than 1.13: it still refuses to redefine a `const`, which is
-          # the thing the floor cell has actually caught.
+          # Julia 1.11 is the floor, shared by all the Tree* packages
+          # since 2026-09-25 so that an unregistered dependency can be
+          # located with `[sources]`, a 1.11 key. (It was 1.10, TreeAMR's
+          # floor then, between TreeAMR's registration and that date.)
+          # It is stricter than 1.13: it still refuses to redefine a
+          # `const`, which is the thing the floor cell has actually caught.
           #
           # It also carries the coverage, because instrumented it is the
           # fastest cell of the four: measured locally, back to back,
-          # coverage costs 1.83x on 1.10 against 3.58x on 1.13, so 1.10
-          # runs instrumented in 8 m 05 against 1.13's 12 m 38 even though
-          # it is the slower of the two uninstrumented. Instrumentation is
-          # not nearly free on the floor -- that was a property of 1.11 and
-          # did not survive the move -- but the ordering is what decides
-          # this, and it did. No file in `src/` or `test/` has a `VERSION`
-          # check, so the lines reported are the same whichever cell
-          # reports them.
-          - version: "1.10"
+          # coverage costs 1.04x on 1.11 against 3.14x on 1.13 (8 m 55 ->
+          # 9 m 17 against 4 m 01 -> 12 m 38, at 11609 tests; at 1.10 it
+          # was 1.83x, and the ordering held there too). No file in `src/`
+          # or `test/` has a `VERSION` check, so the lines reported are the
+          # same whichever cell reports them.
+          - version: "1.11"
             os: macOS-latest
             coverage: true
           - version: "1"

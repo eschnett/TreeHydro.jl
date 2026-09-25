@@ -153,7 +153,7 @@ contain no time-stepping loop: every frame and every curve comes through
 the one driver's `observer` hook, which exists for exactly that. The first
 call instantiates the environment, and the `[sources]` entry for this
 package means no manual `Pkg.develop` — it is also why `bin/` needs Julia
-1.11 while the package itself runs at 1.10:
+1.11, which is the package's own floor as well:
 
 ```bash
 julia --project=bin -e 'using Pkg; Pkg.instantiate()'

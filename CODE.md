@@ -2241,8 +2241,10 @@ what it used to say, because two of this package's arrangements were built
 on it.)* TreeAMR was unregistered, and was located through a `[sources]`
 entry pinning `rev = "main"`, as TreeWave's does. Two things followed from
 that and no longer do. The Julia floor was **1.11**, because `[sources]`
-is a 1.11 feature; it is now **1.10**, which is TreeAMR's own floor, and
-`CI.yml`'s floor cell moves with it. And the tests saw whatever was on
+is a 1.11 feature; it became **1.10**, which was TreeAMR's own floor, and
+`CI.yml`'s floor cell moved with it. *(Amended 2026-09-25: the floor is
+**1.11** again, for all the Tree* packages; see "The 1.11 floor again"
+below.)* And the tests saw whatever was on
 TreeAMR's `main`, so an unpushed change there was invisible here; they now
 see a released version, so an **unreleased** change is invisible here,
 which is the higher bar and is worth knowing before a step plans on an
@@ -2371,8 +2373,9 @@ matters, given the ±70% scatter recorded below. Coverage therefore goes
 on the **fastest cell of the four**: the `matrix` puts `coverage: true`
 on the floor version's `macOS-latest` entry and the step reads
 `matrix.coverage == true` — `version: "1.11"` when this was measured,
-`version: "1.10"` since TreeAMR's release moved the floor, and re-measured
-there (below) rather than assumed. No file
+`version: "1.10"` after TreeAMR's release moved the floor, and re-measured
+there (below) rather than assumed; `version: "1.11"` again since
+2026-09-25, where the original measurement applies. No file
 here contains a `VERSION` check or an `@static`, so the lines reported are the same lines whichever cell
 carries it, and Codecov cannot tell which one did.
 
@@ -4265,6 +4268,20 @@ TreeAMR 0.1.1 from the registry, and the tracked tube rendered from it.
 The `[compat]` bound in `bin/` is not exercised by any of that — nothing
 runs `bin/` at 1.10 — and is there to turn a confusing failure into a
 clear one.
+
+### The 1.11 floor again (2026-09-25)
+
+The Julia floor went back from 1.10 to **1.11** (decided), in this package
+and in TreeAMR, TreeWave and TreeGRRMHD at once, TreeGeneralizedHarmonic
+having been at 1.11 throughout. The reason is the one the floor had
+before TreeAMR's release: `[sources]` is a 1.11 key, and every package in
+the family should be free to depend on an unregistered package — each
+other, or a new upstream — through a `[sources]` entry without moving the
+floor again, and without each package reaching the same conclusion on its
+own. `CI.yml`'s floor cell is `version: "1.11"`; it keeps the coverage,
+for the 1.04× measured on 1.11 in "Testing" above, which is the number
+that applies once more. The 1.10 measurements in the section above are
+left as the record of what was measured then.
 
 ## Possible extensions
 
