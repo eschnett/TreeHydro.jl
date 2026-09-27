@@ -35,8 +35,22 @@ Two rules follow from `CODE.md` and govern every change here:
 
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
 faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
-reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; precision
-(H6a) is step 12 and is next.**
+reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; so are
+threads (H6b, step 13) and the benchmark and device (H6c, step 14), done
+ahead of precision (H6a, step 12), which is next.** Taken with them, and
+first: the move to **TreeAMR 0.1.3** (owner-based threading, from the
+registry — the `[sources]` pin on its `main` is gone) and to
+**IMEXRungeKutta** for time integration, replacing OrdinaryDiffEq —
+`src/stepping.jl` (`state_partition`, `hydro_integrator`, `hydro_solve!`,
+which moved there from `evolution.jl`) and `reset_stage!` in `floors.jl`.
+Step 13 added `test/thread_workload.jl`, `test/threading_tests.jl` and
+`test/stepping_tests.jl`; step 14 `src/benchmark.jl` (`benchmark_phases`,
+`benchmark_driver`), `bin/benchmark.jl`, `test/device_tests.jl` and the
+two Symmetry jobs `bin/symmetry_cpu.sh` and `bin/symmetry_gpu.sh`, plus two
+bit-identical kernel fixes (a branch-free `:minmod`, and the divergence
+kernel's sum over directions written out). All of it in `CODE.md`'s
+"IMEXRungeKutta and TreeAMR 0.1.3", "Step 13 — threads" and "Step 14 — the
+benchmark and the device"; what follows is the record up to step 11.
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with
 `TreeAMR = "0.1.1"` from the General registry — TreeAMR was released, and
 the `[sources]` pin to its GitHub `main` is gone, which also lowered the
@@ -416,17 +430,56 @@ every push and uploads them, because `bin/` is outside `src/` and `test/`
 and nothing else would notice it breaking.
 
 `--backend=metal --type=f32` renders too, and reproduces the host
-`Float32` run exactly — measured in step 11 on this machine. That is the
-plumbing working, not the device milestone: H6c still owes the per-phase
-table and the opt-in device tests, and nothing was measured for speed.
+`Float32` run exactly — measured in step 11 on this machine.
 
-Not yet real, and listed so the section can be filled in rather than
-rewritten: the thread-independence test — which spawns its own
-subprocess at another count either way — arrives in step 13, and device
-tests, opt-in behind `TREEHYDRO_TEST_BACKEND` (`metal`, `cuda`) in an
-environment of your own that has the device package, in step 14.
-`bin/benchmark.jl` comes with `src/benchmark.jl` in step 14 as well.
-Neither this package nor TreeAMR depends on a device package.
+**The suite since the move to IMEXRungeKutta**: 11674 tests in **2 m 58.4
+at one thread** and 11708 in **2 m 35.2 at four** (after step 14, back to
+back, quiet machine); the four-thread count is higher because the
+ownership check has one assertion per block per thread. The last file,
+`test/threading_tests.jl`, spawns a subprocess at the other thread count —
+four if the suite runs at one, one if it runs at more — and compares twelve
+digest lines character for character; about twenty seconds. **Do not set
+`JULIA_EXCLUSIVE=1` for a one-thread suite**: the parent pins itself to one
+CPU and the subprocess inherits the mask (TreeGeneralizedHarmonic met
+this on Symmetry).
+
+The benchmark (step 14), in the **package** environment and not `bin/`'s,
+one run per thread count; `--scan=N:roots,…` runs several meshes in one
+process, and the output is one tab-separated row per phase:
+
+```bash
+julia -t 4 --project=. bin/benchmark.jl --dim=3 --scan=16:8
+```
+
+`--case=sedov`, `--refined`, `--type=f32`, `--reps=`, `--steps=`,
+`--driver` and `--backend=` are the rest. A device needs an environment of
+your own with the device package in it (neither this package nor TreeAMR
+depends on one), and so do the device tests, which are opt-in:
+
+```bash
+julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats"])'
+```
+
+```bash
+TREEHYDRO_TEST_BACKEND=metal julia --project=/tmp/thgpu test/runtests.jl
+```
+
+Without the variable `test/device_tests.jl` runs with the CPU standing in
+for the device. On Symmetry, from a checkout of its own (rsync the tree to
+a fresh directory; never into one whose jobs are running):
+
+```bash
+sbatch --partition=amdq --time=2:00:00 bin/symmetry_cpu.sh
+```
+
+```bash
+sbatch bin/symmetry_gpu.sh
+```
+
+Each builds a scratch environment under
+`/mnt/beegfs/eschnetter/claude/treehydro-{cpu,gpu}` that `develop`s the
+checkout (`TREEHYDRO_CPU_ENV`, `TREEHYDRO_GPU_ENV` override it) and writes
+its TSVs to `/mnt/beegfs/eschnetter/claude/treehydro-bench-$SLURM_JOB_ID`.
 
 ## Things that will bite
 
@@ -434,9 +487,15 @@ Carried over from TreeAMR and TreeWave where they apply here, plus what is
 specific to a hydro code. Each is in `CODE.md` with its reason.
 
 - **TreeAMR comes from the registry, not from the local checkout**
-  (amended when TreeAMR 0.1.1 was released). `Project.toml` has no
-  `[sources]` entry any more: the compat bound is `TreeAMR = "0.1.1"` and
-  a clean checkout resolves it from General. So `~/src/jl/TreeAMR` is
+  (amended when TreeAMR 0.1.1 was released, and again at 0.1.3).
+  `Project.toml` has no `[sources]` entry for it: the compat bound is
+  `TreeAMR = "0.1.3"` and a clean checkout resolves it from General. (A
+  pin on its `main` came back on 2026-09-23 to see the owner-based
+  threading before its release, and went again once 0.1.3 carried it.)
+  The one `[sources]` entry left is **IMEXRungeKutta's**, which is not
+  registered; a path-tracked dependency's `[sources]` is honoured, so
+  `bin/` and any scratch environment that `develop`s this package find it
+  without an entry of their own. So `~/src/jl/TreeAMR` is
   still *not* what the tests see, and the bar is now higher than it was —
   it used to be that an unpushed change there was invisible here, and now
   an **unreleased** one is. A TreeAMR change this package needs has to be
@@ -480,7 +539,8 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   19% of an RHS evaluation and 15% of the suite, and it changes not one
   bit; see "Bounds checking in the kernels" in `CODE.md`.
 - **The RHS never mutates `u`.** The atmosphere reset lives in the
-  integrator's `stage_limiter!` hook and in the driver after `regrid!`,
+  integrator's two limiter hooks (`reset_stage!` and `reset_atmosphere!`,
+  see the `:stage` bullet below) and in the driver after `regrid!`,
   never inside the RHS. The RHS-level floor on `P` and the stage reset on
   `U` are two mechanisms on purpose (owned cells versus prolongated
   ghosts and face states); do not merge them, and keep the floor counts
@@ -496,16 +556,46 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   tracked tube's state, drift, error, step count and mesh history under
   `:stage` and `:step` are **bit-identical** to the `:none` run's, and the
   injection is `0.0` rather than `≈ 0.0`.
-- **The SSPRK limiters are `solve` keywords, not constructor arguments**
-  (amended in step 8). `SSPRK33(; stage_limiter! = f)` is what `CODE.md`
-  was written against; `OrdinaryDiffEqCore` deprecated it in favour of
-  `solve(prob, SSPRK33(); stage_limiter = f)`, it warns under
-  `--depwarn=yes` (which `Pkg.test` passes), and once the deprecation
-  completes the constructor's field would be **silently unread** — a
-  positivity correction installed nowhere, reporting nothing. So
-  `hydro_solve!` passes the keywords, and `test/reset_tests.jl` asserts
-  that a step really does come out floored under `:stage` and `:step` and
-  does not under `:none`, which is the only thing that would notice.
+- **`:stage` is *both* of IMEXRungeKutta's hooks, and the two hooks are
+  two functions** (amended after step 11, replacing the step-8 note about
+  OrdinaryDiffEq's `solve` keywords). IMEXRungeKutta's `SSPRK33` is in
+  Butcher form: its stage limiter is called on a scratch copy of the two
+  stage values per step the RHS reads beyond `uⁿ`, and *not* on the step's
+  result, which is the step limiter's. So `hydro_integrator` passes
+  `reset_stage!` as the stage limiter and `reset_atmosphere!` as the step
+  limiter under `:stage`, and the step limiter alone under `:step`.
+  Passing `reset_atmosphere!` as the stage limiter alone would leave every
+  stored state unreset; passing it as both would count stage corrections
+  as injection, which no total ever sees — a stage correction reaches
+  `uⁿ⁺¹` only through the RHS, which conserves, so `reset_stage!` counts
+  hits and no injection. The hooks are `init` keywords whose omission is
+  silent, and `test/reset_tests.jl` asserts both the flooring and the hit
+  counts (`:stage` 12 / 192 cells against `:step` 2 / 32 on the vacuum
+  step), which is the only thing that would notice.
+- **`hydro_solve!` does not alias; `evolve!` does** (amended after step
+  11). `hydro_solve!` returns a new vector and leaves its argument alone —
+  `sod.jl`, `sedov.jl` and the tests rely on that. `evolve!` builds its
+  integrator with `alias_u0 = true` and hands each chunk's integrator the
+  previous one's scratch (`reuse`), and must set `integ_prev = nothing`
+  after any regrid that changed the mesh: the state vector has another
+  length then, and IMEXRungeKutta refuses the scratch with an
+  `ArgumentError` rather than silently resizing it.
+- **A branch on the sign of a roundoff-level difference costs a third of
+  the RHS** (measured in step 14). `:minmod` was `a * b ≤ 0 && return 0`
+  and a ternary; on a state uniform to roundoff — the entropy wave's `v`
+  and `p`, Sedov's ambient, the shear layer's pressure — that branch is a
+  coin flip, and the flux kernel went from 3.54 ms on exact initial data to
+  5.74 ms forty-eight steps later. It is two `ifelse`s now, which choose
+  the same value in every case, NaN and signed zero included. **Keep
+  per-face code free of data-dependent branches**, and benchmark on an
+  *evolved* state: the exact initial data is the one state that hides this.
+- **A loop over `d` that indexes a tuple of arrays is not unrolled**
+  (measured in step 14). `for d in 1:D; fluxes[d][…]` in the divergence
+  kernel took 6.35 ms against 1.38 ms written out per dimension, the same
+  sums in the same order. An `ntuple` closure with `foldl` did *not* fix it
+  inside a kernel (11.5 ms), nor did recursion on `Val` (65 ms); explicit
+  methods for `D = 1, 2, 3` did. A loop over `v` into an `isbits` tuple is
+  fine.
 - **The reset is a fixed point of the *state*, not of its own flag**
   (measured in step 8). A pressure-floored cell whose kinetic energy
   dominates recovers `p` a fraction of an ulp below `p_floor` through the
@@ -679,8 +769,13 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   lands directly on `d log r_s / d log t`, and it cost about **0.13** of an
   exponent of 0.5. The host loop is an oracle in the spirit of
   `reduce_to_grid` and runs once per chunk against hundreds of steps.
-- **The accumulated injection is a bound under `:stage` and an equality
-  under `:step`** (measured in step 9). `SSPRK33`'s three stage vectors
+- **The accumulated injection is an equality under both cadences now**
+  (amended after step 11: under IMEXRungeKutta only the step limiter's and
+  the post-regrid correction reach a total, and only they are counted —
+  the `:stage` drift equals its injection to `8.9e-16` in `D = 2`). What
+  follows is the step-9 finding under OrdinaryDiffEq, kept for why the
+  accounting is defined as it is. It *was* a bound under `:stage` and an
+  equality under `:step` (measured in step 9). `SSPRK33`'s three stage vectors
   enter the step's result with weights `1/6`, `2/3` and `1`, and
   `reset_atmosphere!` is not told which stage it is in, so the accounting
   adds raw `Σ hᴰ ΔU` that reached the state scaled. Measured ratio of
@@ -741,7 +836,12 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
 - **Never thread anything a TreeAMR callback can reach**, and never
   accumulate into shared state in a loop of your own: bit-identity across
   thread counts is the invariant, and `test/threading_tests.jl` is the
-  only thing that will report a violation.
+  only thing that will report a violation. **A new block-shaped launch
+  goes through `TreeAMR.launch_by_owner!`** and a new host loop over
+  blocks through `TreeAMR.threaded_chunks` (TreeAMR 0.1.3's rule; the
+  ghost floor count is this package's one launch of its own and follows
+  it). Both are unexported, and `test/prerequisite_tests.jl` checks by name
+  that they and `threadchunks` still exist.
 - **The Kelvin–Helmholtz formulas were transcribed from memory and the
   check found exactly one error** (step 10, closing the note that used to
   say "check every one before recording a number"). The *profiles* — the
@@ -966,21 +1066,23 @@ Match TreeAMR's, since the three packages are read together:
   and reviewed as such; `test/references/*.toml`, which step 7b generated
   and step 7c removed, were the one exception and are gone. `bin/output/`
   is gitignored and the viewers write PNGs there.
-- **There is one TreeAMR pin now and still two Manifests** (amended when
-  TreeAMR 0.1.1 was released). Both environments resolve TreeAMR from the
-  registry, so the two `rev = "main"` entries that had to be kept in step
-  are gone; what is left is a compat bound in each `Project.toml`, and
+- **There is no TreeAMR pin now and still two Manifests** (amended when
+  TreeAMR 0.1.1 was released, and at 0.1.3). Both environments resolve
+  TreeAMR from the registry at `0.1.3`, so the `rev = "main"` entries are
+  gone; what is left is a compat bound in each `Project.toml`, and
   `bin/` still has its own `Manifest.toml` (gitignored, like the root's),
   so `Pkg.update("TreeAMR")` at the root does not touch it. The viewers
   can therefore still resolve a *different* TreeAMR from the tests — an
   older one, if `bin/`'s Manifest is stale — which is what the `viewer`
   job in CI exists to catch. Grep for `TreeAMR =` across both files rather
   than editing from memory.
-- **`bin/backend.jl` is `include`d by both viewers**, and step 14 will add
-  a third script that runs against the *package* environment instead. So it
+- **`bin/backend.jl` is `include`d by both viewers and by
+  `bin/benchmark.jl`**, which runs against the *package* environment. So it
   may use only what both environments have, which today is
   `KernelAbstractions` — which is why that is a dependency of
-  `bin/Project.toml` at all.
+  `bin/Project.toml` at all, and why a scratch environment that runs the
+  benchmark must add it by name (the first Symmetry CPU job failed in nine
+  seconds without it).
 - One workflow with two jobs: `.github/workflows/CI.yml`. `test` runs the
   whole suite on every
   push that touches something other than Markdown, over **four cells

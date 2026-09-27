@@ -1,7 +1,7 @@
 # What the resolved TreeAMR has to provide before any of the scheme can be
 # written.
 #
-# `Project.toml` takes TreeAMR from the General registry at `0.1.1`, so
+# `Project.toml` takes TreeAMR from the General registry at `0.1.3`, so
 # what these tests run against is a released version and *not* the checkout
 # at `~/src/jl/TreeAMR` — nor, since that release, whatever is on its
 # `main`. Two things landed upstream as this package's prerequisites (see
@@ -163,5 +163,17 @@ end
                  :CellBoundary, :boundary_by_coordinates, :firing_boxes,
                  :block_mapreduce)
         @test name in names(TreeAMR)
+    end
+end
+
+@testset "The resolved TreeAMR has the unexported threading helpers this package calls" begin
+    # Guards an upstream rename of the two internals the package reaches
+    # into (added with the move to TreeAMR 0.1.3 and IMEXRungeKutta):
+    # `threadchunks` is the ownership `state_partition` hands the integrator,
+    # and `launch_by_owner!` the placement of the ghost-count launch. Both
+    # are documented in TreeAMR's internals page, neither is exported, and a
+    # rename would otherwise surface as an `UndefVarError` mid-step.
+    for name in (:threadchunks, :launch_by_owner!)
+        @test isdefined(TreeAMR, name)
     end
 end

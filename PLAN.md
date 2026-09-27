@@ -21,9 +21,11 @@ brief a single session can carry. The order is the dependency order.
   measured numbers in the commit body). **Do not merge into `main` and
   do not push**; report the branch and its commits. There is no remote
   yet; when there is one, the rule stands.
-- **TreeAMR is a registry dependency** at `TreeAMR = "0.1.1"` (amended
-  when TreeAMR was released; it was pinned to GitHub `main` through
-  `[sources]` until then). The checkout at `~/src/jl/TreeAMR` is *not*
+- **TreeAMR is a registry dependency** at `TreeAMR = "0.1.3"` (amended
+  when TreeAMR was released, and at 0.1.3; it was pinned to GitHub `main`
+  through `[sources]` until the first release, and again briefly before
+  0.1.3). IMEXRungeKutta, the time integrator since the steps 13–14 work,
+  is unregistered and is the one `[sources]` entry. The checkout at `~/src/jl/TreeAMR` is *not*
   what the tests see, and neither is its `main` any more — only a
   released version is. If a step turns out to need something from
   TreeAMR, stop, describe exactly what and why, and report — do not edit
@@ -69,8 +71,9 @@ writing kernels.
   adds `G[d]`. `stored = true`: the kernel's index *is* the stored index
   and adds nothing. `con2prim` is the `stored = true` kernel and nothing
   else is.
-- **The RHS never mutates `u`.** The atmosphere reset is the SSPRK
-  `stage_limiter!` (step 8) and a driver call after `regrid!`; the
+- **The RHS never mutates `u`.** The atmosphere reset is the
+  integrator's limiter hooks (step 8; both of IMEXRungeKutta's under
+  `:stage` since the move to it) and a driver call after `regrid!`; the
   RHS-level floor touches `P` only.
 - **`P` carries two diagnostic slots** beyond the `D + 2` primitives
   (amended here, and recorded in `CODE.md`'s "Field sets" in step 3):
@@ -98,9 +101,11 @@ writing kernels.
   `test/burgers.jl`, which is the worked example for the whole RHS).
 - **The limiter and the Riemann solver travel as `Val`s** (`Val(:mc)`,
   `Val(:hlle)`), never as `Symbol` arguments.
-- **`OrdinaryDiffEqSSPRK`'s `SSPRK33(; stage_limiter!, step_limiter!)`**
-  hooks have the signature `limiter!(u, integrator, p, t)`; `u` is the
-  stage vector in state layout, `statearray(u, U)` gives the block view.
+- **The integrator's `stage_limiter` and `step_limiter`** hooks have the
+  signature `limiter!(u, integrator, p, t)`; `u` is the stage value (a
+  scratch copy, under IMEXRungeKutta) or the step's result in state
+  layout, and `statearray(u, U)` gives the block view. *(Amended: written
+  against OrdinaryDiffEqSSPRK, which the package no longer uses.)*
 
 ## Step 0 — Scaffolding (H0)
 
@@ -502,6 +507,12 @@ agreeing on the mesh and `M(t)` through the linear phase. Record.
 
 ## Step 13 — Threads (H6b)
 
+*(Done, ahead of step 12, together with the move to TreeAMR 0.1.3 and
+IMEXRungeKutta. The workload gained a third run, a static Sedov blast, as
+the only case in which the floors fire; and `test/stepping_tests.jl`
+checks that the integrator's partition is TreeAMR's ownership. See
+`CODE.md`'s "Step 13 — threads".)*
+
 `CODE.md`: "Multi-threading".
 
 Changes: `test/thread_workload.jl` (a tracked Sod in `D = 1` and a short
@@ -512,6 +523,15 @@ character for character).
 Accept: bit-identical digests at 1 and 4 threads on both runs.
 
 ## Step 14 — Device and benchmark (H6c)
+
+*(Done, ahead of step 12. The per-phase table on the host and on Metal, two
+bit-identical kernel fixes it found, `test/device_tests.jl` reproducing the
+host `Float32` run exactly on Metal, and the block-size and thread scans on
+Symmetry's AMD nodes and an H200 — the last added at Erik's request, after
+the optimizations. See `CODE.md`'s "Step 14 — the benchmark and the
+device". The device tests cover a tracked Sod tube and a static Sedov
+blast rather than the whole suite, which is written at `Float64` and waits
+on step 12's type table.)*
 
 `CODE.md`: "Running on a device".
 

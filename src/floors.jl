@@ -249,8 +249,9 @@ measured injection, and the negative control compares the two runs on the
 drift net of it.
 
 `measure` is off by default because the measurement costs two full
-reductions of the state per stage, which is the same order as the reset
-itself. It is a keyword the tests turn on and the demos do not;
+reductions of the state per step, which is the same order as the reset
+itself; the stage limiter, [`reset_stage!`](@ref), measures nothing, since
+nothing it changes reaches a total. It is a keyword the tests turn on and the demos do not;
 [`evolve!`](@ref) exposes it as `accounting`. The **hit count is always
 taken**: it is one reduction over one diagnostic slot, and the counts by
 population are a measurement the design depends on rather than a
@@ -314,16 +315,23 @@ The atmosphere reset of the **conserved** state: `con2prim`,
 floor fired, with the hit count and — under `p.accounting.measure` — the
 injection accumulated into `p`'s [`ResetAccounting`](@ref).
 
-This is `SSPRK33`'s `stage_limiter!`/`step_limiter!` signature, which is the
-whole point of its shape: the hooks exist for positivity-preserving
-corrections and that is exactly what this is. `u` is the stage vector in
-state layout, `p` the [`HydroProblem`](@ref), and `integrator` is unused and
-may be `nothing` — the driver calls the same function directly on the
-freshly gathered state after a [`regrid!`](@ref), where the `p = 3`
-prolongation into a new fine block is unlimited and can leave an owned cell
-unphysical. Two call sites, one function; see "Floors and the atmosphere" in
-`CODE.md` for why the reset lives in the method rather than in the
-right-hand side.
+This is IMEXRungeKutta's `step_limiter` signature (OrdinaryDiffEq's too),
+which is the whole point of its shape: the hooks exist for
+positivity-preserving corrections and that is exactly what this is. `u` is
+the step's result in state layout, `p` the [`HydroProblem`](@ref), and
+`integrator` is unused and may be `nothing` — the driver calls the same
+function directly on the freshly gathered state after a [`regrid!`](@ref),
+where the `p = 3` prolongation into a new fine block is unlimited and can
+leave an owned cell unphysical. Two call sites, one function; see "Floors
+and the atmosphere" in `CODE.md` for why the reset lives in the method
+rather than in the right-hand side.
+
+**The stage limiter is [`reset_stage!`](@ref), not this** (amended with the
+move to IMEXRungeKutta). The two apply the same reset; they differ in the
+injection, because a correction to a *stage value* reaches the step's result
+only through the right-hand side, which conserves, while this one writes the
+stored state itself. So what this accumulates is the whole of what the
+resets add to a conserved total — an equality, not a bound.
 
 **The right-hand side's floor on `P` stays, as the second line.** This
 reaches owned cells only, because that is what a state vector holds; ghost
@@ -364,7 +372,31 @@ function reset_atmosphere!(u, integrator, p, t)
     return nothing
 end
 
-# The launch on its own, so that both branches above read the same line.
+"""
+    reset_stage!(u, integrator, p, t)
+
+The stage-limiter form of [`reset_atmosphere!`](@ref): the same reset of the
+same cells, with the hit count accumulated and **no injection**.
+
+IMEXRungeKutta's `SSPRK33` is in Butcher form, and its stage limiter acts on
+a scratch copy of a stage value just before [`hydro_rhs!`](@ref) reads it.
+What that correction changes is the right-hand side's *input*; the step's
+result is `uⁿ + Δt Σ bᵢ kᵢ`, and each `kᵢ` is a flux divergence whose
+integral is the boundary flux whatever state it was evaluated on. So a
+stage correction never reaches a conserved total directly, and adding its
+`Σ hᴰ ΔU` to the injection would count something no total ever sees —
+which is what made the injection a bound rather than an equality under
+OrdinaryDiffEq, whose Shu–Osher stages carried the correction forward with
+weights `1/6, 2/3, 1` (measured in step 9, ratio 0.520). See "Floors and the
+atmosphere" in `CODE.md`.
+"""
+function reset_stage!(u, integrator, p, t)
+    apply_reset!(p, u)
+    p.accounting.hits += floor_hits(p)
+    return nothing
+end
+
+# The launch on its own, so that every branch above reads the same line.
 function apply_reset!(p, u)
     map_blocks!(reset_kernel!, p.U, statearray(u, p.U), p.P.work, p.eos, p.floors,
                 p.valD, p.valGP)

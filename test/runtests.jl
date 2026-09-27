@@ -43,6 +43,9 @@ using TreeHydro
     include("riemann_tests.jl")
     include("evolution_tests.jl")
     include("reset_tests.jl")
+    # The integrator, after the reset it installs in its two hooks and before
+    # every case that runs through it.
+    include("stepping_tests.jl")
     include("entropywave_tests.jl")
     include("exact_riemann_tests.jl")
     include("sod_tests.jl")
@@ -59,4 +62,12 @@ using TreeHydro
     # one whose reference is a uniform fine run of this code rather than a
     # closed form — so every part it rests on has been asserted above it.
     include("kelvinhelmholtz_tests.jl")
+    # A run on a device against the same run on the host, at `Float32`. The
+    # CPU stands in for the device unless `TREEHYDRO_TEST_BACKEND` names one.
+    include("device_tests.jl")
+    # Thread-count independence last: it reruns three short cases in a
+    # subprocess at another thread count, so every part of them has been
+    # asserted above it, and a digest mismatch then means the threads and
+    # nothing else.
+    include("threading_tests.jl")
 end

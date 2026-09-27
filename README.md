@@ -40,7 +40,9 @@ floor rules and the reset that imposes them on the conserved state from
 the integrator's own limiter hook, the MUSCL reconstruction with its three
 slope limiters, the
 LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
-its three kernels, SSPRK33 in time, the Löhner refinement criterion, the
+its three kernels, SSPRK33 in time through
+[IMEXRungeKutta](https://github.com/eschnett/IMEXRungeKutta.jl) with its
+stage arithmetic split by block owner, the Löhner refinement criterion, the
 one chunked evolve-and-regrid driver, and four cases on it. The entropy
 wave is an exact solution of the nonlinear system, and it
 measures second order in L1 and L∞ in one and two dimensions. Sod's shock
@@ -83,7 +85,7 @@ chunk, loudly: with the headroom at 1, Sod throws in its first chunk.
 
 **And where the gas runs out, the atmosphere is imposed on the state.**
 The reset is a pointwise `con2prim` / floors / `prim2con` pass run from
-`SSPRK33`'s own stage limiter and again after every regrid — GRMHD
+the integrator's stage and step limiters and again after every regrid — GRMHD
 practice in the integrator's vocabulary, and the right-hand side still
 never mutates its state. It writes back *only* the cells a floor fired in,
 which is what lets the conservation results above stand unchanged with the
@@ -139,8 +141,10 @@ shear layer and its growth rate. About four minutes.
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-The same numbers are expected at any thread count, and CI runs the suite
-at one and at four. `Pkg.test` does not inherit `-t`, so the count has to
+The same numbers are expected at any thread count, to the last bit, and CI
+runs the suite at one and at four; the suite's last file reruns three
+short cases in a subprocess at the other count and compares their digests
+character for character. `Pkg.test` does not inherit `-t`, so the count has to
 be passed explicitly:
 
 ```bash

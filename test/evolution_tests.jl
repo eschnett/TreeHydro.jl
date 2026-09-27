@@ -184,10 +184,10 @@ end
         D in EVOLUTION_DIMS
     # Two claims the integrator rests on. `SSPRK33` evaluates the
     # right-hand side three times per step from three different stage
-    # vectors, so a right-hand side that left something of one evaluation
+    # values, so a right-hand side that left something of one evaluation
     # behind in `P` or in a flux set would make the *second* step differ
     # from the first on identical data. And the atmosphere reset belongs in
-    # the stage-limiter hook, not here: a right-hand side that floored `u`
+    # the integrator's limiter hooks, not here: a right-hand side that floored `u`
     # in place would be a scheme whose conserved integral changed outside
     # the flux divergence, which is the one thing the conservation claim
     # cannot survive.

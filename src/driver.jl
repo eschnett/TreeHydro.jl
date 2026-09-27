@@ -2,7 +2,7 @@
 # runs on.
 #
 # Regridding changes both the length and the meaning of the state vector, so
-# a run cannot be one `solve` call: each chunk is a fresh `solve` on a fresh
+# a run cannot be one solve: each chunk is a fresh integrator on a fresh
 # `HydroProblem`, and between chunks the mesh is rebuilt. That is TreeAMR's
 # prescription and TreeWave's and Burgers' practice. What is different here
 # is that there is exactly **one** such loop for every case — TreeWave has
@@ -349,10 +349,14 @@ what a shock tube or a blast wave is.
 Regridding changes both the *length* and the *meaning* of the state vector:
 block slots are compacted, new blocks are prolongated from their parents,
 and every schedule is stale afterwards. So each chunk is a fresh fixed-step
-`solve` on a freshly built [`HydroProblem`](@ref), with the primitive set
-and the flux sets handed back in — `regrid!` resized them in place through
-`fs => nothing`, and reallocating them would throw that away. This is
-TreeAMR's prescription and TreeWave's and Burgers' practice.
+integrator ([`hydro_integrator`](@ref)) on a freshly built
+[`HydroProblem`](@ref), with the primitive set and the flux sets handed back
+in — `regrid!` resized them in place through `fs => nothing`, and
+reallocating them would throw that away. This is TreeAMR's prescription and
+TreeWave's and Burgers' practice. The integrator steps the state vector in
+place and takes over the previous chunk's scratch arrays whenever the mesh
+did not change between the two, since a scratch array holds nothing from
+one step to the next.
 
 The chunk count is computed in exact arithmetic, `nchunks = ceilint(t_end /
 chunk)` with the last chunk shortened, and *not* as a `while t < t_end −
@@ -412,18 +416,20 @@ finest-level block width it throws naming the constraint, which means the
 chunk is too long for the cap. With `maxlevel_cap = 0` nothing can refine,
 so the derivation is skipped and the margin is zero.
 
-`reset` is where [`reset_atmosphere!`](@ref) acts — `:stage` after every
-SSPRK stage, which is the default and GRMHD practice, `:step` once per step,
-or `:none`. It runs in **two** places whichever hook is chosen: inside the
-solve, and here on the freshly gathered state after a [`regrid!`](@ref),
+`reset` is where [`reset_atmosphere!`](@ref) acts — `:stage` on every
+stage value the right-hand side reads and every step's result, which is the
+default and GRMHD practice, `:step` once per step, or `:none`. It runs in
+**two** places whichever hook is chosen: inside the integrator, and here on the freshly gathered state after a [`regrid!`](@ref),
 because the `p = 3` prolongation into a new fine block is unlimited and can
 leave an owned cell unphysical, which would otherwise wait for the first
 stage of the next chunk to be caught.
 
 `accounting` turns on the **injection measurement**: the per-variable totals
-of the stage vector before and after every reset, accumulated over the run
-and returned as `injection`. It costs two full reductions of the state per
-reset, which is why it is off by default — it is a keyword the tests turn on
+of the state before and after every reset that writes a stored state — the
+step limiter and the post-regrid call, which are the only ones whose
+correction reaches a total (see [`reset_stage!`](@ref)) — accumulated over
+the run and returned as `injection`. It costs two full reductions of the
+state per step, which is why it is off by default — it is a keyword the tests turn on
 and the demos do not. The reset's *hit count* is always taken, being one
 reduction over one diagnostic slot. See "Floors and the atmosphere" in
 `CODE.md`.
@@ -431,7 +437,13 @@ reduction over one diagnostic slot. See "Floors and the atmosphere" in
 `observer(P_problem, t, u)` is called with the state scattered into `U` and
 `P` current, once after the initial-data cycle at `t = 0` and once per
 chunk **before the regrid that would invalidate `U`** — which is what keeps
-the viewers of step 11 free of any time stepping of their own.
+the viewers of step 11 free of any time stepping of their own. **`u` is
+the driver's own state vector, and the next chunk steps it in place**
+(amended with the move to IMEXRungeKutta, whose integrator is built with
+`alias_u0 = true`; each chunk used to hand over a fresh vector). An
+observer that keeps anything must copy it — `copy(u)`, or the numbers it
+reads from `U` and `P` — for the same reason a viewer snapshot must
+materialize what it keeps.
 
 ## What comes back
 
@@ -443,8 +455,8 @@ question.** `floor_hits` is what it has always been: owned cells that the
 `con2prim` pass found unphysical at a chunk boundary, accumulated —
 so with the stage reset in place it should be rare, the reset having
 already handled the stage that produced them. `reset_hits` is the owned
-cells [`reset_atmosphere!`](@ref) actually changed, over every stage of
-every step and every post-regrid call. `ghost_hits` is
+cells the reset actually changed, over every stage and step limiter call
+and every post-regrid call. `ghost_hits` is
 [`ghost_floor_hits`](@ref) accumulated over the chunk boundaries, and it is
 the number that decides the upstream prolongation question. `injection` is
 the per-variable `Σ hᴰ ΔU` the resets injected — and it is `nothing`, not a
@@ -557,6 +569,11 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     λ_history = R[]
     λ_end_history = R[]
 
+    # The previous chunk's integrator, whose scratch the next one takes over
+    # while the mesh stays put; `nothing` at the start and after every regrid
+    # that changed it, when the state vector has another length.
+    integ_prev = nothing
+
     nchunks = ceilint(t_end / chunk)
     for c in 1:nchunks
         tstart = min((c - 1) * chunk, t_end)
@@ -571,7 +588,10 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         dt = hydro_dt(forest, cfl, case.speed_headroom * λ, Val(D))
         steps = max(1, ceilint((stop - tstart) / dt))
         dt_used = (stop - tstart) / steps
-        u = hydro_solve!(p, u, tstart, stop, steps; reset=reset)
+        integ = hydro_integrator(p, u, tstart, stop, steps; reset=reset,
+                                 alias_u0=true, reuse=integ_prev)
+        IRK.solve!(integ)
+        integ_prev = integ
         nsteps += steps
 
         # (2) the recheck. It throws, and it is meant to.
@@ -623,6 +643,7 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
                              accounting=acc)
             u = statevector(U)
             gather!(u, U)
+            integ_prev = nothing
             # The reset's second call site, on the freshly gathered `u`: the
             # `p = 3` prolongation into a new fine block is unlimited and
             # acts on ρ, S and E separately, so it can leave an owned cell

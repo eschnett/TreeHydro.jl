@@ -60,10 +60,10 @@ using TreeAMR
 
 using KernelAbstractions: Backend, CPU, allocate, get_backend, synchronize
 using KernelAbstractions: @kernel, @index, @Const
-# Unused before step 3 and depended on from step 0, so that the Julia floor
-# the two of them set is fixed before anything relies on it.
-using OrdinaryDiffEqSSPRK: SSPRK33
-using SciMLBase: ODEProblem, solve
+# Imported under a prefix: `SSPRK33`, `init` and `solve!` are names a
+# reader knows from OrdinaryDiffEq and CommonSolve, and `IRK.` says which
+# integrator is meant.
+import IMEXRungeKutta as IRK
 
 # Devices
 export hostcopy
@@ -128,6 +128,10 @@ export KelvinHelmholtz, kh_state, kh_initial, kh_conserved
 export mode_amplitude, max_y_kinetic_energy, growth_rate
 export kh_run, kh_uniform
 
+# Where a step's time goes: the phase table and the end-to-end driver run
+# that `bin/benchmark.jl` formats
+export benchmark_phases, benchmark_driver
+
 include("precision.jl")
 include("device.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
@@ -145,6 +149,10 @@ include("riemann.jl")
 # The right-hand side that calls all of the above over a mesh, and the
 # first case to run on it.
 include("evolution.jl")
+# The time integrator around that right-hand side: IMEXRungeKutta's
+# `SSPRK33` with its stage arithmetic by block owner and the atmosphere reset
+# in its two limiter hooks.
+include("stepping.jl")
 # The refinement criterion reads the primitive set a `HydroProblem` holds
 # and takes the problem itself, so it follows the file that defines one.
 # It is the mesh's other half of the driver, and nothing in the cases
@@ -172,5 +180,8 @@ include("sedov.jl")
 # needs the driver and nothing else, and it is the case the viewers of step 11
 # are written for.
 include("kelvinhelmholtz.jl")
+# The benchmark, after every case, because it builds the entropy wave's and
+# the blast's meshes and runs the blast through the driver.
+include("benchmark.jl")
 
 end # module TreeHydro

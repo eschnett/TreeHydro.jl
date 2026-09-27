@@ -78,8 +78,18 @@ See "Reconstruction" in `CODE.md`.
     # multiplication, it is exact about which side of zero the product is
     # on for the purpose of this test, and it needs no `sign` — which, for
     # a software float, is a function that may not exist.
-    a * b ≤ z && return z
-    return abs(a) < abs(b) ? a : b
+    #
+    # Two `ifelse`s rather than a branch and a ternary (measured in step
+    # 14): the choice is the same in every case — NaN, signed zero and all —
+    # so the result is bit-identical, but a branch on the sign of a
+    # *roundoff-level* difference is a coin flip, and a state that is
+    # uniform to roundoff (the entropy wave's `v` and `p`, Sedov's ambient,
+    # the shear layer's pressure) made the branch predictor pay for it on
+    # every face: the flux kernel ran 3.54 ms on the exact initial data and
+    # 5.74 ms forty-eight steps later, on a state differing from it in the
+    # last bit.
+    m = ifelse(abs(a) < abs(b), a, b)
+    return ifelse(a * b ≤ z, z, m)
 end
 
 # Nested rather than written out, because `minmod` of three arguments *is*
