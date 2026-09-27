@@ -265,9 +265,24 @@ end
 # `D + 2` conserved variables, over the state's owned cells and written
 # straight into the state layout.
 #
-# `fluxes` is an `NTuple{D}` of identically typed arrays, so indexing it
-# with the loop variable is type stable; all `D` flux sets share one `GF`,
-# which is what lets one stored index serve every direction.
+# All `D` flux sets share one `GF`, which is what lets one stored index
+# serve every direction. The sum over directions is written out, one method
+# per dimension, rather than as a loop over `d` (amended in step 14): a loop
+# indexes the tuple of flux arrays with a *runtime* `d`, which the compiler
+# neither unrolls nor resolves, and that cost the kernel 6.35 ms against
+# 1.41 ms written out — the same additions in the same order, bit for bit.
+# `+(z, a, b)` is `(z + a) + b`, so the order is the loop's.
+@inline face_difference(F, c, v, b, ::Val{d}) where {d} =
+    @inbounds F[Base.setindex(c, c[d] + 1, d)..., v, b] - F[c..., v, b]
+
+@inline flux_difference_sum(z, F::NTuple{1,Any}, c, v, b) =
+    z + face_difference(F[1], c, v, b, Val(1))
+@inline flux_difference_sum(z, F::NTuple{2,Any}, c, v, b) =
+    z + face_difference(F[1], c, v, b, Val(1)) + face_difference(F[2], c, v, b, Val(2))
+@inline flux_difference_sum(z, F::NTuple{3,Any}, c, v, b) =
+    z + face_difference(F[1], c, v, b, Val(1)) + face_difference(F[2], c, v, b, Val(2)) +
+    face_difference(F[3], c, v, b, Val(3))
+
 @kernel function divergence_kernel!(du, fluxes, @Const(spacings), ::Val{D},
                                     ::Val{GF}) where {D,GF}
     I = @index(Global, NTuple)                     # (i1..iD, block)
@@ -275,18 +290,14 @@ end
     c = ntuple(e -> I[e] + GF[e], Val(D))
     o = ntuple(e -> I[e], Val(D))
     h = @inbounds spacings[b]
-    @inbounds for v in 1:(D + 2)
-        acc = zero(eltype(du))
-        for d in 1:D
-            hi = Base.setindex(c, c[d] + 1, d)
-            acc += fluxes[d][hi..., v, b] - fluxes[d][c..., v, b]
-        end
+    for v in 1:(D + 2)
+        acc = flux_difference_sum(zero(eltype(du)), fluxes, c, v, b)
         # A source term would enter here, as `du = −ΔF/h + S_v(P)`: gravity,
         # a geometric source in curvilinear coordinates, the GRMHD
         # connection terms. The Euler system on a Cartesian mesh has none,
         # so the slot is empty and named rather than absent — it is the one
         # line that would change (see "The right-hand side" in `CODE.md`).
-        du[o..., v, b] = -acc / h
+        @inbounds du[o..., v, b] = -acc / h
     end
 end
 
@@ -491,8 +502,11 @@ function ghost_floor_hits(p::HydroProblem{T,D}) where {T,D}
     n = nblocks(P)
     counts = allocate(backend, R, (n,))
     S = ntuple(d -> size(P.work, d), D)
-    ghost_flags_kernel!(backend)(counts, P.work, zero(R), D + 4, p.valD, Val(P.G),
-                                 Val(P.forest.N), Val(S); ndrange=n)
+    # By owner, as every block-shaped launch in TreeAMR is since 0.1.3: each
+    # block's flags are summed on the thread that wrote them.
+    TreeAMR.launch_by_owner!(ghost_flags_kernel!, backend, counts, P.work, zero(R),
+                             D + 4, p.valD, Val(P.G), Val(P.forest.N), Val(S);
+                             ndrange=(n,))
     synchronize(backend)
     host = Array(counts)
     total = 0
@@ -607,60 +621,14 @@ drift apart on what the admissible values are.
 function check_reset(reset::Symbol)
     reset in HYDRO_RESETS || throw(ArgumentError(
         "reset must be one of $(HYDRO_RESETS), got :$reset: :stage runs the " *
-        "atmosphere reset after every SSPRK stage, which is GRMHD practice " *
-        "and the default; :step runs it once on the step's result, which is " *
+        "atmosphere reset on every stage value the right-hand side reads and " *
+        "on every step's result, which is GRMHD practice and the default; " *
+        ":step runs it once on the step's result, which is " *
         "the cheaper hook and the comparison the Sedov blast measures; and " *
         ":none leaves the conserved state alone, which is the first draft's " *
         "behaviour and the negative control. See \"Floors and the " *
         "atmosphere\" in CODE.md."))
     return reset
-end
-
-"""
-    hydro_solve!(p::HydroProblem, u, t0, t1, nsteps; reset = :stage)
-
-One fixed-step `SSPRK33` solve of `nsteps` steps from `t0` to `t1`,
-returning the final state vector.
-
-Strong-stability-preserving rather than plain Runge–Kutta because a
-limited scheme's shocks stay monotone only under one: conservation holds
-for *any* Runge–Kutta method, since every stage's `du` already sums to
-zero. Fixed step because `λ_max` is measured once per chunk and a
-step-adaptive `dt` would be a callback fighting a fixed-step `solve`; the
-driver's CFL recheck at the end of a chunk is what makes that safe. See
-"Time integration and the time step" in `CODE.md`.
-
-`reset` chooses which of the integrator's limiter hooks
-[`reset_atmosphere!`](@ref) is installed in: `:stage` after every stage
-(the default, and GRMHD practice), `:step` once on the step's result, or
-`:none` for neither. A positivity-preserving correction after each stage is
-what those hooks exist for, which is the second reason this package wants an
-SSPRK method.
-
-**The hooks are passed to `solve`, not to the algorithm constructor**
-(amended in step 8). `SSPRK33(; stage_limiter! = …)` is what `CODE.md` was
-written against and still works, but `OrdinaryDiffEqCore` moved the limiters
-into the solver options and deprecated the constructor form — it warns on
-every run, and a deprecation that is eventually *removed* would leave the
-constructor's field silently unread, which is the one failure mode a
-positivity correction must not have. `test/reset_tests.jl` asserts that a
-step actually comes out floored under `:stage` and under `:step` and does
-not under `:none`, so the wiring is checked rather than assumed either way.
-
-Where nothing is floored the three settings give **bit-identical** results:
-the reset writes back only the cells a floor fired in, and the limiter hook
-does not otherwise enter the arithmetic of a stage.
-"""
-function hydro_solve!(p::HydroProblem{T}, u, t0::T, t1::T, nsteps::Int;
-                      reset::Symbol=:stage) where {T}
-    check_reset(reset)
-    prob = ODEProblem(hydro_rhs!, u, (t0, t1), p)
-    hooks = reset === :stage ? (; stage_limiter=reset_atmosphere!) :
-            reset === :step ? (; step_limiter=reset_atmosphere!) :
-            (;)
-    sol = solve(prob, SSPRK33(); dt=(t1 - t0) / nsteps, adaptive=false,
-                save_everystep=false, hooks...)
-    return sol.u[end]
 end
 
 """

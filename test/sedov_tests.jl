@@ -615,41 +615,34 @@ end
           "reset = :none $(CENTER_2D_NONE.drift)"
 end
 
-@testset "The reset's injection is the energy drift, and the cadence is what the bookkeeping sees" begin
-    # Two claims and one amendment. Where the floors fire, the drift is
-    # *claimed net of* the measured injection — and under `reset = :step`,
-    # which resets once per step on the step's own result, the two agree to
-    # roundoff, which is the equality `CODE.md` predicted.
+@testset "The reset's injection is the energy drift under either cadence" begin
+    # Where the floors fire, the drift is *claimed net of* the measured
+    # injection, and the claim is an **equality** under both cadences
+    # (amended with the move to IMEXRungeKutta). Its `SSPRK33` is in
+    # Butcher form: the stage limiter corrects a stage value just before the
+    # right-hand side reads it, and that correction reaches the step's result
+    # only through a flux divergence, which conserves; only the step limiter
+    # writes the stored state. So `reset_stage!` accounts no injection and
+    # `reset_atmosphere!`, the step limiter, accounts all of it.
     #
-    # Under `reset = :stage` they do **not**, and the reason is the method
-    # rather than the measurement: `SSPRK33`'s three stages enter the step's
-    # result with weights 1/6, 2/3 and 1, so an injection into a stage vector
-    # reaches the state multiplied by that stage's weight, while the
-    # accounting adds the raw `Σ hᴰ ΔU` of each call. The accumulated
-    # injection is therefore an **upper bound** on what arrived, not an
-    # equality. Step 8 could not see this: on Sod and the entropy wave the
-    # injection was exactly zero, so every weighting of it was too.
+    # Under OrdinaryDiffEq's Shu–Osher `SSPRK33` (steps 8–11) the `:stage`
+    # half of this was a *bound* — the three stages carried their
+    # corrections into the step's result with weights 1/6, 2/3 and 1 while
+    # the accounting added each call's raw `Σ hᴰ ΔU` — and the measured ratio
+    # of drift to injection was 0.520 in 2D and 0.522 in 3D.
     #
-    # Measured (2D :center, 433 steps):
-    #   :stage  reset hits 4096   injection 2.39804e-5   drift 1.24659e-5
-    #   :step   reset hits 1384   injection 1.245738e-5  drift 1.245738e-5
-    #           |drift − injection| = 4.44e-16 against a roundoff bound of
-    #           7.96e-13
-    # and in 3D (133 steps): :stage 24504 hits and 8.52677e-5 against
-    # 4.45123e-5; :step 8232 hits and 4.447276224328611e-5 against
-    # 4.447276224350816e-5, a difference of 2.22e-16.
+    # Measured (2D :center, 433 steps), and in 3D (133 steps): see the
+    # `@info` below and "Floors and the atmosphere" in `CODE.md`.
     T = Float64
     for (D, stage, step) in ((2, CENTER_2D, CENTER_2D_STEP),
                              (3, CENTER_3D, CENTER_3D_STEP))
         E = D + 2
-        bound = 8 * eps(T) * step.scales[E] * step.nsteps
         @test step.reset_hits > 0               # the floors fire here
         @test stage.reset_hits > step.reset_hits
-        # `:step` is the exact statement.
-        @test abs(step.drift[E] - step.injection[E]) ≤ bound
-        # `:stage` is the bound, and it is not tight.
-        @test stage.drift[E] ≤ stage.injection[E]
-        @test stage.drift[E] > stage.injection[E] / 3
+        for r in (stage, step)
+            bound = 8 * eps(T) * r.scales[E] * r.nsteps
+            @test abs(r.drift[E] - r.injection[E]) ≤ bound
+        end
         # The injection is energy only, because it is the *pressure* floor
         # that fires and not the atmosphere rule: the pressure floor keeps ρ
         # and v and changes E alone. The mass injection is therefore **exactly
@@ -663,12 +656,13 @@ end
                        8 * eps(T) * stage.scales[v] * stage.nsteps, 2:(D + 1))
         @info "Sedov :center, D = $D: reset = :stage floored " *
               "$(stage.reset_hits) owned cells and reports an injection of " *
-              "$(stage.injection[E]) against a drift of $(stage.drift[E]) " *
-              "(a ratio of $(stage.drift[E] / stage.injection[E]), the SSPRK " *
-              "stage weights); reset = :step floored $(step.reset_hits) and " *
+              "$(stage.injection[E]) against a drift of $(stage.drift[E]), a " *
+              "difference of $(abs(stage.drift[E] - stage.injection[E])); " *
+              "reset = :step floored $(step.reset_hits) and " *
               "reports $(step.injection[E]) against $(step.drift[E]), a " *
-              "difference of $(abs(step.drift[E] - step.injection[E])) " *
-              "against a roundoff bound of $bound"
+              "difference of $(abs(step.drift[E] - step.injection[E])); " *
+              "roundoff bounds $(8 * eps(T) * stage.scales[E] * stage.nsteps) " *
+              "and $(8 * eps(T) * step.scales[E] * step.nsteps)"
     end
 end
 

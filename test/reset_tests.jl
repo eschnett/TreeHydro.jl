@@ -23,9 +23,9 @@
 #     conservation claims of the entropy wave, Sod and Kelvin–Helmholtz
 #     into tolerances, and no test of the reset *itself* would notice;
 #   * a hook that is never called, so that the reset exists and does
-#     nothing. `SSPRK33`'s limiter hooks moved out of the algorithm
-#     constructor upstream, and a version that ignored the old form would
-#     fail here and nowhere else;
+#     nothing. The integrator's limiter hooks are keywords whose misspelling
+#     or omission is silent, and a wiring that dropped one would fail here
+#     and nowhere else;
 #   * a ghost count taken over the owned range, which would report zero for
 #     the population the count exists to measure.
 #
@@ -332,12 +332,15 @@ end
 @testset "One SSPRK33 step comes out floored under :stage and :step and not under :none: T=$T, D=$D" for
         T in (Float64, Float32), D in (1, 2)
     # The wiring, and the reason it is a test rather than a reading of the
-    # integrator's source. The limiter hooks moved out of `SSPRK33`'s
-    # constructor and into `solve`'s keywords upstream (amended in step 8),
-    # and the failure mode of getting that wrong is **silence**: the reset
-    # would be installed nowhere, every cell would keep whatever the flux
-    # divergence gave it, and every other claim in this file — which calls
-    # `reset_atmosphere!` directly — would still pass.
+    # integrator's source. The limiter hooks are keywords of the integrator
+    # (`solve`'s under OrdinaryDiffEq, amended in step 8; `init`'s under
+    # IMEXRungeKutta, amended after step 11), and the failure mode of getting
+    # them wrong is **silence**: the reset would be installed nowhere, every
+    # cell would keep whatever the flux divergence gave it, and every other
+    # claim in this file — which calls `reset_atmosphere!` directly — would
+    # still pass. The hit counts say which hooks ran: `:stage` resets the
+    # stage values as well as the step's result, so it floors more cells
+    # than `:step` on the same step, and `:none` floors none.
     #
     # `:none` is the control and it is what says the step itself does not do
     # the flooring: the right-hand side floors `P` internally, so the run
@@ -349,7 +352,9 @@ end
 
     ρ_atm, p_floor = s.floors.ρ_atm, s.floors.p_floor
     results = map((:stage, :step, :none)) do reset
+        hits0 = s.p.accounting.hits
         u = hydro_solve!(s.p, copy(s.u), zero(T), dt, 1; reset=reset)
+        hits = s.p.accounting.hits - hits0
         states = owned_states(s.U, u)
         ρ_min = minimum(U -> density(U), states)
         # The raw recovery, *before* the floors: `con2prim`'s own output is
@@ -360,12 +365,13 @@ end
             ε = (energy(U) - sum(momentum(U) .^ 2) / ρ / 2) / ρ
             return pressure(s.eos, ρ, ε)
         end
-        (reset=reset, ρ_min=ρ_min, p_min=p_min)
+        (reset=reset, ρ_min=ρ_min, p_min=p_min, hits=hits)
     end
     for r in results
         @info "one SSPRK33 step on a vacuum state, T = $T, D = $D, " *
               "reset = :$(r.reset): min ρ $(r.ρ_min) against ρ_atm $ρ_atm, " *
-              "min recovered p $(r.p_min) against p_floor $p_floor"
+              "min recovered p $(r.p_min) against p_floor $p_floor, " *
+              "$(r.hits) owned cells reset"
     end
     for r in results[1:2]
         @test r.ρ_min ≥ ρ_atm
@@ -374,6 +380,8 @@ end
         @test r.p_min ≥ p_floor * (1 - 1024 * eps(T))
     end
     @test results[3].ρ_min < ρ_atm
+    @test results[1].hits > results[2].hits > 0
+    @test results[3].hits == 0
 end
 
 # A short tracked shock tube, in the configuration `driver_tests.jl` uses

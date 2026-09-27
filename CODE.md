@@ -509,16 +509,50 @@ amendment that turns it into a decision.
 
 ### Time integration and the time step
 
-`SSPRK33` from `OrdinaryDiffEqSSPRK`, fixed step, the way TreeAMR's
-Burgers test uses it: conservation holds for any Runge–Kutta method
-(every stage's `du` sums to zero), but only a strong-stability-preserving
-one keeps a limited scheme's shocks monotone. Its `stage_limiter!` hook
-is also where the atmosphere reset acts — a `solve` keyword since step 8,
-the constructor form having been deprecated upstream, with the hook, its
-signature and its cadence unchanged (see
-[Floors and the atmosphere](#floors-and-the-atmosphere)) — a second
-reason for an SSPRK method, since a positivity-preserving correction
-after each stage is what those hooks exist for.
+`SSPRK33`, fixed step, the way TreeAMR's Burgers test uses it:
+conservation holds for any Runge–Kutta method (every stage's `du` sums to
+zero), but only a strong-stability-preserving one keeps a limited scheme's
+shocks monotone. Its limiter hooks are also where the atmosphere reset
+acts (see [Floors and the atmosphere](#floors-and-the-atmosphere)) — a
+second reason for an SSP method, since a positivity-preserving correction
+is what those hooks exist for.
+
+**(Amended after step 11: the integrator is IMEXRungeKutta's, not
+OrdinaryDiffEq's.)** The Tree* packages moved to
+[IMEXRungeKutta](https://github.com/eschnett/IMEXRungeKutta.jl) for every
+time integration, explicit ones included — TreeAMR's own tests and
+TreeGeneralizedHarmonic first — and this package follows. It is
+`IRK.SSPRK33()`, the same Shu–Osher (3,3) method written in **Butcher
+form** (`Ã = [0 0 0; 1 0 0; ¼ ¼ 0]`, `b̃ = (1/6, 1/6, 2/3)`), through one
+`hydro_integrator` in `src/stepping.jl` that `hydro_solve!` and `evolve!`
+both build. Three things changed, and one of them is a design change:
+
+- **The stage arithmetic runs by block owner.** `state_partition` hands
+  the integrator TreeAMR's `threadchunks(nblocks)` ownership as a
+  partition of the state vector, so every stage combination of a block's
+  entries is formed on the thread `map_blocks!` runs that block on — the
+  same placement TreeAMR 0.1.3 gives every per-block pass — and the scratch
+  is first-touched the same way. This is the Amdahl term the last paragraph
+  of this section used to say was "not TreeHydro's to fix"; it is fixed
+  without a hand-written integrator. A device state takes the integrator's
+  broadcast path instead (`state_partition` returns `nothing`), and the two
+  paths are bitwise the same, which `test/stepping_tests.jl` asserts.
+- **`evolve!` builds one integrator per chunk and hands each the previous
+  one's scratch** while the mesh is unchanged (IMEXRungeKutta 1.2's
+  `reuse`), stepping the state vector in place.
+- **Where a stage limiter's correction goes** (the design change). In
+  Butcher form the stage limiter acts on a stage value just before the
+  right-hand side reads it, and that correction reaches `uⁿ⁺¹` only through
+  the right-hand side; only the step limiter writes the stored state. See
+  the amendment under [Floors and the
+  atmosphere](#floors-and-the-atmosphere) for what that does to `:stage`,
+  and to the injection, which becomes an equality under both cadences.
+
+Every number the suite prints moved at roundoff (Shu–Osher and Butcher
+form associate the same sums differently) and none moved beyond it except
+the ones that depend on the limiter placement; both are recorded under
+[IMEXRungeKutta and TreeAMR
+0.1.3](#imexrungekutta-and-treeamr-013-added-after-step-11).
 
 One global time step for the whole hierarchy — TreeAMR has no
 subcycling — from the finest spacing and the fastest signal:
@@ -611,10 +645,12 @@ right direction: a margin that is too wide costs cells, and one that is too
 narrow costs the feature.
 
 The Amdahl term TreeWave measured — the integrator's serial stage
-arithmetic capping a threaded step at 3.6× — applies here unchanged and
-is not TreeHydro's to fix. A hand-written SSPRK33 with its stage updates
-as kernels is the fix, and it is listed under extensions in both
-packages; if the MHD package needs it, it goes there first.
+arithmetic capping a threaded step at 3.6× — applied here unchanged until
+the move to IMEXRungeKutta, and was said to be not TreeHydro's to fix.
+*(Amended: IMEXRungeKutta forms the stage combinations by block owner, and
+on this machine they cost about 1 ms per step on a 262144-cell mesh at any
+thread count — at the memory bandwidth, not serial. See [Step 14 — the
+benchmark and the device](#step-14--the-benchmark-and-the-device).)*
 
 ### Floors and the atmosphere
 
@@ -659,6 +695,31 @@ consistently, and what each costs:
    first draft's behaviour) are switches, so that what the per-stage
    reset buys over the per-step one is a measurement on Sedov rather
    than an inheritance.
+
+   **(Amended after step 11: IMEXRungeKutta's hooks, and `:stage` is
+   now both of them.)** IMEXRungeKutta takes the same two keywords with
+   the same signature, as `init` keywords. Its `SSPRK33` is in Butcher
+   form, and its stage limiter is called on the two stage values per step
+   that the right-hand side reads beyond `uⁿ` — on a scratch copy, just
+   before the right-hand side — and not on the step's result, which is the
+   step limiter's. So `:stage` passes the reset as **both**: `reset_stage!`
+   as the stage limiter and `reset_atmosphere!` as the step limiter, which
+   resets every state the right-hand side reads and every state stored,
+   the same three calls per step as before. `:step` is the step limiter
+   alone, as before. The difference that matters is where a stage
+   correction goes: it changes the right-hand side's *input* and reaches
+   `uⁿ⁺¹` only through a flux divergence, which conserves, where
+   OrdinaryDiffEq's Shu–Osher stages carried it forward with weights
+   `1/6, 2/3, 1`. Only the step limiter moves a total, `reset_stage!`
+   accounts no injection, and the injection is an equality under both
+   cadences (below). The positivity argument an SSP method offers rests on
+   limited stage values that are *convex combinations* of limited states;
+   in Butcher form that convexity is not what the limiter sees, and
+   whether that matters for a GRMHD code is the open question TreeAMR
+   records as "Shu–Osher against Butcher form". For a reset that only ever
+   fires on the pressure floor at a coarse-fine face, as here, it moved
+   the static Sedov blast's L1 in the eighth digit and its reset count by
+   1% (4096 → 4136).
 
    **(Amended in step 8: the hooks are `solve` keywords now, not
    constructor arguments.)** The signature and the semantics are exactly
@@ -849,7 +910,9 @@ in [Measured results](#step-9--the-sedov-blast).
   cell's flux with the average of its fine neighbours', and in gas whose
   internal energy is `p_amb/(γ−1) = 2.5e-5` that correction can take it
   below `p_floor`. On the static two-level mesh: **4096** owned cells and
-  **40** ghost entries in `D = 2`, **24504** and **4703** in `D = 3`. On
+  **40** ghost entries in `D = 2`, **24504** and **4703** in `D = 3`
+  *(4136 and 40, 24576 and 4786 since IMEXRungeKutta, whose `:stage` resets
+  the step's result as well as the stage values)*. On
   every *uniform* mesh, and on the tracked mesh — whose coarse-fine faces
   stand in undisturbed gas — nothing fires at all. This is the interaction
   the fourth option above named in the abstract ("an average of limited
@@ -861,8 +924,15 @@ in [Measured results](#step-9--the-sedov-blast).
   *roundoff* rather than zero, because the same round trip recomputes
   `S = ρ (S/ρ)`, which is not the bits it started from — measured
   `-1.65e-24` in `D = 3` against a bound of `2.2e-14`.
-- **The accumulated injection is an upper bound under `:stage` and an
-  equality under `:step`** (amended). The accounting adds the raw
+- **The accumulated injection is an equality under both cadences**
+  *(amended after step 11, with the move to IMEXRungeKutta: the stage
+  limiter's correction no longer reaches a total, so it is no longer
+  counted, and the `:stage` drift equals its injection to `8.9e-16` in
+  `D = 2` and `3.6e-15` in `D = 3`, against roundoff bounds of `8.0e-13`
+  and `2.5e-13`. What follows is the step-9 finding under OrdinaryDiffEq,
+  kept because it is what made the accounting's semantics explicit.)*
+  It was an upper bound under `:stage` and an
+  equality under `:step`. The accounting adds the raw
   `Σ hᴰ ΔU` of every call, but `SSPRK33`'s three stage vectors enter the
   step's result with weights `1/6`, `2/3` and `1`, so an injection into a
   stage reaches the state scaled by that stage's weight. Measured ratio of
@@ -877,8 +947,9 @@ in [Measured results](#step-9--the-sedov-blast).
   a bound with `:stage`, an equality with `:step`.
 - **So what does `:stage` buy over `:step`?** On this case: three times the
   repairs (4096 against 1384 owned cells in `D = 2`, 24504 against 8232 in
-  `D = 3`) for the same final state to roundoff, and a strictly less
-  informative injection. What it buys is what it was adopted for and this
+  `D = 3`; 4136 and 24576 since IMEXRungeKutta) for the same final state to
+  roundoff, and — under OrdinaryDiffEq — a strictly less informative
+  injection, which IMEXRungeKutta's Butcher form has since made exact. What it buys is what it was adopted for and this
   case cannot show — a stage vector that is never seen in an unphysical
   state by the *next* stage's right-hand side — and the case where that
   matters is a star in a vacuum, not a blast in an ambient. `:stage` stays
@@ -907,7 +978,7 @@ in [Measured results](#step-9--the-sedov-blast).
 | HLLE from `|v| ± c_s` | HLLE from the fast magnetosonic speeds |
 | HLLC (planned) | HLLC (Mignone & Bodo 2005), HLLD |
 | LLF fallback | LLF fallback |
-| MOL, SSPRK33, unsplit flux divergence, one global `dt` | the same |
+| MOL, SSPRK33 (IMEXRungeKutta, Butcher form, stages by block owner), unsplit flux divergence, one global `dt` | the same; an IMEX tableau of the same package when stiff sources arrive |
 | empty source-term slot in the divergence kernel | geometric source terms |
 | Löhner indicator on `ρ` and `p` | the same, plus `B` |
 | Dirichlet boundary from the initial state | an analytic exterior |
@@ -1140,6 +1211,11 @@ Two things this package expects to add to that finding:
   |---|---|---|---|---|
   | 1 | 4.427249e-2 | **0** | **0** | 2.0e-15 |
   | 3 | **4.406604e-2** | 4096 | 40 | 1.24659e-5 |
+
+  *(Since IMEXRungeKutta: `p = 3` is 4.406604e-2, 4136, 40 and 1.24609e-5 —
+  the reset count moves because `:stage` now also resets the step's result,
+  and L1 moves in the eighth digit; `p = 1` floors nothing and is unchanged
+  to roundoff.)*
 
   So `p = 1` buys **exact positivity** — nothing floored, nothing injected,
   conservation at roundoff — for **0.47%** of L1. That is the argument
@@ -2005,8 +2081,11 @@ that **there is exactly one time-stepping loop** (decided):
     while t < t_end
         λ  = max_signal_speed(p)                     # block_mapreduce over P
         dt = cfl · minimum_spacing(forest) / (D · λ)
-        u  = solve(SSPRK33(), hydro_rhs!, u, t → stop; dt,
-                   stage_limiter = reset_atmosphere!)   # the reset, per stage
+        integ = IRK.init(IMEXProblem(hydro_rhs!, nothing, u, (t, stop), p),
+                         IRK.SSPRK33(); dt, stage_limiter = reset_stage!,
+                         step_limiter = reset_atmosphere!,   # the reset
+                         partition = state_partition(U, u), reuse = prev)
+        IRK.solve!(integ)                            # u stepped in place
         scatter!(U, u); fill_ghosts!(U, …; boundary); con2prim!(P, U)
         assert dt ≤ cfl · h / (D · max_signal_speed(p))      # the CFL check
         record totals of every conserved variable, the injection, floor
@@ -2133,7 +2212,26 @@ Kelvin–Helmholtz and prints digests per chunk, and
 character for character. The Kelvin–Helmholtz is in the workload on
 purpose: an instability is the case where a summation-order difference
 would be *amplified* into a visible one, so it is the sharpest place to
-guard the invariant.
+guard the invariant. *(Done in step 13, which added a third run: a short
+static Sedov blast on `sedov_forest(:center)`, because it is the only case
+in which the floors fire — both limiter hooks, both floor populations and
+a nonzero injection are on the digested path, and a Sod-and-KH workload
+would digest two zeros for each.)*
+
+**(Amended after step 11: TreeAMR 0.1.3 places every block on its owner,
+and so does the integrator.)** Upstream's `4be726e` runs every per-block
+pass — `map_blocks!`, `scatter!`/`gather!`, `fill_by_coordinates!`,
+`zerofill!`, and the ghost, interface and regrid phases — on the thread
+that owns the block, block `b` belonging to the thread whose chunk of
+`threadchunks(nblocks)` contains it, and asks that a new block-shaped launch
+go through `launch_by_owner!`. This package had one launch of its own, the
+ghost floor count, and it now goes through `launch_by_owner!`; and its
+integrator's stage arithmetic runs on the same ownership through
+`state_partition` (see [Time integration](#time-integration-and-the-time-step)).
+So from the first touch of the state vector to the last stage combination,
+a block's pages are written by one core. Nothing about the answer changes:
+ownership decides *where* a block is computed, never in what order a sum is
+taken, and the digests at one and at four threads are identical.
 
 **What is inherited is narrower than the paragraph above says** (amended
 after step 11, when TreeAMR narrowed its M5 guarantee; the statement is
@@ -2207,6 +2305,20 @@ unified memory (Apple silicon) the RHS should show a device speedup where
 TreeWave's showed none, and on an H200 it should beat the bandwidth
 ratio. Measured in H6; the number is the first thing anyone will ask.
 
+**(Measured in step 14: right on Apple silicon, and for the hydro kernels
+more than for the RHS.)** At `Float32` on 512 blocks of `16³` in `D = 3`,
+the M3 Pro's GPU takes **79 ms** per `SSPRK33` step against **116–134 ms**
+on 8–12 host threads, and **23 ms** per right-hand side against 39–50 ms.
+The flux kernel alone is **3.3×** faster on the device (5.1 ms against
+16.6 ms); what holds the RHS to about 2× is TreeAMR's own `scatter!` and
+ghost fill, which are 61% of the device's RHS against 30% of the host's.
+The device run reproduces the host `Float32` run exactly on the tracked
+Sod tube and the static Sedov blast — the same mesh history, step count,
+L1, reset, ghost and floor counts. On Symmetry an H200 runs a step at
+**about 11×** a 64-core AMD node and **49×** 16 host cores, up to 715
+million cell updates per second at `Float64` with `N ≥ 32`; see [Step 14 —
+the benchmark and the device](#step-14--the-benchmark-and-the-device).
+
 ## File layout
 
 | file | contents |
@@ -2214,27 +2326,38 @@ ratio. Measured in H6; the number is the first thing anyone will ask.
 | `src/TreeHydro.jl` | module shell: `using`s, exports, includes |
 | `src/precision.jl`, `src/device.jl` | copied from TreeWave (not a dependency on it): `Base` bridges for software floats; `to_backend`, `hostcopy` |
 | `src/eos.jl` | `IdealGas`, `prim2con`, `con2prim`, `soundspeed` |
-| `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` stage limiter and its injection accounting |
+| `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` step limiter, the `reset_stage!` stage limiter, and the injection accounting |
 | `src/reconstruction.jl` | the three slopes, face states |
 | `src/riemann.jl` | LLF, HLLE, HLLC fluxes, direction-generic |
-| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `hydro_solve!`, `convergence_rate` |
+| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `convergence_rate` |
+| `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
-| `src/benchmark.jl` | per-phase timings, TreeWave's format |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `type_tests.jl`, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl` |
+| `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` arrives with step 12 |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
 | `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
-| `bin/benchmark.jl` | as in TreeWave, and it arrives with `src/benchmark.jl` in H6c — step 11 shipped the other two and not this one |
+| `bin/benchmark.jl` | as in TreeWave: the phase table per thread count or device, one tab-separated row per phase, and `--scan=N:roots,…` for a block-size scan in one process; runs against the package environment |
+| `bin/symmetry_cpu.sh`, `bin/symmetry_gpu.sh` | the Symmetry jobs: the block-size and thread scans on one 64-core AMD node, and the scan and the device tests on one H200 |
 
-`Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
-`OrdinaryDiffEqSSPRK` and `SciMLBase`; tests add `MultiFloats`; `bin/`
-adds `CairoMakie` and `SixelTerm` in its own environment. TreeAMR is
-resolved from the General registry at `TreeAMR = "0.1.1"`.
+`Project.toml` depends on `TreeAMR`, `KernelAbstractions` and
+`IMEXRungeKutta`; tests add `MultiFloats`; `bin/` adds `CairoMakie` and
+`SixelTerm` in its own environment. TreeAMR is resolved from the General
+registry at `TreeAMR = "0.1.3"`, the release with the owner-based
+threading. IMEXRungeKutta is not registered and is located by a
+`[sources]` entry pinning its `main` — the one pin left in the package
+environment, and a path-tracked dependency's `[sources]` is honoured, so
+`bin/` and the scratch environments of the device and Symmetry runs find it
+through this package without an entry of their own. *(Amended after step
+11. Between 2026-09-23 and the 0.1.3 release `Project.toml` also pinned
+TreeAMR's `main` through `[sources]`, to see the owner-based threading
+before it was released; that pin is gone again, and with it the
+contradiction with what the paragraph below says.)*
 
 *(Amended when TreeAMR 0.1.1 was released; it says here for the record
 what it used to say, because two of this package's arrangements were built
@@ -2846,7 +2969,12 @@ Each has an acceptance test; serial `Float64` correctness first.
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
   floor counts; `Float32x2` runs Sod and Sedov; digests identical across
   thread counts; the per-phase device table with the RHS speedup on
-  unified memory measured.
+  unified memory measured. *(Threads and device done, as steps 13 and 14,
+  ahead of precision: digests identical at one and four threads, the
+  device table on Metal and an H200, and scans on Symmetry. See [Step 13 —
+  threads](#step-13--threads) and [Step 14 — the benchmark and the
+  device](#step-14--the-benchmark-and-the-device). Precision, step 12, is
+  what remains.)*
 - **H7 — Higher-order reconstruction** *(optional)*. PPM or WENO-Z at
   `G = 3`, and the interface-order rule re-measured against it.
 
@@ -4283,6 +4411,324 @@ for the 1.04× measured on 1.11 in "Testing" above, which is the number
 that applies once more. The 1.10 measurements in the section above are
 left as the record of what was measured then.
 
+### IMEXRungeKutta and TreeAMR 0.1.3 (added after step 11)
+
+Two upstream changes taken together, because each alone would have moved
+the same numbers: TreeAMR 0.1.3, whose owner-based threading places every
+per-block pass on the thread that owns the block, and the move from
+OrdinaryDiffEq's `SSPRK33` to IMEXRungeKutta's (see [Time
+integration](#time-integration-and-the-time-step) and [Floors and the
+atmosphere](#floors-and-the-atmosphere) for the design; `src/stepping.jl`
+for the code). `Project.toml` loses `OrdinaryDiffEqSSPRK`, `SciMLBase` and
+the `[sources]` pin on TreeAMR's `main`, and gains `IMEXRungeKutta = "1.2"`
+with a `[sources]` entry of its own.
+
+**How it was checked.** The whole suite was run on the tree before the
+change and on the tree after it, at four threads, and the 136 `@info` lines
+of each compared line by line. 75 differ, and in all but the lines listed
+below the difference is in the last one to three of seventeen printed
+digits — Shu–Osher and Butcher form compute the same `uⁿ⁺¹` with the sums
+associated differently, and every run inherits that. No number `CODE.md`
+records to its printed precision moved except these, and each moved for
+the limiter placement and not for the arithmetic:
+
+| run | before (OrdinaryDiffEq) | after (IMEXRungeKutta) |
+|---|---|---|
+| static Sedov `:center` `D = 2`, `:stage` reset hits | 4096 | **4136** |
+| the same, energy drift | 1.24659e-5 | 1.24609e-5 |
+| the same, injection | 2.39804e-5 (a bound; ratio 0.51984) | **1.24609e-5 (equal to the drift to 8.9e-16)** |
+| the same, L1 against the fine run | 4.4066042e-2 | 4.4066041e-2 |
+| static Sedov `:center` `D = 3`, floor / reset / ghost hits | 75 / 24504 / 4703 | **89 / 24576 / 4786** |
+| the same, injection | 8.52677e-5 (a bound; ratio 0.52203) | **4.44841e-5 (equal to the drift to 3.6e-15)** |
+| Kelvin–Helmholtz `Float32` to `t = 2/5`, `max |M₃₂ − M₆₄|/M` | 156 ulp | 200 ulp |
+
+The `:step` columns — 1384 and 8232 hits, drift equal to injection — are
+unchanged apart from the last digits, as they must be: the step limiter is
+called on the same state at the same point in both integrators. The
+`Float32` shear layer is an instability amplifying roundoff, so a
+different association of the same sums is exactly what moves it; the mesh,
+the step count and the tracking are still equal to the `Float64` run's.
+
+**What the tests now say about the hooks.** The one-step vacuum test
+(`test/reset_tests.jl`) asserts the hit counts as well as the flooring:
+`:stage` resets 12 owned cells in `D = 1` and 192 in `D = 2` on a step
+where `:step` resets 2 and 32, and `:none` resets none — which is what
+says the stage hook is installed, since the step's result is floored by
+either. And `test/sedov_tests.jl` asserts drift = injection to roundoff
+under *both* cadences, where it used to assert a bound under `:stage` and
+that the bound was not tight.
+
+**Tests: 11708 at four threads and 11674 at one**, against 11622 — the
+integrator's own file (`test/stepping_tests.jl`), the two thread-identity
+and device files, two TreeAMR internals checked by name, and the hit counts
+above; the difference between the two thread counts is the ownership
+check, which asserts one thing per block per thread and has nothing to
+assert at one thread. Whole suite, back to back on a quiet machine:
+**2 m 58.4 at one thread and 2 m 35.2 at four**, against 3 m 44.8 at one
+thread after step 11. The share of that owed to the two kernel fixes of
+step 14 rather than to the integrator was not separated; the
+thread-identity subprocess costs twenty seconds of the four-thread run.
+
+### Step 13 — threads
+
+`test/thread_workload.jl` prints twelve lines — a tracked Sod tube in
+`D = 1` through four chunks and one regrid, a Kelvin–Helmholtz shear layer
+through three chunks on its 160-block tracked mesh, and a static Sedov
+blast on `sedov_forest(:center)` long enough (`t = 1/20`, 1280 resets, 128
+ghost floor hits) that both limiter hooks fire and the injection is
+nonzero — each with the state vector's hash, the block count, `λ`, both
+floor counts and the conserved totals, or the run's summary.
+`test/threading_tests.jl` compares them with a subprocess at another thread
+count: **identical, character for character**, at one thread against four
+and at four against one, in about twenty seconds. No line needed a
+tolerance; the floating-point sums (the totals, the injection, the L1
+error) are the ones `CODE.md` would allow one if upstream's fold changed,
+and it has not.
+
+`test/stepping_tests.jl` adds the two claims the digests cannot see: that
+`state_partition` is TreeAMR's ownership — a kernel writing
+`Threads.threadid()` per block through `map_blocks!` finds block `b` on
+thread `offset + c` for every block in partition range `c` — and that the
+by-owner and broadcast paths are bitwise the same on a two-level wave and
+on a vacuum box where both hooks fire in every step. A partition that
+covered the state but gave a block's entries to the wrong thread would
+pass every value in the suite and fail the first.
+
+### Step 14 — the benchmark and the device
+
+`src/benchmark.jl` times a step and its parts on a `roots^D` forest of
+`N^D` blocks — the entropy wave on a periodic box by default, the simple
+setup a scan wants — and `bin/benchmark.jl` prints one tab-separated row
+per phase. The numbers below are this machine's (an Apple M3 Pro, 6
+performance and 6 efficiency cores, 18 GPU cores, unified memory), best of
+three to five after a warm-up.
+
+**What the first table found, and the two fixes.** Neither was a guess; both
+are bit-identical, which the whole suite's `@info` lines confirm (identical
+before and after, line for line).
+
+- **The flux kernel slowed down as the state evolved.** On 64 blocks of
+  `16³` at one thread it took 3.54 ms per direction on the entropy wave's
+  exact initial data and **5.74 ms** forty-eight steps later, and the RHS
+  29.7 ms and 40.1 ms, on states that differ in the last bit: the wave's
+  `v` and `p` are uniform, exactly at first and to roundoff afterwards, and
+  `:minmod`'s sign test on a roundoff-level difference is a coin flip the
+  branch predictor loses. `slope(::Val{:minmod})` is now two `ifelse`s,
+  which choose the same value in every case; the flux kernel holds at
+  **3.64 ms** and the RHS at **30.9 ms** on the evolved state. Every
+  uniform region pays this — Sedov's ambient, the shear layer's pressure —
+  so the measurement's own initial data was the one state that hid it.
+- **The divergence kernel's loop over directions was not unrolled.** It
+  indexed the tuple of flux arrays with a runtime `d`, and took **6.35 ms**
+  on the same mesh; written out per dimension it takes **1.38 ms**, the
+  same additions in the same order. (A plain Julia loop with `i` innermost
+  and `@simd` takes 0.69 ms: KernelAbstractions' CPU backend runs one work
+  item at a time and does not vectorize across them, and that factor is
+  left on the table deliberately, since `map_blocks!`'s contract is one
+  kernel for every backend.)
+
+**The integrator.** OrdinaryDiffEq against IMEXRungeKutta on the same
+mesh, before the two kernel fixes, one step of `hydro_solve!` in ms:
+
+| threads | 1 | 2 | 4 | 6 | 8 |
+|---|---|---|---|---|---|
+| OrdinaryDiffEq `SSPRK33` | 98.9 | 55.8 | 30.6 | 31.2 | 25.9 |
+| IMEXRungeKutta `SSPRK33`, by owner | 96.4 | 49.8 | 27.9 | 26.5 | 25.0 |
+
+A modest gain here, because a hydrodynamic RHS is expensive per cell and
+three of them are 90% of a step; IMEXRungeKutta's own stage arithmetic,
+measured with an empty right-hand side, costs **1.0–1.2 ms per step** at
+any thread count on this mesh — twelve passes over 10.5 MB arrays, about
+107 GB/s, which is this machine's memory bandwidth. So on a laptop the
+integrator is bandwidth-bound rather than serial; on a NUMA node it is
+where the ownership shows (see the Symmetry tables below).
+
+**The thread scan**, 512 blocks of `16³` in `D = 3` (2.1M cells), ms:
+
+| phase | 1 | 2 | 4 | 6 | 8 | 12 | speedup |
+|---|---|---|---|---|---|---|---|
+| step | 740.6 | 375.0 | 219.4 | 194.1 | 194.9 | 167.7 | 4.42 |
+| rhs | 236.0 | 115.0 | 66.0 | 57.2 | 54.0 | 48.7 | 4.85 |
+| flux | 99.9 | 49.7 | 26.0 | 21.4 | 21.1 | 17.9 | 5.59 |
+| fill_ghosts | 92.0 | 40.2 | 23.6 | 19.7 | 19.4 | 15.7 | 5.86 |
+| con2prim | 13.2 | 7.4 | 5.6 | 5.5 | 5.6 | 6.0 | 2.22 |
+| divergence | 11.8 | 6.2 | 4.7 | 4.6 | 4.4 | 4.6 | 2.55 |
+| scatter | 20.0 | 10.1 | 5.1 | 4.3 | 4.2 | 3.5 | 5.66 |
+| reset | 12.8 | 6.3 | 3.2 | 2.5 | 2.9 | 2.3 | 5.60 |
+| hydro_flags | 71.8 | 36.3 | 19.1 | 16.0 | 15.1 | 12.5 | 5.73 |
+
+Linear to four threads (3.4× on the step), and little from the efficiency
+cores after six. `con2prim` and the divergence stop at four threads, at
+70–80 GB/s — bandwidth again. What is left of a step is the RHS, and of
+the RHS the flux kernel (37%) and TreeAMR's ghost fill (32%); at `16³` a
+block's ghosts are 95% of its owned cells, which is what the block-size
+scan below prices.
+
+**The device.** `Float32`, the same mesh, ms:
+
+| phase | host, 8 threads | host, 12 threads | Metal |
+|---|---|---|---|
+| step | 133.5 | 115.6 | **79.3** |
+| rhs | 39.1 | 49.9 | **23.2** |
+| flux | 18.5 | 16.6 | **5.1** |
+| fill_ghosts | 11.1 | 10.4 | 7.6 |
+| scatter | 3.8 | 3.8 | 6.6 |
+| con2prim | 3.1 | 3.7 | 2.3 |
+| divergence | 2.3 | 2.4 | 1.6 |
+| integrator | 8.0 | — | 4.7 |
+| problem (after a regrid) | 1.0 | 1.4 | 27.6 |
+
+The prediction under [Running on a device](#running-on-a-device) holds:
+the hydro kernels are 1.4–3.3× faster on the device and the step 1.5–1.7×.
+What holds the device back is TreeAMR's — `scatter!` and the ghost fill are
+61% of its RHS, `scatter!` at about 13 GB/s — and the schedule
+construction after a regrid, 27.6 ms against a millisecond on the host.
+Those three are the upstream candidates this step turned up, beside the
+CPU one: `scatter!` on the host runs at 1.8 ns per entry where a
+`copyto!` of the same state runs at 0.16, because it is a one-entry-per-
+work-item kernel on a backend that does not vectorize across work items.
+
+`test/device_tests.jl`, run with `TREEHYDRO_TEST_BACKEND=metal` in an
+environment that has Metal, reproduces the host `Float32` run **exactly**:
+the tracked Sod tube's L1 (4.1725063e-3), step count (138) and mesh
+history, and the static Sedov blast's 1280 resets, 128 ghost hits, shock
+radius and peak. Without the variable the CPU stands in for the device.
+
+**Symmetry: one AMD EPYC 7543 node** (64 cores in 8 NUMA domains, no SMT;
+job 564138, `bin/symmetry_cpu.sh`, Julia 1.13, threads pinned by Julia with
+`JULIA_EXCLUSIVE=1` and `srun --cpu-bind=none`). The entropy wave in
+`D = 3` on a uniform periodic forest, at 64 threads, per `SSPRK33` step:
+
+| `N` | blocks | cells | step (ms) | Mcell·updates/s | broadcast ÷ by owner |
+|---|---|---|---|---|---|
+| 8 | 512 | 262144 | 20.6 | 12.7 | 1.45 |
+| 8 | 4096 | 2.1M | 68.1 | 30.8 | 1.89 |
+| 8 | 32768 | 16.8M | 637 | 26.3 | 1.69 |
+| 12 | 512 | 885k | 21.4 | 41.4 | 3.18 |
+| 12 | 13824 | 23.9M | 697 | 34.3 | 1.98 |
+| 16 | 64 | 262144 | 15.6 | 16.8 | 1.73 |
+| 16 | 512 | 2.1M | 49.3 | 42.5 | 2.38 |
+| 16 | 4096 | 16.8M | 409 | 41.0 | 2.02 |
+| 16 | 32768 | 134M | 2724 | 49.3 | 2.16 |
+| 24 | 512 | 7.1M | 160 | 44.2 | 2.07 |
+| 24 | 4096 | 56.6M | 1086 | 52.1 | 2.27 |
+| 32 | 8 | 262144 | 22.9 | 11.5 | 1.49 |
+| 32 | 64 | 2.1M | 45.6 | 45.9 | 2.44 |
+| 32 | 512 | 16.8M | 345 | 48.6 | 2.44 |
+| 32 | 4096 | 134M | 2174 | **61.7** | 2.59 |
+| 48 | 64 | 7.1M | 136 | 51.9 | 2.36 |
+| 48 | 512 | 56.6M | 964 | 58.7 | 2.62 |
+| 64 | 8 | 2.1M | 204 | 10.3 | 1.05 |
+| 64 | 64 | 16.8M | 305 | 54.9 | 2.48 |
+| 64 | 512 | 134M | 2027 | **66.2** | 2.65 |
+
+Three findings, in order of how much they matter.
+
+- **The ownership partition is worth 2–2.7× on a NUMA node**, where it was
+  worth 1.0–1.2× on the laptop. The broadcast path — which is what
+  OrdinaryDiffEq's serial stage arithmetic amounted to — forms every stage
+  combination on one core over pages spread across eight domains; at
+  `32³ × 512` it costs 402 ms of a 746 ms step, and by owner the same
+  combinations are 4 ms. This is the measurement that justifies the move
+  to IMEXRungeKutta for this package, and it is invisible on unified
+  memory.
+- **Bigger blocks are faster, and fewer blocks than threads wastes the
+  node.** At a fixed count of 512 blocks throughput rises from 12.7 (`8³`)
+  to 66.2 (`64³`) million cell updates per second, because a block's
+  ghosts fall from 2.4 times its owned cells at `N = 8` to 0.20 times at
+  `N = 64` and the ghost fill falls from 22–40% of the RHS to 4–7%; the
+  flux kernel is 30–45% of the RHS at every large `N`. Eight blocks leave 56
+  of 64 threads idle (10–11 M/s whatever their size), and 64 blocks come
+  within 10–20% of 512 once `N ≥ 32`. For production on this node: **`N = 32` to `64`
+  with at least a few hundred blocks**, 55–66 M cell updates per second —
+  about 15–18 ns per cell and step at `Float64`, against 80 ns on the M3
+  Pro at 12 threads.
+- **Everything but the stage combination scales.** The thread scan at
+  `32³ × 512` (16.8M cells), ms:
+
+  | phase | 1 | 2 | 4 | 8 | 16 | 32 | 64 | speedup |
+  |---|---|---|---|---|---|---|---|---|
+  | step, by owner | 8911 | 4628 | 2762 | 1887 | 938 | 486 | 344 | **25.9** |
+  | step, broadcast | 8941 | 4691 | 2816 | 1848 | 1158 | 979 | 746 | 12.0 |
+  | rhs | 2684 | 1382 | 779 | 513 | 258 | 134 | 97 | 27.6 |
+  | flux | 1420 | 706 | 354 | 190 | 95 | 51 | 26 | 54.6 |
+  | fill_ghosts | 421 | 225 | 129 | 83 | 41 | 19 | 8.3 | 50.6 |
+  | scatter | 401 | 198 | 99 | 57 | 28 | 16 | 7.8 | 51.6 |
+  | con2prim | 252 | 119 | 99 | 97 | 49 | 23 | 11 | 22.3 |
+  | divergence | 175 | 108 | 94 | 87 | 44 | 22 | 11 | 15.4 |
+  | hydro_flags | 1020 | 505 | 258 | 134 | 72 | 41 | 23 | 44.6 |
+
+  The bandwidth-bound passes (`con2prim`, the divergence) stall from four
+  to eight threads, which is one NUMA domain's worth of cores sharing one
+  domain's memory, and resume doubling once the threads — and the pages
+  they first-touched — spread across domains. A single EPYC core does 1.9M
+  cell updates per second, an M3 Pro performance core 2.8M.
+  (The `reset` row of this job, 12× at 64 threads, timed the reset on a
+  `copy(u)` whose pages the calling thread had placed in one domain; the
+  benchmark now resets an owner-placed state vector, as a run does.)
+
+The same `32³ × 512` step on the static two-level mesh (960 blocks) is
+**642 ms** for 49.0 M/s — the interface flux restriction is 1.6 ms of it —
+and on the Sedov blast with its boundary hook and floors **639 ms**, 49.2
+M/s: neither the coarse-fine faces nor the physics changes the answer to
+"what block size". The whole tracked 3D blast of `test/sedov_tests.jl`
+(`N = 4`, 64 root blocks) through `evolve!` runs at 1.2 M/s on the node —
+test-sized blocks of 64 cells, and the reason the scan exists.
+
+**Symmetry: one H200** (job 564146, `bin/symmetry_gpu.sh`, the same scan
+on CUDA, 16 host cores on the node for the comparison), million cell
+updates per second per `SSPRK33` step:
+
+| `N` | blocks | cells | `Float64` | `Float32` | ghost fill ÷ RHS (`Float64`) |
+|---|---|---|---|---|---|
+| 8 | 512 | 262144 | 126 | 125 | 51% |
+| 8 | 32768 | 16.8M | 378 | 506 | 42% |
+| 16 | 512 | 2.1M | 416 | 522 | 34% |
+| 16 | 4096 | 16.8M | 546 | 735 | 29% |
+| 16 | 32768 | 134M | 568 | 791 | 29% |
+| 24 | 4096 | 56.6M | 624 | 802 | 22% |
+| 32 | 64 | 2.1M | 480 | 592 | 24% |
+| 32 | 512 | 16.8M | 657 | 932 | 17% |
+| 32 | 4096 | 134M | 695 | **1006** | 15% |
+| 48 | 512 | 56.6M | **715** | 981 | 12% |
+| 64 | 64 | 16.8M | **715** | 953 | 11% |
+
+- **About 11× the 64-core node at `Float64`**, block size for block size
+  (657 against 48.6 at `32³ × 512`; 695 against 61.7 at `32³ × 4096`), and
+  **49×** the GPU node's own 16 host cores on the step and on the RHS
+  alike (25.5 ms against 1256 ms, 7.1 against 347). TreeWave measured 74×
+  on the step and 36× on the RHS against the same 16 cores; the hydro RHS
+  gains more than the wave equation's, as predicted, and the step less,
+  because TreeWave's host step still carried OrdinaryDiffEq's serial stage
+  arithmetic and this one does not.
+- **The same shape as the CPU's, for a different reason.** Throughput rises
+  with `N` because the ghost fill falls from half the RHS at `8³` to a
+  tenth at `64³`; but on the device it also rises with the *number* of
+  cells until the GPU is full — 2.1M cells is not (416–480), 16.8M nearly
+  is (546–715). A device wants `N ≥ 32` and at least ten million cells per
+  GPU. `Float32` buys 1.3–1.45× at the large sizes, short of the 2× that
+  halving every byte would give; which kernel keeps it short was not
+  measured.
+- **What the device spends on TreeAMR.** `scatter!` is 15–25% of the
+  device's RHS and the ghost fill 11–50%, and the schedule construction
+  after a regrid costs 390 ms at 32768 blocks (6 ms at 512) — the same three
+  upstream items the Metal table named, now with the sizes at which they
+  matter. The integrator's stage arithmetic is 8% of a step (2.0 of 25.5 ms
+  at `32³ × 512`), at the device's bandwidth.
+- **The device reproduces the host.** `test/device_tests.jl` passes under
+  `TREEHYDRO_TEST_BACKEND=cuda` (14 of 14): the tracked Sod tube at
+  `Float32` builds the same mesh history in the same 138 steps with L1
+  4.1725147e-3 against the host's 4.1725063e-3 — 2e-6 relative, the device
+  contracting to `fma` where the host does not, which is what the test's
+  1% tolerance is for — and the static Sedov blast floors the same 1280
+  owned cells and 128 ghost entries with the same shock radius. (Metal
+  reproduced the host bit for bit; why the two devices differ there was
+  not investigated.)
+- The Sedov blast on the two-level `32³` mesh (960 blocks) runs at 539 M/s
+  on the device, against 657 for the uniform wave at 512 blocks: the
+  boundary hook and the floors cost the device about what they cost the
+  host.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:
@@ -4317,7 +4763,20 @@ Not planned, listed because they are the obvious next questions:
   [Floors and the atmosphere](#floors-and-the-atmosphere) for why it is
   a complement and not a replacement, and for its interaction with the
   coarse-fine fixup.
-- A hand-written SSPRK33 with kernel stage updates, shared with TreeWave.
+- ~~A hand-written SSPRK33 with kernel stage updates, shared with
+  TreeWave.~~ *(Superseded after step 11: IMEXRungeKutta forms the stage
+  combinations by block owner on the host and by one fused broadcast on a
+  device, which is what this item was for; on a 64-core node it is worth
+  2–2.7× on the step. See [Step 14](#step-14--the-benchmark-and-the-device).)*
+- **Upstream, from step 14's tables** (TreeAMR's, and listed here because
+  this package measured them): `scatter!` runs one entry per work item and
+  is 1.8 ns per entry on the host against 0.16 for a `copyto!`, and 15–25%
+  of an H200's RHS; the ghost fill is 30% of the RHS at `16³` blocks on
+  every backend; and the schedule construction after a regrid is 390 ms at
+  32768 blocks on an H200 against a few on the host. A per-cell kernel
+  that vectorized across `i` on the CPU would be worth another 2× on the
+  divergence (0.69 ms against 1.38), which is `map_blocks!`'s contract to
+  change or not.
 - Reflecting boundaries, once the region-form hook has a device form
   upstream; the 2D Sedov in a quadrant is the case that would want them.
 - The isentropic vortex, a second exact smooth solution in 2D that is
