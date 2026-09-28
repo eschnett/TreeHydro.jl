@@ -2314,7 +2314,9 @@ The flux kernel alone is **3.3×** faster on the device (5.1 ms against
 ghost fill, which are 61% of the device's RHS against 30% of the host's.
 The device run reproduces the host `Float32` run exactly on the tracked
 Sod tube and the static Sedov blast — the same mesh history, step count,
-L1, reset, ghost and floor counts. On Symmetry an H200 runs a step at
+L1, reset, ghost and floor counts — and, since the device tests were
+widened, on every driver of the suite in `D = 1, 2, 3`, the shear layer
+alone differing, through Metal's `sin`. On Symmetry an H200 runs a step at
 **about 11×** a 64-core AMD node and **49×** 16 host cores, up to 715
 million cell updates per second at `Float64` with `N ≥ 32`; see [Step 14 —
 the benchmark and the device](#step-14--the-benchmark-and-the-device).
@@ -4728,6 +4730,59 @@ updates per second per `SSPRK33` step:
   on the device, against 657 for the uniform wave at 512 blocks: the
   boundary hook and the floors cost the device about what they cost the
   host.
+
+**The device tests, widened** (after step 14, closing the acceptance's "the
+suite on Metal in `Float32`"). The file ran two cases; it now runs **every
+driver the suite measures with** — `entropywave_errors`, `sod_errors`,
+`sedov_static`, `evolve!` on the tube, the blast and through `kh_run` —
+in `D = 1, 2, 3`, on uniform, static two-level and tracked meshes, with and
+without the fixup, under both reset cadences, each against the same run on
+the host. It is the drivers and not the suite's files that go on the
+device, and deliberately: the files make their claims at `Float64`, which
+Metal does not have, and read single cells on the host. On CUDA the file
+runs at `Float64` as well, so there the device answers the suite's own
+runs rather than their single-precision shadows. **Metal: 61 of 61, and
+bit for bit** in everything except the shear layer. **H200 (job 564514):
+124 of 124**, `Float32` and `Float64`, 4 m 23 for the file. Four findings:
+
+- **Metal reproduces the host exactly wherever no transcendental function
+  is involved**: every L1, drift, mesh history and floor count, the
+  three-dimensional ones included. The shear layer differs at `4.1e-7` of
+  `M` because its seeded `S_y` is `sin(4πx)`, and Metal's `Float32` `sin`
+  differs from Julia's in the last bit on **42%** of arguments (4187 of
+  10001 on `[0, 4π]`; `exp` on 30%). The initial states differ in `S_y`
+  alone — 480 of 9216 entries, `1.8e-7` at worst — and nowhere else.
+- **CUDA contracts, and at `Float64` that is invisible**: the tracked tube's
+  L1 agrees to `2.4e-15` relative, the two-level entropy wave's to `6e-14`,
+  `M(t)` to `3.1e-15` over every sample, every mesh history exactly. At
+  `Float32` an *error norm* moves by up to **4.3e-5 of itself** (the
+  two-level entropy wave, `1.0712811e-3` against `1.0712354e-3`) — not a
+  defect but the relative noise `eps/err` of a difference of order-one
+  states, which is why the file compares continuous results at
+  `sqrt(eps(T))` and not at a few `eps`.
+- **The host keeps planar symmetry exactly and CUDA does not**: across the
+  two-dimensional tube the host's `S_y` total is `0.0` and the device's
+  `1.5e-36` at `Float64` (the cells carry `Σ hᴰ|S_y| = 1.8e-11` at
+  `Float32`). So step 4's claim that the planar tube has `S_y` *exactly*
+  zero is a host claim; on CUDA it holds to roundoff of a quantity that is
+  zero, which a drift bound with a zero scale cannot express — the file
+  lends such a total the largest scale of the state.
+- **The floor flag is not a device invariant, and the cells that differ are
+  exactly the ones it cannot decide.** On the three-dimensional blast the
+  owned cells the *reset* writes back agree exactly (8520 and 2856), while
+  the RHS's owned floor hits and the ghost entries came back **23 and 4339
+  against 48 and 4464** (`Float32`, `:step`) and **53 and 4441 against 25
+  and 4301** (`Float64`, `:stage`). Every one of those differences lies
+  inside the population whose recovered pressure is within **4 ulp** of
+  `p_floor` — 48 owned cells and 240 ghost entries in both runs — and where
+  that population is nearly empty (`Float64`, `:step`: 1 and 5) the counts
+  are equal. These are cells the reset put *at* the floor, recovering a
+  pressure a fraction of an ulp from it: step 8's finding that the flag is
+  not idempotent, now with an `fma` deciding which way it falls. The file
+  asserts exactly that, with `borderline_floor_cells` recounting the
+  population from the final state (which reproduces the driver's own counts
+  when run on the host). Metal, contracting nothing here, matched every
+  count.
 
 ## Possible extensions
 

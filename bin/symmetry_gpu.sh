@@ -51,6 +51,12 @@ TREEHYDRO_TEST_BACKEND=cuda "${JL[@]}" -t 8 -e "
         include(\"$REPO/test/device_tests.jl\")
     end"
 
+# `TREEHYDRO_BENCH=0` stops here: the device tests alone take minutes, the
+# scans below most of the hour.
+if [ "${TREEHYDRO_BENCH:-1}" = 0 ]; then
+    exit 0
+fi
+
 SCAN="${TREEHYDRO_SCAN:-8:8,8:16,8:32,12:8,12:16,12:24,16:4,16:8,16:16,16:32,24:4,24:8,24:16,32:2,32:4,32:8,32:16,48:2,48:4,48:8,64:2,64:4}"
 for T in f64 f32; do
     "${JL[@]}" "$REPO/bin/benchmark.jl" --backend=cuda --type=$T --dim=3 \

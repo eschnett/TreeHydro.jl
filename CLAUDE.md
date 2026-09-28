@@ -48,7 +48,9 @@ Step 13 added `test/thread_workload.jl`, `test/threading_tests.jl` and
 `benchmark_driver`), `bin/benchmark.jl`, `test/device_tests.jl` and the
 two Symmetry jobs `bin/symmetry_cpu.sh` and `bin/symmetry_gpu.sh`, plus two
 bit-identical kernel fixes (a branch-free `:minmod`, and the divergence
-kernel's sum over directions written out). All of it in `CODE.md`'s
+kernel's sum over directions written out). `test/device_tests.jl` was
+widened afterwards to every driver of the suite in `D = 1, 2, 3`, at
+`Float64` too on CUDA, and passes on Metal (61) and an H200 (124). All of it in `CODE.md`'s
 "IMEXRungeKutta and TreeAMR 0.1.3", "Step 13 — threads" and "Step 14 — the
 benchmark and the device"; what follows is the record up to step 11.
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with
@@ -465,7 +467,14 @@ TREEHYDRO_TEST_BACKEND=metal julia --project=/tmp/thgpu test/runtests.jl
 ```
 
 Without the variable `test/device_tests.jl` runs with the CPU standing in
-for the device. On Symmetry, from a checkout of its own (rsync the tree to
+for the device. The file alone, which is what a device change needs — about
+1 m 30 on Metal, `Float32` only; on CUDA it runs `Float64` as well:
+
+```bash
+TREEHYDRO_TEST_BACKEND=metal julia --project=/tmp/thgpu -t 4 -e 'using Test, TreeAMR, TreeHydro; @testset "device" begin include("test/device_tests.jl") end'
+```
+
+On Symmetry, from a checkout of its own (rsync the tree to
 a fresh directory; never into one whose jobs are running):
 
 ```bash
@@ -475,6 +484,10 @@ sbatch --partition=amdq --time=2:00:00 bin/symmetry_cpu.sh
 ```bash
 sbatch bin/symmetry_gpu.sh
 ```
+
+`TREEHYDRO_BENCH=0 sbatch bin/symmetry_gpu.sh` runs the device tests on the
+H200 and stops before the scans, in about five minutes of the hour
+(4 m 43 for job 564514, `Float32` and `Float64`).
 
 Each builds a scratch environment under
 `/mnt/beegfs/eschnetter/claude/treehydro-{cpu,gpu}` that `develop`s the

@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–11, 7b and 7c are done; step 12 is next.**
+**Steps 0–11, 7b, 7c, 13 and 14 are done; step 12 is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -529,9 +529,18 @@ bit-identical kernel fixes it found, `test/device_tests.jl` reproducing the
 host `Float32` run exactly on Metal, and the block-size and thread scans on
 Symmetry's AMD nodes and an H200 — the last added at Erik's request, after
 the optimizations. See `CODE.md`'s "Step 14 — the benchmark and the
-device". The device tests cover a tracked Sod tube and a static Sedov
+device". The device tests covered a tracked Sod tube and a static Sedov
 blast rather than the whole suite, which is written at `Float64` and waits
 on step 12's type table.)*
+
+*(Widened afterwards, closing "the suite on Metal": `test/device_tests.jl`
+now runs every driver the suite measures with — `entropywave_errors`,
+`sod_errors`, `sedov_static`, `evolve!` on all three cases and `kh_run` —
+in `D = 1, 2, 3`, on uniform, static two-level and tracked meshes, and on
+CUDA at `Float64` as well as `Float32`. It is the drivers and not the
+suite's files that run on the device: the files make their claims at
+`Float64`, which Metal does not have, and read cells on the host. Passed on
+Metal and on an H200; see "The device tests, widened" in `CODE.md`.)*
 
 `CODE.md`: "Running on a device".
 
