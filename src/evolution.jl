@@ -542,8 +542,9 @@ The quantity the conservation claim is about, and there are `D + 2` of
 them here where Burgers had one: total mass, each momentum component and
 the total energy, each with its own integral and its own scale (see
 [`conserved_scales`](@ref) and "Conservation at coarse-fine faces" in
-`CODE.md`). Per block through [`total_mass`](@ref) and summed in block
-order, so the value does not move with the thread count.
+`CODE.md`). Per block through [`total_mass`](@ref), which is TreeAMR's
+volume-weighted `mesh_mapreduce`, and combined in block order, so the value
+does not move with the thread count.
 """
 conserved_totals(U::FieldSet{T,D}) where {T,D} =
     ntuple(v -> total_mass(U, v), Val(D + 2))
@@ -559,9 +560,16 @@ per-block spacings.
 The reset acts on a stage vector the integrator owns, in between two
 right-hand-side evaluations, so there is no scatter at that moment and the
 working array holds some other stage's numbers; measuring the injection off
-`U` would measure the wrong state. `block_mapreduce` offers exactly this
-pair of forms for exactly this reason, and the weighting and the block-order
-sum here are [`conserved_scales`](@ref)'s.
+`U` would measure the wrong state. TreeAMR's `mesh_mapreduce` offers exactly
+this pair of forms for exactly this reason.
+
+One `mesh_mapreduce` per variable, weighted by the cell volume — the same
+call `total_mass` makes for the field-set form, so the two methods combine
+their per-block values identically. That call is the one place a reduction
+crosses blocks: the per-block values are scaled and combined on the host
+there, and under MPI (TreeAMR's M7) across ranks as well, so this total
+turns global without a communicator appearing in this package. See "Field
+sets" and "Multi-threading" in `CODE.md`.
 
 Where nothing has been written between two calls the two results are
 **bit-identical** — the same numbers reduced in the same order — which is
@@ -569,15 +577,15 @@ what makes the injection of a reset that fired nowhere exactly zero rather
 than zero to a tolerance.
 """
 function conserved_totals(U::FieldSet{T,D}, u::AbstractVector) where {T,D}
-    R = float(real(T))
     forest = U.forest
-    return ntuple(Val(D + 2)) do v
-        partials = block_mapreduce(identity, +, zero(R), U, u; vars=v)
-        for b in 1:nblocks(U)
-            partials[b] *= spacing(R, forest, blockkey(U, b))^D
-        end
-        sum(partials)
-    end
+    # `float(real(T))` inline rather than a local `R` the closures capture,
+    # as TreeAMR's `total_mass` does: a closure over a local holding a type
+    # stores it as a `DataType` on Julia 1.10, which upstream measured as a
+    # dynamic dispatch per block (see its `volume_weighted_norm`).
+    init = zero(float(real(T)))
+    cellvolume(key) = spacing(float(real(T)), forest, key)^D
+    return ntuple(v -> mesh_mapreduce(identity, +, init, U, u; vars=v,
+                                      weight=cellvolume), Val(D + 2))
 end
 
 """
@@ -590,17 +598,18 @@ The absolute value matters: a momentum component whose total is zero by
 symmetry — the Kelvin–Helmholtz `S_y`, every Sedov `S_d` — would otherwise
 be compared against nothing at all, and the mass integral itself can be
 small through cancellation for a field that changes sign.
+
+One volume-weighted `mesh_mapreduce` of `abs` per variable, the combination
+[`conserved_totals`](@ref) uses, so a total and its scale are reduced the
+same way and both turn global under M7 in the one place TreeAMR reduces
+across blocks and ranks. See "Multi-threading" in `CODE.md`.
 """
 function conserved_scales(U::FieldSet{T,D}) where {T,D}
-    R = float(real(T))
     forest = U.forest
-    return ntuple(Val(D + 2)) do v
-        partials = block_mapreduce(abs, +, zero(R), U; vars=v)
-        for b in 1:nblocks(U)
-            partials[b] *= spacing(R, forest, blockkey(U, b))^D
-        end
-        sum(partials)
-    end
+    init = zero(float(real(T)))
+    cellvolume(key) = spacing(float(real(T)), forest, key)^D
+    return ntuple(v -> mesh_mapreduce(abs, +, init, U; vars=v,
+                                      weight=cellvolume), Val(D + 2))
 end
 
 # The three places the atmosphere reset may act, in the order `CODE.md`

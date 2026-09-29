@@ -18,6 +18,9 @@
 #     right-hand side reconstructs from primitives the state does not hold;
 #   * an injection that is not what it says it is, which would make every
 #     drift on Sedov unattributable;
+#   * an injection totalled by another reduction than the drift it is netted
+#     against, which a reset firing nowhere cannot reveal, since it subtracts
+#     two totals of its own;
 #   * a reset that writes back where nothing fired — the quiet one. It
 #     would move every cell by a few ulp per stage and turn the roundoff
 #     conservation claims of the entropy wave, Sod and Kelvin–Helmholtz
@@ -266,6 +269,39 @@ end
     @test n.acc.hits > 0
     # The *state* is repaired all the same: nothing finite is left broken.
     @test all(U -> all(isfinite, U), owned_states(n.U, n.u))
+end
+
+@testset "The injection's totals, the drift's totals and the scales are one reduction, bit for bit: T=$T, D=$D" for
+        T in (Float64, Float32), D in (1, 2, 3)
+    # Guards the three methods drifting apart. The injection is measured with
+    # the state-vector `conserved_totals(U, u)`, the drift it is netted
+    # against with the field-set `conserved_totals(U)`, and the drift is
+    # judged against `conserved_scales(U)`; all three are TreeAMR's
+    # volume-weighted `mesh_mapreduce`, the one reduction that crosses blocks
+    # (and ranks, under M7). A method whose combination drifted from the
+    # others' — another fold, another association, another weight — would
+    # still give an injection of exactly zero where nothing fires, since it
+    # would subtract two of its *own* totals, and the drifts would still sit
+    # inside their roundoff bounds; nothing else in the suite would notice.
+    # Here the three are compared on one process: a state vector gathered
+    # from `U` must total exactly what `U` totals, and on a state whose
+    # every conserved variable is positive the scale is `Σ hᴰ |U_v| =
+    # Σ hᴰ U_v` and must equal the total bit for bit.
+    #
+    # The two-level entropy wave, so that the cell volumes differ between
+    # blocks and the weight is not a common factor; `v = 1` makes every
+    # momentum component positive, and `ρ` and `E` are positive anyway.
+    w = EntropyWave(T, Val(D))
+    forest = hydro_forest(Val(D), 8; roots=4, L=w.L, refined=true, T=T)
+    @test forest_levels(forest) == [0, 1]
+    U = FieldSet{T}(forest, D + 2; G=2)
+    fill_entropywave_averages!(U, w)
+    u = statevector(U)
+    gather!(u, U)
+    totals = conserved_totals(U)
+    @test conserved_totals(U, u) === totals
+    @test conserved_scales(U) === totals
+    @test totals isa NTuple{D + 2,T}
 end
 
 @testset "The ghost population is counted over the stored extent: T=$T, D=$D" for

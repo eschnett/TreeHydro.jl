@@ -290,9 +290,13 @@ communicator appearing in this package. *(Amended in step 15: it exists.
 TreeAMR 0.1.3 exports `mesh_mapreduce` in both forms, and its `total_mass`
 is now that call with the cell volume as the weight, so the field-set
 `conserved_totals` goes through it already. The state-vector form of
-`conserved_totals` and `conserved_scales` still multiply and sum their
-per-block partials by hand; moving them is listed under [Possible
-extensions](#possible-extensions).)*
+`conserved_totals` and `conserved_scales` still multiplied and summed their
+per-block partials by hand.)* *(Done after step 15: both are now that call
+too, `mesh_mapreduce(identity | abs, +, zero(R), U[, u]; vars = v, weight =
+key -> spacing(R, forest, key)^D)`, so every total, scale and injection in
+this package goes through the one reduction TreeAMR carries across blocks
+and, under M7, across ranks — and not one bit moved; the evidence is under
+[Multi-threading](#multi-threading).)*
 
 `U` is the **only evolved set**, so the state vector is `statevector(U)`
 and the several-set form TreeAMR has specified is not needed. `G = 2` on
@@ -2342,9 +2346,27 @@ blocks, with the M7 `Allreduce` inside it and nowhere else — and
 Once it exists the totals go through it, which is how they turn global
 without a communicator ever appearing in this package. *(Amended in step
 15: `mesh_mapreduce` is in TreeAMR 0.1.3 and the field-set totals reach it
-through `total_mass`; the state-vector totals and `conserved_scales` do not
-yet — see [Field sets](#field-sets) and [Possible
-extensions](#possible-extensions).)*
+through `total_mass`; the state-vector totals and `conserved_scales` did
+not yet.)* *(Done after step 15: they do now. `conserved_totals(U, u)` and
+`conserved_scales(U)` are each one `mesh_mapreduce` per variable with
+`weight = key -> spacing(R, forest, key)^D`, the call `total_mass` makes,
+so nothing in this package combines per-block values by hand any more and
+the M7 `Allreduce` will reach every total, scale and injection without a
+line changing here. The change is bit-identical, and measured so rather
+than argued from upstream's comment that `mapreduce(identity, +, v)` is
+`sum(v)`'s pairwise reduction: the whole suite, run through
+`test/runtests.jl` at four threads in two environments differing only in
+this change, printed **150 `@info` lines on each side and not one byte
+differed** — 38 of them report a drift, an injection, a leak or a total,
+and 90 print some floating-point result to 12–17 digits — nor did any
+other line of the log, the test summary's time excepted.
+`test/reset_tests.jl` now asserts on a two-level mesh that a state vector
+gathered from `U` totals exactly what `U` totals and that
+the scale of an all-positive state equals its total, bit for bit — the
+one thing the injection being exactly zero where nothing fires cannot
+see, since it subtracts two totals of its own; a sequential hand fold of
+the same partials differs from it in 3–5 of the `D + 2` variables in
+`D = 2, 3`, so the check can fail.)*
 
 ## Running on a device
 
@@ -4996,15 +5018,6 @@ Not planned, listed because they are the obvious next questions:
   that vectorized across `i` on the CPU would be worth another 2× on the
   divergence (0.69 ms against 1.38), which is `map_blocks!`'s contract to
   change or not.
-- **The remaining totals through `mesh_mapreduce`** (added in step 15).
-  TreeAMR 0.1.3 has the global scalar form this document asked for under
-  [Field sets](#field-sets) and [Multi-threading](#multi-threading), and the
-  field-set `conserved_totals` already reaches it through `total_mass`; the
-  state-vector `conserved_totals(U, u)` — the reset's injection — and
-  `conserved_scales` still scale and sum their per-block partials by hand.
-  Moving them is what makes them global under M7 without a communicator
-  here. What would check it: the thread digests, and the injection staying
-  *exactly* zero on every case that floors nowhere.
 - **HLLC on the entropy wave and on Sod** (added in step 15). Both were
   named as the place HLLC would first be measured — "the HLLE/HLLC
   comparison has its first number here" and Sod's `:mc` rate of 0.945 as
