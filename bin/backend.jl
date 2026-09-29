@@ -4,7 +4,7 @@
 # exactly one right way to resolve it. The device package is loaded only
 # when asked for: neither CUDA nor Metal is a dependency of TreeHydro or of
 # TreeAMR, and the environments here -- `bin/Project.toml` for the viewers,
-# the package environment for the benchmark step 14 will add -- should not
+# the package environment for `bin/benchmark.jl` (step 14) -- should not
 # grow one just so that `--backend=cpu` keeps working. So the load is a
 # `Core.eval` into `Main` rather than a `using` at the top of a script, and
 # a missing package is reported as the one command that fixes it.

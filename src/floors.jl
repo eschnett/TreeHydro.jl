@@ -155,9 +155,10 @@ covers both — which is why the rule is stated on `p` and not on `ε`.
 
 `hit` is what the floor counts are made of. The driver counts hits per
 chunk in two populations, owned cells and ghost cells, because the ghost
-count is the measurement that decides an open upstream question about the
-prolongation (see "Floors and the atmosphere" in `CODE.md`). A rule that
-fired silently would make that question unanswerable.
+count is the measurement behind the upstream question of a limited,
+positivity-preserving prolongation — measured in step 9, and recorded with
+its answer under "Possible extensions" in `CODE.md`. A rule that fired
+silently would have made that question unanswerable.
 
 Both comparisons are written as the negation of the healthy condition
 (`!(ρ ≥ ρ_atm)`, `!(p ≥ p_floor)`), so a `NaN` takes the flooring branch

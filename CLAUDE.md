@@ -28,284 +28,149 @@ Two rules follow from `CODE.md` and govern every change here:
   interpolation, it belongs upstream in TreeAMR. Two things this package
   needed have already gone there (`map_blocks!(…; stored = true)` and
   the `AllVariables` callback form); a limited, positivity-preserving
-  prolongation is the next candidate, and `CODE.md` says what
-  measurement would justify asking for it.
+  prolongation is the next candidate, and `CODE.md` records the
+  measurement that priced it (step 9) and why it was still not asked for.
 
 ## Current state
 
-**Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
-faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
-reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; so are
-threads (H6b, step 13), the benchmark and device (H6c, step 14) and, last,
-precision (H6a, step 12) — H6 is done, and `PLAN.md`'s step 15, the review
-pass, is next.** Taken with them, and
-first: the move to **TreeAMR 0.1.3** (owner-based threading, from the
-registry — the `[sources]` pin on its `main` is gone) and to
-**IMEXRungeKutta** for time integration, replacing OrdinaryDiffEq —
-`src/stepping.jl` (`state_partition`, `hydro_integrator`, `hydro_solve!`,
-which moved there from `evolution.jl`) and `reset_stage!` in `floors.jl`.
-Step 13 added `test/thread_workload.jl`, `test/threading_tests.jl` and
-`test/stepping_tests.jl`; step 14 `src/benchmark.jl` (`benchmark_phases`,
-`benchmark_driver`), `bin/benchmark.jl`, `test/device_tests.jl` and the
-two Symmetry jobs `bin/symmetry_cpu.sh` and `bin/symmetry_gpu.sh`, plus two
-bit-identical kernel fixes (a branch-free `:minmod`, and the divergence
-kernel's sum over directions written out). `test/device_tests.jl` was
-widened afterwards to every driver of the suite in `D = 1, 2, 3`, at
-`Float64` too on CUDA, and passes on Metal (61) and an H200 (124). Step 12
-added `test/type_tests.jl` (four drivers at `Float64`, `Float32` and
-`Float32x2`, the entropy wave at `Float32`), `chunk_count` in `driver.jl`
-and `roundint` in `precision.jl`, and raised IMEXRungeKutta's compat to
-`1.3`, the first release that runs `Float32x2`. All of it in `CODE.md`'s
-"IMEXRungeKutta and TreeAMR 0.1.3", "Step 13 — threads", "Step 14 — the
-benchmark and the device" and "Step 12 — precision"; what follows is the
-record up to step 11.
-`CODE.md` is complete and reviewed. What exists: `Project.toml` with
-`TreeAMR = "0.1.1"` from the General registry — TreeAMR was released, and
-the `[sources]` pin to its GitHub `main` is gone, which also lowered the
-Julia floor from 1.11 to 1.10 (raised back to 1.11 on 2026-09-25 with all
-the Tree* packages); `src/TreeHydro.jl`, the module shell;
-`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`, and
-`roundint` since step 12) and
-`src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
-TreeWave; `src/floors.jl`
-(`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
-`src/eos.jl` (`EquationOfState`, `IdealGas`, `pressure`,
-`internal_energy`, `soundspeed`, the state accessors `statedims`,
-`density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
-`prim2con` / `con2prim`) from step 1; `src/reconstruction.jl` (`slope`
-for `:none`, `:minmod` and `:mc`, and `face_states`) and `src/riemann.jl`
-(`physical_flux`, `signal_speed`, and `riemann_flux` for `:llf`, `:hlle`
-and `:hllc`) from step 2 — all `isbits`, pointwise, kernel-callable,
-non-allocating and inferred; from step 3 `src/evolution.jl`
-(`HydroProblem`, the three kernels `con2prim_kernel!`, `flux_kernel!` and
-`divergence_kernel!`, `hydro_rhs!`, `update_primitives!`,
-`max_signal_speed`, `floor_hits`, `hydro_dt`, `conserved_totals`,
-`conserved_scales`, `hydro_solve!`, `convergence_rate`) and
-`src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
-`fill_entropywave_averages!`, `entropywave_reference`,
-`entropywave_errors`); and from step 4 `src/exact_riemann.jl`
-(`ExactRiemann`, `exact_riemann`, `sample`, `max_signal_speed(::ExactRiemann)`
-— host `Float64`, Toro ch. 4, a *reference* and not a flux) and
-`src/sod.jl` (`SodTube`, `sod_state`, `sod_initial`, `sod_conserved`,
-`sod_boundary`, `sod_forest`, `sod_reference`, `assert_no_arrival`,
-`sod_errors`); and from step 5 almost nothing — `sod_forest` gained
-`refined = :middle | :left` and `forest_levels(forest)` was added to
-`src/evolution.jl`, the step being a measurement rather than a
-construction; and from step 6 `src/refinement.jl` (`lohner`, `cell_tau`,
-`indicator_scales`, `hydro_flags`, `refinement_buffer` — the criterion
-alone, with no driver and no `regrid!` yet); and from step 7
-`src/driver.jl` (`HydroCase`, `evolve!`, `uniform_run`, `check_cfl`,
-`tracked_share`, `reduce_to_grid`, `l1_difference`), with
-`HydroCase(::SodTube)` in `sod.jl` and `HydroCase(::EntropyWave)` plus
-`entropywave_primitive` in `entropywave.jl`, and with `hydro_flags` and
-`max_signal_speed` each split into a `FieldSet` core and a
-`HydroProblem` forwarder; and from step 8 the atmosphere reset —
-`ResetAccounting` and `reset_atmosphere!(u, integrator, p, t)` in
-`floors.jl` (a `map_blocks!` launch over the owned cells of
-`statearray(u, U)`, writing back *only* where a floor fired), and in
-`evolution.jl` `ghost_floor_hits`, `check_reset`, the state-vector method
-of `conserved_totals`, `hydro_solve!`'s `reset` keyword and
-`HydroProblem`'s `accounting` one, with `evolve!` gaining `reset`
-(defaulting to `:stage`), `accounting`, the post-regrid reset and the
-three new return fields `reset_hits`, `ghost_hits` and `injection`; and
-from step 9 `src/sedov_reference.jl` (`SedovSimilarity`, `sedov_alpha`,
-`sedov_exponent`, `sedov_radius`, `sedov_profile`, `exponent_fit` and an
-`adaptive_simpson` of its own — host `Float64`, the similarity law
-*derived* from the similarity equations rather than transcribed, a
-*reference* and not a method) and `src/sedov.jl` (`SedovBlast`,
-`sedov_state`, `ambient_state`, `sedov_initial`, `sedov_conserved`,
-`sedov_boundary`, `HydroCase(::SedovBlast)`, `sedov_forest` with
-`refined = :center | :corner | :edge`, `sedov_similarity`, `measured_E₀`,
-`shock_radius`, `peak_compression`, `assert_no_arrival(::SedovBlast, …)`
-and `sedov_static`); and from step 10 `src/kelvinhelmholtz.jl`
-(`KelvinHelmholtz` — `D = 2` only, and it refuses any other — `kh_state`,
-`kh_initial`, `kh_conserved`, `HydroCase(::KelvinHelmholtz)`,
-`mode_amplitude` and `max_y_kinetic_energy` (McNally's two diagnostics,
-host loops in block order read once per chunk through the observer),
-`growth_rate`, and the two measurement drivers `kh_run` and `kh_uniform`,
-which install that observer and are the only place either diagnostic can
-be taken).
-Tests, **one suite run whole** since step 7c:
-`test/precision_tests.jl`, `test/prerequisite_tests.jl`,
-`test/eos_tests.jl`, `test/riemann_tests.jl`, `test/evolution_tests.jl`,
-`test/reset_tests.jl`,
-`test/entropywave_tests.jl`, `test/exact_riemann_tests.jl`,
-`test/sod_tests.jl`, `test/interface_tests.jl`,
-`test/refinement_tests.jl`, `test/driver_tests.jl`,
-`test/sedov_tests.jl` and `test/kelvinhelmholtz_tests.jl`, included in that
-order by `test/runtests.jl` — Sedov late, because the order is the
-dependency order and the blast uses both the chunked driver and a static
-`hydro_solve!` run, and Kelvin–Helmholtz last, being the only case whose
-reference is a uniform fine run of this code rather than a closed form.
-And from step 11 the viewers: `bin/Project.toml` (CairoMakie and SixelTerm
-in an environment of their own, with a `[sources]` entry for TreeHydro —
-it had one for TreeAMR too until that package was released),
-`bin/backend.jl` (`resolvebackend`, `withbackend`, `checkprecision`, after
-TreeWave's), `bin/visualize1d.jl` (the tracked tube against the exact
-solution, per block coloured by level, with `τ` and the conserved totals
-against time) and `bin/visualize2d.jl` (`--case=kh|sedov|both`: the
-filmstrip with block outlines, and per case the two McNally diagnostics
-against the uniform fine run or the radial scatter against the similarity
-profile) — plus the one `src/` change the step needed, an `observer`
-pass-through on `kh_run`.
-`test/kelvinhelmholtz_tests.jl` gained the testset that asserts the
-pass-through composes rather than replaces, which is the only thing in the
-suite that exercises it — the other caller is `bin/`, and CI's `viewer` job
-is what runs that. One workflow with two jobs, `CI.yml`'s `test` and
-`viewer`, and a `README.md`.
-The milestones are H0–H6 in `CODE.md`; H1 covered steps 1–4, H2 step 5,
-H3a step 6, H3b step 7, H4a step 8, H4b step 9, H5a step 10 and H5b
-step 11; step 7b split the suite
-into a short tier and a
-long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; steps 13, 14 and 12
-finished H6, in that order.
+**The package is complete: milestones H0–H6 are done, and step 15 — the
+review pass that read `CODE.md` against the code once more — closed the
+step plan, whose file (`PLAN.md`) it deleted.** Nothing is next. H7,
+higher-order reconstruction, is optional and not planned. `CODE.md` is the
+record: the design with every amendment marked where it was made, every
+measured number in "Measured results" beside the prediction it confirms or
+corrects, and under "Possible extensions" what was measured and deliberately
+not built and what was never measured at all.
 
-The measured numbers are in `CODE.md`'s "Measured results": the
-entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
-(rates 2.02 and 2.03), second order in L1 and **1.35 in L∞** with `:mc`
-(the limiter clipping the smooth extrema, which is why the study runs
-with `:none`), and all `D + 2` conserved integrals hold to a few ulp of
-their own scale on the uniform mesh with the fixup and — bit-identically
-— without it. Sod converges against the exact Riemann solution at an L1
-rate of **0.903** with `:minmod` and **0.945** with `:mc` over
-`N = 16 … 128`; the exact solver reproduces Toro's Table 4.3 for tests 1,
-2 and 3 to the last digit the table prints; the tube gives the same answer
-along every axis **bit for bit**, ghosts included, and the `D = 2` planar
-tube equals the `D = 1` run with `S_y` exactly zero; and where the
-boundary is physical the drift *is* the boundary flux, the momentum total
-moving by exactly `(p_L − p_R)·t_end·A` while mass and energy do not move.
-No floor fires in any of these runs; the first that fire are Sedov's, in
-step 9, and they are not the rule or the place the design expected.
+How the milestones map onto the steps, for reading `CODE.md`'s history: H0
+was step 0; H1 steps 1–4; H2 step 5; H3 steps 6 and 7; H4 steps 8 and 9; H5
+steps 10 and 11; and H6 steps 13, 14 and 12, in that order, taken together
+with the move to **TreeAMR 0.1.3** (owner-based threading, from the
+registry) and to **IMEXRungeKutta**, which replaced OrdinaryDiffEq for time
+integration. Step 7b split the suite into two tiers and step 7c undid the
+split, having found that what made CI slow was code coverage under threads
+and not the runner.
 
-Step 5 added the two-level numbers, which are the ones the package exists
-for. On the static two-level mesh every one of the `D + 2` integrals holds
-to **0.003–0.011 ulp of its own scale per step** in `D = 1, 2, 3`, and the
-identical run with `fixup = false` leaks by **`1e8`–`1e9` times** that
-bound. The interface-order rule holds for the system unamended: L∞ rates
-**0.963 / 2.034 / 2.037** at `p = 1, 3, 5` in `D = 1` and **0.925 / 2.041 /
-2.037** in `D = 2`, against unrefined controls of 2.024 and 2.029, with
-every L1 rate the scheme's own — and the negative control on the *rate*
-reproduces Burgers': `p = 1` without the fixup falls from 1.966 to **1.111**
-in L1 (1.900 to **1.192** in `D = 2`). On the two-level Sod tube the mass
-and energy drift is 0.15–2.8 times the uniform mesh's at the same coarse
-spacing (it is the *boundary's* numerical flux, not the coarse-fine
-face's), the momentum equals the boundary flux to `5e-11` relative, and at
-`N = 32` in `D = 1` all three are at true roundoff; without the fixup the
-three are `6e3`–`8e7` times worse. The Dirichlet hook fills a *fine*
-block's outer ghosts exactly, ghost rows across the tube included.
+What exists, file by file (the names are the ones to grep for; `CODE.md`'s
+"File layout" has the one-line table):
 
-Step 6 added the criterion and its calibration. Sod's initial data fires
-in exactly the two cells straddling the diaphragm, at `τ = 0.9657` and
-`0.9847`, and at **exactly zero** everywhere else; a synthetic atmosphere
-six orders below the data with `O(1)` relative noise scores **0.0020**
-with `ε_g = 1/1000` and **0.971** with `ε_g = 0`, which is the negative
-control that pins the global floor term. Max `τ` on uniform meshes at
-`h = 1/64 … 1/512`: a captured shock **0.5413, 0.5975, 0.5722, 0.5858**
-(flat — it never resolves), the contact 0.19 / 0.22 / 0.18 / 0.13, the
-rarefaction's head 0.1736 / 0.1050 / 0.0569 / 0.0286 (first order in `h`),
-the smooth interior of the fan 0.0901 / 0.0400 / 0.0144 / 0.0048
-(approaching second order), and the McNally density ramp 0.2535 / 0.1215
-/ 0.0532 / 0.0210. The ramp picks the thresholds — **`refine_tol = 0.08`,
-`coarsen_tol = 0.02`**, mid-plateau of the depth it then reaches — and
-`ε = 1/100`, `ε_g = 1/1000` are the floors. All of it in `CODE.md`'s
-"Step 6 — the refinement criterion".
+- `Project.toml`: `TreeAMR = "0.1.3"` from the General registry,
+  `KernelAbstractions`, and `IMEXRungeKutta = "1.3"` (the first release
+  that runs `Float32x2`) through the one `[sources]` entry left, since it
+  is unregistered; `julia = "1.11"`, the floor of all the Tree* packages
+  since 2026-09-25.
+- `src/TreeHydro.jl`, the module shell and its exports.
+- `src/precision.jl` (`wrap`, `ceilint`, `floorint`, `roundint`,
+  `tofloat64`) and `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`),
+  both ported from TreeWave.
+- `src/floors.jl`: `Floors`, `apply_floors`, `in_atmosphere`,
+  `atmosphere_state`, and the reset — `ResetAccounting`,
+  `reset_atmosphere!(u, integrator, p, t)` (the step limiter, and the call
+  after every regrid) and `reset_stage!` (the stage limiter), a
+  `map_blocks!` launch over the owned cells of `statearray(u, U)` writing
+  back *only* where a floor fired.
+- `src/eos.jl`: `EquationOfState`, `IdealGas`, `pressure`,
+  `internal_energy`, `soundspeed`, the state accessors `statedims`,
+  `density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
+  `prim2con` / `con2prim`.
+- `src/reconstruction.jl` (`slope` for `:none`, `:minmod` and `:mc`, and
+  `face_states`) and `src/riemann.jl` (`physical_flux`, `signal_speed`, and
+  `riemann_flux` for `:llf`, `:hlle` and `:hllc`) — all `isbits`,
+  pointwise, kernel-callable, non-allocating and inferred.
+- `src/evolution.jl`: `HydroProblem`, the three kernels
+  `con2prim_kernel!`, `flux_kernel!` and `divergence_kernel!` (the three
+  that carry `@inbounds`), `hydro_rhs!`, `update_primitives!`,
+  `max_signal_speed`, `floor_hits`, `ghost_floor_hits` (the package's one
+  launch of its own, through `TreeAMR.launch_by_owner!`), `hydro_dt`,
+  `conserved_totals` (field-set and state-vector forms),
+  `conserved_scales`, `check_reset`, `forest_levels` and
+  `convergence_rate`.
+- `src/stepping.jl`: `state_partition`, `hydro_integrator` (IMEXRungeKutta's
+  `SSPRK33`, stage arithmetic by block owner, the reset in both hooks) and
+  `hydro_solve!`.
+- `src/refinement.jl`: `lohner`, `cell_tau`, `indicator_scales`,
+  `hydro_flags` and `refinement_buffer`; `hydro_flags` and
+  `max_signal_speed` each have a `FieldSet` core and a `HydroProblem`
+  forwarder.
+- `src/driver.jl`: `HydroCase`, `evolve!` — the one loop, with `reset`
+  (default `:stage`), `accounting`, the post-regrid reset and the
+  `observer` hook — `uniform_run`, `check_cfl`, `chunk_count`,
+  `tracked_share`, `reduce_to_grid` and `l1_difference`.
+- `src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
+  `fill_entropywave_averages!`, `entropywave_reference`,
+  `entropywave_errors`, `entropywave_primitive`, `HydroCase(::EntropyWave)`).
+- `src/exact_riemann.jl` (`ExactRiemann`, `exact_riemann`, `sample`,
+  `max_signal_speed(::ExactRiemann)` — host `Float64`, Toro ch. 4, a
+  *reference* and not a flux) and `src/sod.jl` (`SodTube`, `sod_state`,
+  `sod_initial`, `sod_conserved`, `sod_boundary`, `sod_forest` with
+  `refined = :middle | :left`, `sod_reference`, `assert_no_arrival`,
+  `sod_errors`, `HydroCase(::SodTube)`).
+- `src/sedov_reference.jl` (`SedovSimilarity`, `sedov_alpha`,
+  `sedov_exponent`, `sedov_radius`, `sedov_profile`, `exponent_fit` and an
+  `adaptive_simpson` of its own — host `Float64`, the similarity law
+  *derived* from the similarity equations rather than transcribed, a
+  *reference* and not a method) and `src/sedov.jl` (`SedovBlast`,
+  `sedov_state`, `ambient_state`, `sedov_initial`, `sedov_conserved`,
+  `sedov_boundary`, `HydroCase(::SedovBlast)`, `sedov_forest` with
+  `refined = :center | :corner | :edge`, `sedov_similarity`, `measured_E₀`,
+  `shock_radius`, `peak_compression`, `assert_no_arrival(::SedovBlast, …)`
+  and `sedov_static`).
+- `src/kelvinhelmholtz.jl` (`KelvinHelmholtz` — `D = 2` only, and it
+  refuses any other — `kh_state`, `kh_initial`, `kh_conserved`,
+  `HydroCase(::KelvinHelmholtz)`, `mode_amplitude` and
+  `max_y_kinetic_energy` (McNally's two diagnostics, host loops in block
+  order read once per chunk through the observer), `growth_rate`, and the
+  two measurement drivers `kh_run` and `kh_uniform`, which install that
+  observer and are the only place either diagnostic can be taken; `kh_run`
+  passes an `observer` of the caller's through after its own).
+- `src/benchmark.jl` (`benchmark_phases`, `benchmark_driver`).
+- Tests, **one suite run whole**, included by `test/runtests.jl` in the
+  dependency order: `precision_tests.jl`, `prerequisite_tests.jl`,
+  `eos_tests.jl`, `riemann_tests.jl`, `evolution_tests.jl`,
+  `reset_tests.jl`, `stepping_tests.jl`, `entropywave_tests.jl`,
+  `exact_riemann_tests.jl`, `sod_tests.jl`, `interface_tests.jl`,
+  `refinement_tests.jl`, `driver_tests.jl`, `sedov_tests.jl`,
+  `kelvinhelmholtz_tests.jl`, `type_tests.jl` (every case at `Float64`,
+  `Float32` and `Float32x2`), `device_tests.jl` (every driver against the
+  host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device)
+  and `threading_tests.jl`, which reruns the standalone
+  `test/thread_workload.jl` in a subprocess at the other thread count.
+  Before any of them, a testset refuses two files defining the same
+  top-level `const` (see "Things that will bite").
+- `bin/`: `Project.toml` (CairoMakie, SixelTerm and KernelAbstractions in
+  an environment of their own, with a `[sources]` entry for TreeHydro),
+  `backend.jl` (`resolvebackend`, `withbackend`, `checkprecision`, after
+  TreeWave's; also included by the benchmark), `visualize1d.jl` (the
+  tracked tube against the exact solution, per block coloured by level,
+  with `τ` and the conserved totals against time), `visualize2d.jl`
+  (`--case=kh|sedov|both`: the filmstrip with block outlines, and per case
+  the two McNally diagnostics against the uniform fine run or the radial
+  scatter against the similarity profile; `--movie`; `--cap=` and
+  `--chunk=`), `benchmark.jl`, and the two Symmetry jobs
+  `symmetry_cpu.sh` and `symmetry_gpu.sh`.
+- One workflow with two jobs, `CI.yml`'s `test` and `viewer`, and a
+  `README.md`.
 
-Step 7 added the driver and the first mesh that moves. The tracked Sod
-tube's L1 error against the exact solution is **1.0004** times the uniform
-fine run's in `D = 1` and **1.0000** in `D = 2`, at 200 cells against 256
-and 1472 against 2048, with the uniform coarse control at **3.678** and
-**1.850**; reduced onto the common grid the tracked and fine runs differ
-by `1.7e-5` where the coarse and fine runs differ by `1.1e-2`.
-`tracking == 1.0` in both dimensions — every cell above `refine_tol` sat
-on a block at the cap at every chunk — and the initial-data cycle
-converges in 3 passes and 2. Through 9 and 3 mesh changes the mass and
-energy drifts are `3.3e-16` / `1.6e-15` and `4.2e-17` / `1.9e-16`, and the
-momentum equals its boundary flux to `8.6e-16` and `1.0e-16`;
-`fixup = false` leaks `4.9e8`–`7.4e9` times more on **the same step count
-and the same mesh history**. `speed_headroom = 1` throws in Sod's *first*
-chunk (a CFL number of 0.6236 against 0.4); at 2 the run completes with
-`λ` rising from 1.1832 to 2.2047. The buffer table is strictly ordered —
-derived (6–7 cells) L1 4.540016e-3 at tracking 1.0, then 2: 1.0, 1:
-0.9444, 0: 0.9048 — which is *neither* upstream finding. And `p = 1` on a
-discontinuous solution is worse in every column (L1 4.701364e-3 against
-4.540016e-3, tracking 0.9091, 216 cells against 200) with zero floor hits
-either way, so the question stays open for Sedov. All of it in `CODE.md`'s
-"Step 7 — the driver and the tracked shock tube".
-
-Step 8 added the reset, and its two headline numbers are both zeros.
-Applying it twice equals applying it once **bit for bit** at `Float64` and
-`Float32` in `D = 1, 2, 3` — which `CODE.md` had predicted only to roundoff
-— while the *flag* is not idempotent: a pressure-floored cell whose kinetic
-energy dominates recovers a pressure a fraction of an ulp below `p_floor`
-and re-fires (2 of 13 cells at `Float64` in `D = 1`, 85 of 426 in `D = 3`,
-none at `Float32`), writing the identical bits back. And where nothing
-fires the reset changes nothing at all: on the tracked tube under `:stage`
-and `:step` and on the entropy wave, `injection == (0.0, 0.0, 0.0)`
-exactly, `reset_hits == 0`, `ghost_hits == 0`, and the final state, drift,
-error, step count and mesh history are bit-identical to the `reset = :none`
-run's. One `SSPRK33` step on a half-vacuum box comes out at `ρ = ρ_atm`
-under `:stage` and `:step` and stays at `ρ_atm/100` under `:none`, which is
-what asserts the hook is wired at all. The whole suite costs **11 282 tests
-in 1 m 42.9 at four threads** against 11 149 in 1 m 42.3 before the step,
-and every one of the 75 `@info` lines it printed before is byte-identical.
-All of it in `CODE.md`'s "Step 8 — the atmosphere reset".
-
-Step 9 added the blast, and four of its findings correct the design.
-`ξ₀(7/5, 3) = 1.0327774677614250` reproduces Taylor's 1.033 from a
-parametrization derived here and checked against the one similarity
-equation it was not built from (residual `3.6e-14`); the measured exponents
-are **0.64146 / 0.50443 / 0.43766** against `2/3, 1/2, 2/5` and the peak
-jumps **4.111 / 3.765 / 2.057** against the strong-shock 6. The tracked
-mesh reproduces the uniform fine run **to roundoff** (`8.3e-15`) at 12544
-cells against 16384, with `tracking == 1` everywhere and every drift at
-roundoff — and, unlike Sod's, a boundary that contributes exactly nothing.
-The corrections: **a tracked mesh cannot measure its own coarse-fine
-faces**, since tracking puts the refined region's boundary ahead of the
-shock, so `fixup = false`, `p = 1` and `reset = :step` all come back
-*identical* to the run they control and every interface claim is made on
-the static `sedov_forest(:center)` mesh instead (there the fixup buys
-`3.2e12` in mass in `D = 2` and `8.5e7` in `D = 3`); **the atmosphere rule
-never fires** — the bubble bottoms out at `ρ = 6.7e-2`, not `10⁻⁶` — and
-what fires is the *pressure floor*, driven by the interface flux
-restriction itself, 4096 owned cells and 40 ghost entries in `D = 2` and
-24504 and 4703 in `D = 3`; **`p = 1` floors nothing there**, which buys
-exact positivity for **0.47%** of L1 and closes the open question with the
-opposite sign from Sod's row; and **the accumulated injection is a bound
-under `:stage`** (measured ratio 0.520) and an equality under `:step`
-(`4.4e-16` and `2.2e-16`), because SSPRK33's stages carry weights
-`1/6, 2/3, 1`. The block count **rises monotonically** — the Sedov interior
-is a steep ramp, so the refined region is a disk and not a shell. And the
-M2 ordering case is finally exercised: zero mismatched entries out of 1664,
-72000 and 59360 outward-facing ghost entries on a 2D corner, a 3D edge and
-a 3D corner. All of it in `CODE.md`'s "Step 9 — the Sedov blast".
-
-Step 10 added the shear layer, and its headline is a flux. The setup is
-McNally, Lyra & Passy's **term for term** — the test re-evaluates equations
-(1)–(5) from the paper's literals and the worst difference is *exactly
-zero* — and the one transcription error was in `CODE.md`'s description of
-the `M(t)` weighting, which read "the lower interface alone" and is in fact
-mirrored over both. `M` grows from the seeded 0.0100 to **0.12346** at
-`t = 1.5` at a fitted rate of **2.58036** over `2a ≤ M ≤ 6a`, below both
-the `4.384` and the `5.9238` bounds, with the kinetic energy's rate
-**2.1021** times it; the curve has **not saturated** by `t = 1.5` but is
-decelerating, 3.349 → 2.580 → 1.844. Every one of the four integrals holds
-at roundoff through three regrids, and `fixup = false` leaks by
-`9.1e4`–`2.2e6` — this being the tracked mesh Sedov could not provide,
-because the whole domain is in motion — while `S_y` alone does *not* leak,
-being protected by the zero mean of `sin(4πx)` over the coarse-fine faces.
-The cap sweep falls monotonically, L1 `5.98e-2 / 2.59e-2 / 4.24e-4` at
-1024 / 4096 / 14848 cells against 16384 uniformly fine. **HLLE against
-HLLC is not close**: `M(1.5)` on uniform meshes is `0.0116 / 0.0755 /
-0.1240` under HLLC at 32²/64²/128² and `0.00066 / 0.0066 / 0.0357` under
-HLLE, so **HLLC at half the linear resolution is ahead of HLLE at full
-resolution**, and the growth *rates* are 2.5804 against 1.1712. HLLC
-becomes this case's default (`kh_run`'s `riemann` keyword); the
-package-wide default stays HLLE. `Float32` to `t = 2/5` reproduces the
-mesh, the step count and the tracking exactly and `M(t)` to **156 ulp**
-(200 since the move to IMEXRungeKutta, which associates the sums
-differently).
-All of it in `CODE.md`'s "Step 10 — Kelvin–Helmholtz".
+The headline numbers, each with the section of `CODE.md`'s "Measured
+results" that has the rest: the entropy wave is second order in L1 and L∞
+with `:none` (2.02 and 2.03), and 1.35 in L∞ with `:mc` (step 3); Sod
+converges at an L1 rate of 0.903 against Toro's exact solution, bit for bit
+along every axis (step 4); on a static two-level mesh every one of the
+`D + 2` integrals holds to 0.003–0.011 ulp of its scale per step and the
+run without the interface fixup leaks `1e8`–`1e9` times more, with the
+interface-order rule holding unamended (step 5); the criterion's thresholds
+are `refine_tol = 0.08` and `coarsen_tol = 0.02`, calibrated on the
+McNally ramp (step 6); the tracked tube matches the uniform fine run's
+error to a ratio of 1.0004 and 1.0000 at fewer cells (step 7); where
+nothing floors, the reset changes nothing, bit for bit (step 8); Sedov's
+exponents are 0.64146 / 0.50443 / 0.43766 against `2/3, 1/2, 2/5`, and
+what fires is the pressure floor at a static coarse-fine face, never the
+atmosphere rule (step 9); the shear layer grows at 2.58036, HLLC at half
+the linear resolution ahead of HLLE at full (step 10); every run is
+bit-identical at one and at four threads (step 13); Metal reproduces the
+host `Float32` run bit for bit and an H200 runs a step at about 11× a
+64-core node (step 14); and `Float32` and `Float32x2` rebuild the
+`Float64` meshes and floor counts exactly (step 12).
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
@@ -316,22 +181,16 @@ defined.
 One suite, run whole, at every thread count; `CODE.md`'s "Testing" has
 the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
-recording a number. About **3 m 44 at one thread and 2 m 38 at four**
-(measured in step 10 on a quiet machine; it was 2 m 43 and
-2 m 09 before the shear layer, which costs roughly a minute at one thread
-and thirty seconds at four — twelve two-dimensional evolutions, four
-of them 2700 steps on 128²-equivalent meshes, and the most parallel work
-any one file holds, which is why the two thread counts diverge as much as
-they do. The blast before it cost 50 s and 30 s). Every figure in this
-paragraph **predates the `@inbounds` pass**, which took 15% off the suite
-(4 m 23.9 against 3 m 44.8, measured back to back at one thread after step
-11), so read them as an ordering rather than as a target. **This machine is
-shared**, and runs taken while something else was on it came back at 4 m 10
-and 3 m 12 — a fifth slower — so a timing is worth comparing only against
-another taken under the same load. Step 11's one extra testset was measured
-that way and not against the number above: **4 m 13.6 before and 4 m 31.9
-after**, back to back at one thread on a machine that was also rendering
-figures, 11610 tests against 11622.
+recording a number. The last recorded timings, after step 12 on this
+machine: **11856 tests in 4 m 26 at one thread and 11890 in 3 m 44 at
+four** — the four-thread count is higher because the ownership check has one
+assertion per block per thread, and about 50 s of either is
+`test/type_tests.jl`, mostly compiling the `Float32x2` paths. **This machine
+is shared**: runs taken while something else was on it have come back a
+fifth slower, so a timing is worth comparing only against another taken
+back to back under the same load (the step-by-step history is in `CODE.md`,
+and the `@inbounds` pass alone moved the suite by 15%, which is why the
+older figures there are an ordering and not a target).
 `Pkg.test` does not inherit `-t`, so the thread
 count has to be passed explicitly:
 
@@ -343,14 +202,21 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
 
+The last file, `test/threading_tests.jl`, spawns a subprocess at the other
+thread count — four if the suite runs at one, one if it runs at more — and
+compares twelve digest lines character for character; about twenty
+seconds. **Do not set `JULIA_EXCLUSIVE=1` for a one-thread suite**: the
+parent pins itself to one CPU and the subprocess inherits the mask
+(TreeGeneralizedHarmonic met this on Symmetry).
+
 And the checked run, which is a *different* claim rather than a slower
 version of the same one: the three RHS kernels carry `@inbounds`, so their
 indices are an assertion, and this is the only thing that falsifies it.
 Because it overrides `@inbounds` package-wide it never runs the code the
 package actually ships — so it does not replace a plain run, which is the
 only one that can catch a wrong answer. Run both before recording a
-number. Measured at one thread: 3 m 44.8 plain, 5 m 19.9 checked, 11622
-tests either way.
+number. After step 12 the checked run took **5 m 56** with the command as
+written, against 4 m 26 plain.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
@@ -367,7 +233,7 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
   julia --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-The same check **under the floor version**, before a step is merged. CI
+The same check **under the floor version**, before a change is merged. CI
 runs Julia 1.11 — the floor of all the Tree* packages since 2026-09-25 —
 as well as the current release, and 1.11 is stricter in at least one way
 that matters
@@ -380,11 +246,11 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
   julia +1.11 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-At 1.11 the suite took **8 m 55 at one thread** against the release's
-4 m 01 (measured before the floor went to 1.10 and back; not re-taken
-since) — so budget for twice the run you have just done. It is also the
-*cheap* one under coverage, which is the opposite way round and is why
-the instrumented cell is the floor cell; see "Things that will bite".
+After step 12 the clean tree took **7 m 32** at 1.11 with the command as
+written, against the release's 4 m 26 — so budget for nearly twice the run
+you have just done. 1.11 is also the *cheap* version under coverage, which
+is the opposite way round and is why the instrumented cell is the floor
+cell; see "Things that will bite".
 
 The viewers, in their own environment so that CairoMakie never becomes a
 dependency of the package. The first call instantiates it; the
@@ -428,34 +294,20 @@ per level, supplies only the figure's dashed overlay curves, and is nothing
 a movie needs.
 
 `--cap=` and `--chunk=` open up the mesh, and **they move together**: the
-buffer's margin is `speed_headroom · λ · chunk` at the cap's spacing, so
-halve the chunk for each level added or the margin widens and more of the
-box is refined. `--cap=5` at the default chunk throws out of
-`refinement_buffer` naming the constraint. A non-default mesh writes its own
-filenames, so a `--cap=3` render cannot overwrite what CI checks. PNGs land in `bin/output/`, which is
-gitignored, and a terminal also gets them inline through SixelTerm — a
-pipe does not, which is what `--no-display` makes explicit in CI. Roughly
+buffer's margin is `speed_headroom · λ · chunk` at the cap's spacing, so halve
+the chunk for each level added or the margin widens and more of the box is
+refined. `--cap=5` at the default chunk throws out of `refinement_buffer`
+naming the constraint. A non-default mesh writes its own filenames, so a
+`--cap=3` render cannot overwrite what CI checks. PNGs land in `bin/output/`,
+which is gitignored, and a terminal also gets them inline through SixelTerm —
+a pipe does not, which is what `--no-display` makes explicit in CI. Roughly
 26 s, 28 s and 53 s per figure, most of the first 20 s of each being
 `using CairoMakie`. The `viewer` job in `CI.yml` runs all four renders on
-every push and uploads them, because `bin/` is outside `src/` and `test/`
-and nothing else would notice it breaking.
+every push and uploads them, because `bin/` is outside `src/` and `test/` and
+nothing else would notice it breaking.
 
 `--backend=metal --type=f32` renders too, and reproduces the host
 `Float32` run exactly — measured in step 11 on this machine.
-
-**The suite since step 12**: 11856 tests in **4 m 26 at one thread** and
-11890 in **3 m 44 at four**, about 50 s of it `test/type_tests.jl`, mostly
-compiling the `Float32x2` paths. Before it, since the move to
-IMEXRungeKutta: 11674 tests in **2 m 58.4
-at one thread** and 11708 in **2 m 35.2 at four** (after step 14, back to
-back, quiet machine); the four-thread count is higher because the
-ownership check has one assertion per block per thread. The last file,
-`test/threading_tests.jl`, spawns a subprocess at the other thread count —
-four if the suite runs at one, one if it runs at more — and compares twelve
-digest lines character for character; about twenty seconds. **Do not set
-`JULIA_EXCLUSIVE=1` for a one-thread suite**: the parent pins itself to one
-CPU and the subprocess inherits the mask (TreeGeneralizedHarmonic met
-this on Symmetry).
 
 The benchmark (step 14), in the **package** environment and not `bin/`'s,
 one run per thread count; `--scan=N:roots,…` runs several meshes in one
@@ -845,9 +697,9 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   passed; 1.11 throws `invalid redefinition of constant`, five minutes into
   otherwise green output. Name a file's shared runs with their case
   (`TRACKED_SEDOV_1D`, `TRACKED_KH`); `runtests.jl` now fails on any
-  duplicate, from the source text, before anything is included; and a step
-  that adds a test file runs once under the floor version before it is
-  merged — the "Commands" section has the line. The floor is 1.11, and
+  duplicate, from the source text, before anything is included; and a
+  change that adds a test file runs once under the floor version before it
+  is merged — the "Commands" section has the line. The floor is 1.11, and
   every Julia before 1.12 checks this.
 - **A count taken as the ceiling of a float quotient gets one more at
   `Float32`** (found in step 12). `evolve!` counted its chunks as
@@ -1082,7 +934,14 @@ Match TreeAMR's, since the three packages are read together:
 - `ArgumentError`s say *why*, not just what.
 - Docstrings are prose-first: what it is, then why, pointing at `CODE.md`.
 - **Testset names are claims**, each opening with a comment naming the
-  failure mode it guards.
+  failure mode it guards. Convergence rates, conservation drifts and mesh
+  statistics are asserted as numbers with tolerances, and **an existing
+  assertion is never loosened to get green** — a failure is reported
+  instead (both carried over from the step plan's ground rules when step 15
+  deleted it).
+- Generic in `T` and in the backend from the first line of any new driver:
+  TreeWave records that retrofitting either was a rewrite, and
+  `test/type_tests.jl` and `test/device_tests.jl` are what would notice.
 - Spec-first: when the implementation shows `CODE.md` was wrong or
   incomplete, amend it and say so in it — "(amended in H3)", "(measured
   in H4)" — rather than diverging silently.
@@ -1091,16 +950,17 @@ Match TreeAMR's, since the three packages are read together:
 
 - **`origin` is `git@github.com:eschnett/TreeHydro.jl.git`, and `main` tracks
   it.** Work on a branch, and do not push, open a pull request, or merge
-  to `main` without being asked. Each step lands on `main` only after
-  review.
+  to `main` without being asked. Every change lands on `main` only after
+  review, as each step did.
 - `TODO.md` is Erik's personal to-do list. **Do not modify it.**
   `TODO.md~` is an editor backup, not a file of this package. Both are
   kept out of the tree by `.gitignore`.
 - `.gitignore` exists, in TreeWave's image: `Manifest.toml` everywhere,
   `bin/output/`, `docs/build/`, editor leftovers, `TODO.md`. No
   `Manifest.toml` is tracked — that is what makes the clean-checkout
-  check above mean something. `CODE.md`, `PLAN.md` and this file are
-  committed.
+  check above mean something. `CODE.md` and this file are committed;
+  `PLAN.md`, the step-by-step work breakdown, was committed too until step
+  15 deleted it with the last milestone done.
 - No generated file is tracked. Everything in the tree is written by hand
   and reviewed as such; `test/references/*.toml`, which step 7b generated
   and step 7c removed, were the one exception and are gone. `bin/output/`

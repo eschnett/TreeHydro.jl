@@ -30,8 +30,10 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: all four cases run and all four are drawn, at any thread count,
-on a GPU and at three float types — milestones H1 through H6 are done.** What exists is
+**Status: complete. All four cases run and all four are drawn, at any
+thread count, on a GPU and at three float types — milestones H0 through H6
+are done, and the design document has been read against the code a last
+time.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the TreeAMR release still
 provides what the scheme is written against, the ideal-gas equation of
@@ -144,7 +146,8 @@ There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the
 convergence sweeps, the interface-order tables, the refinement
 calibration, the tracked shock tube, the blast and its similarity law, the
-shear layer and its growth rate. About four minutes.
+shear layer and its growth rate. About four and a half minutes at one
+thread, and under four at four.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -205,5 +208,6 @@ them, because `bin/` sits outside `src/` and `test/` and nothing else would
 notice it breaking.
 
 See [CODE.md](CODE.md) for the design document — the equations, the
-scheme, the cases, and the measured results as they arrive — and
-[PLAN.md](PLAN.md) for the work breakdown.
+scheme, the cases, every measured result beside the prediction it confirms
+or corrects, and the possible extensions that were measured or considered
+and not built.

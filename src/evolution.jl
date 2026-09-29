@@ -199,8 +199,8 @@ end
 # floor-hit flag as a `1` or a `0`. `block_mapreduce` maps a scalar
 # function over *one* variable's values, so it could form neither from the
 # primitives themselves; with the numbers written down, `λ_max` and the
-# floor count are plain reductions over one slot. See "Sharp edges" in
-# `PLAN.md` and "Field sets" in `CODE.md`.
+# floor count are plain reductions over one slot. See "Field sets" in
+# `CODE.md`.
 @kernel function con2prim_kernel!(prim, @Const(cons), eos, floors,
                                   ::Val{D}) where {D}
     I = @index(Global, NTuple)                     # already a stored index

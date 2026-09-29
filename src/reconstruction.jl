@@ -137,8 +137,9 @@ overshoots. The floors are there for that case, and for a stencil that was
 already unphysical before the reconstruction saw it. What the driver
 counts, per chunk and in two populations, are the hits in *cells*: owned
 cells from the atmosphere reset, ghost cells from the `con2prim` pass.
-Those two are a measurement the design depends on — the ghost count
-decides an open upstream question about the prolongation — and a third
+Those two are a measurement the design depends on — the ghost count is
+what put a number on the upstream question of a positivity-preserving
+prolongation (step 9; see "Possible extensions" in `CODE.md`) — and a third
 count mixing in face states, which are not cells and are recomputed at
 every stage, would only blur it. See "Floors and the atmosphere" in
 `CODE.md`.

@@ -12,25 +12,34 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: milestones H0 (scaffolding), H1 (the scheme on a uniform mesh) and
-H2 (coarse-fine faces on a static mesh) done — the equation of state, the
-two state conversions and the floors (step 1), the reconstruction and the
-three Riemann fluxes (step 2), the six-step right-hand side, the time
-integration and the entropy wave (step 3), the exact Riemann solver, Sod's
-shock tube and the Dirichlet boundary hook (step 4), and the static
-two-level mesh (step 5).* The measured numbers are in
-[Measured results](#measured-results): the scheme's order on smooth data,
-its L1 rate against the exact Riemann solution, the conservation of all
-`D + 2` integrals with the interface fixup and the ten-order leak without
-it, the interface-order table for the system, and the boundary flux that
-replaces the conservation claim where a boundary is physical. Everything
-from the refinement criterion on is still unmeasured.
+*Status: complete — milestones H0 to H6 are done (see
+[Milestones](#milestones)), and step 15 read this document against the code
+once more.* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
+equation of state and floors, the reconstruction, the three Riemann fluxes,
+the six-step right-hand side, the entropy wave, the exact Riemann solver and
+Sod's tube); H2 the coarse-fine faces on a static mesh; H3 the refinement
+criterion and the one evolve-and-regrid driver; H4 the atmosphere reset and
+the Sedov blast; H5 Kelvin–Helmholtz and the viewers; and H6 threads, the
+benchmark and the device, and precision. Every number is in
+[Measured results](#measured-results), beside the prediction it confirms or
+corrects. Every physics number there comes from a test that runs on every
+push; the exceptions are said where they stand — the timings, the benchmark
+and Symmetry tables, the opt-in device runs, and two rows recorded but not
+run in the suite (the ramp's `h = 1/1024` in step 6 and the `D = 2` tube at
+`N = 32` in step 5).
+What was not measured, or was measured and deliberately not built, is under
+[Possible extensions](#possible-extensions); H7, higher-order
+reconstruction, stays optional and is not planned.
 Markers: **(decided)** is a decision taken in review; **(proposed)** is
-one this document makes and still wants confirmed; **(predicted)** is a
-number a milestone will measure and the "Measured results" section will
-then record, as TreeAMR's and TreeWave's `CODE.md` do; **(open)** points
-at [Open questions](#open-questions). Two things this package needs from
-TreeAMR before its first milestone are under
+one this document made and wanted confirmed; **(predicted)** is a
+number a milestone was to measure and the "Measured results" section then
+records, as TreeAMR's and TreeWave's `CODE.md` do; **(open)** pointed
+at [Open questions](#open-questions). *(Amended in step 15: none of the
+three is outstanding. Every **(proposed)** has been confirmed or amended in
+place, every **(predicted)** has its measured number beside it, and no
+question is left open — the markers are kept where they stand, next to what
+settled them, as the record of what was expected.)* Two things this package
+needed from TreeAMR before its first milestone are under
 [Upstream prerequisites](#upstream-prerequisites).
 
 ## Goals
@@ -133,7 +142,9 @@ they go upstream instead of being spelled out here:
 when TreeAMR 0.1.1 was released.)* The `[sources]` entry that used to pin
 `main` is gone: TreeAMR is in the General registry and this package's
 compat bound is `TreeAMR = "0.1.1"`, so what the tests see is a released
-version and a change upstream arrives here only with a release.
+version and a change upstream arrives here only with a release. *(Amended
+in step 15: the bound is `TreeAMR = "0.1.3"`, the release with the
+owner-based threading; see [File layout](#file-layout).)*
 
 ## The equations
 
@@ -259,7 +270,8 @@ longer promises — a sum is reproducible to roundoff only, across thread
 counts, rank counts, backends and machines, because a hierarchical device
 reduction and a plain `Allreduce` both need the association to be theirs.
 Of the two reductions above, `λ_max` is a `max` and the floor count is a
-sum of `1`s and `0`s that `round(Int, …)` closes, an exact integer per block
+sum of `1`s and `0`s that `roundint` closes (`round(Int, …)` until step 12,
+which MultiFloats does not provide), an exact integer per block
 and in total, so neither can move whatever the fold does; the same holds
 for `indicator_scales`, `peak_compression`, the `p = ∞` norms and the ghost
 count. The conserved totals, `conserved_scales`, the injection and the
@@ -274,7 +286,13 @@ with the M7 `Allreduce` inside it later — and `conserved_totals` is that
 call with `weight = key -> spacing(key)^D`. Once it exists the totals go
 through it (the field-set form already does, through `total_mass`, which
 upstream will reroute), which is how they turn global without a
-communicator appearing in this package.
+communicator appearing in this package. *(Amended in step 15: it exists.
+TreeAMR 0.1.3 exports `mesh_mapreduce` in both forms, and its `total_mass`
+is now that call with the cell volume as the weight, so the field-set
+`conserved_totals` goes through it already. The state-vector form of
+`conserved_totals` and `conserved_scales` still multiply and sum their
+per-block partials by hand; moving them is listed under [Possible
+extensions](#possible-extensions).)*
 
 `U` is the **only evolved set**, so the state vector is `statevector(U)`
 and the several-set form TreeAMR has specified is not needed. `G = 2` on
@@ -562,7 +580,9 @@ subcycling — from the finest spacing and the fastest signal:
 
 The `D` is the sum over directions of an unsplit scheme's CFL condition,
 bounded above by `D · λ_max`; slightly conservative, and simpler than a
-per-cell sum. `λ_max` is measured **once per chunk** (proposed), because
+per-cell sum. `λ_max` is measured **once per chunk** (proposed; confirmed
+in steps 4 and 7, beside a headroom factor and a recheck that throws — see
+the amendments below), because
 the integrator owns the steps within a chunk and a step-adaptive `dt`
 would mean a callback fighting a fixed-step `solve`. The driver
 re-measures `λ_max` at the end of the chunk and *throws* if the step it
@@ -799,7 +819,11 @@ consistently, and what each costs:
   plus measured injection, and the negative control compares the two
   runs on the drift *net of* injection. The accounting doubles the
   reductions per stage and is a keyword the tests turn on and the demos
-  do not.
+  do not. *(Amended in step 15, after the move to IMEXRungeKutta: only the
+  step limiter, `reset_atmosphere!`, measures an injection — once per step
+  and after every regrid — and the stage limiter, `reset_stage!`, counts
+  hits and measures nothing, for the reason given in the amendment to
+  option 1 above.)*
 
   **(Measured in step 8, and "exactly" is the word.)** On the tracked
   shock tube under `:stage` and under `:step`, and on the entropy wave
@@ -877,7 +901,8 @@ settled:
   guarantee to everything but floating-point sums), and for this count it
   is not even load-bearing: the flags are `1`s and `0`s, each block's
   partial is an exact integer and the host closes each with
-  `round(Int, …)`, so the total is the same under any association. Both
+  `roundint` (`round(Int, …)` until step 12), so the total is the same
+  under any association. Both
   floor counts stay exact whatever upstream's fold becomes; the
   reductions the narrowing does reach are listed under
   [Multi-threading](#multi-threading).
@@ -976,7 +1001,7 @@ in [Measured results](#step-9--the-sedov-blast).
 | `IdealGas` behind an EOS interface | hybrid or tabulated EOS behind the same |
 | primitive reconstruction, MC or minmod | the same |
 | HLLE from `|v| ± c_s` | HLLE from the fast magnetosonic speeds |
-| HLLC (planned) | HLLC (Mignone & Bodo 2005), HLLD |
+| HLLC (implemented in step 2; the Kelvin–Helmholtz default since step 10) | HLLC (Mignone & Bodo 2005), HLLD |
 | LLF fallback | LLF fallback |
 | MOL, SSPRK33 (IMEXRungeKutta, Butcher form, stages by block owner), unsplit flux divergence, one global `dt` | the same; an IMEX tableau of the same package when stiff sources arrive |
 | empty source-term slot in the divergence kernel | geometric source terms |
@@ -1039,7 +1064,10 @@ six steps above with nothing between them. What the writing settled:
   this document's decision and not the caller's. The layout obligations
   are checked here rather than discovered later: `U` cell-centered with
   `G ≥ 2` everywhere, `P` with `U`'s forest, ghost width and centering and
-  `nvars = D + 4`, the fluxes with `G = 0`.
+  `nvars = D + 4`, the fluxes with `G = 0`. *(Amended in step 15: step 8
+  added a tenth keyword, `accounting`, the host-side `ResetAccounting` the
+  reset accumulates into, defaulting to a fresh record with the injection
+  measurement off; `evolve!` hands one record to every problem it builds.)*
 - **Three kernels, three ranges.** `con2prim_kernel!` runs under
   `stored = true` and its index *is* the stored index; `flux_kernel!` runs
   under `closed = true`, one launch per direction with a constant
@@ -1147,7 +1175,8 @@ Two things this package expects to add to that finding:
   form: without the fixup the residual has net mass and the equation
   carries it downstream as an `O(h)` plateau, which an integral norm does
   see.
-- **The `p = 1` question is a real one here, and open.** Piecewise-constant
+- **The `p = 1` question is a real one here, and open** *(closed in step 9,
+  below — the answer is a trade with a price on it)*. Piecewise-constant
   prolongation is the only linear prolongation that is
   positivity-preserving for every field, and Burgers measured that an
   integral norm never sees the interface defect it leaves. For a limited
@@ -1388,7 +1417,7 @@ each measures something the others cannot.
 |---|---|---|---|---|
 | entropy wave | 1, 2, 3 | periodic | exact | the scheme's order; the interface-order rule for a system; conservation on a static mesh |
 | Sod shock tube | 1, 2, (3) | Dirichlet in `x`, periodic else | exact Riemann solver | shock capturing against a known answer; conservation through regrids; direction independence; the boundary hook |
-| Sedov blast | 1, 2, **3** | Dirichlet (ambient) on every face | similarity law; uniform-fine run | a strong shock through the floors and the atmosphere reset; a refined *shell* that grows while its interior coarsens; the 3D coarse-fine face; the boundary hook on edges and corners |
+| Sedov blast | 1, 2, **3** | Dirichlet (ambient) on every face | similarity law; uniform-fine run | a strong shock through the floors and the atmosphere reset; a refined region that follows a closed expanding surface (a growing *disk*, not the shell this row first said — amended in step 9); the 3D coarse-fine face; the boundary hook on edges and corners |
 | Kelvin–Helmholtz | 2 | periodic | published diagnostics; uniform-fine run | a contact-dominated, vortical flow; refinement following a growing structure; the picture |
 
 **Initial data is given as primitives** — a pure `x -> P` closure per
@@ -1427,7 +1456,11 @@ limiter, and the slope of the error against `h` is 2 or it is not.
 It is also the smooth case for the interface-order table above and for
 the static-mesh conservation control. It is a contact wave, which is
 exactly what HLLE diffuses most; the rate is unaffected, the constant is
-not, and the HLLE/HLLC comparison has its first number here.
+not, and the HLLE/HLLC comparison has its first number here. *(Amended in
+step 15: it never did. Every entropy-wave number in this file is HLLE's; the
+comparison was made on the shear layer in step 10, where it decided
+something, and the entropy wave under HLLC is listed under [Possible
+extensions](#possible-extensions).)*
 
 Not a demo: it lives in the tests and the viewer does not draw it.
 
@@ -1684,7 +1717,11 @@ describing nothing outside it)**.
   faces, under a real shock. The 3D adaptive run is expensive (TreeWave
   measured minutes for a wave-equation shell); the test runs it small and
   short (`N = 8`, few roots, cap 1, a few chunks), and `bin/` runs it at
-  demo size.
+  demo size. *(Amended in step 15: the test runs it at `N = 4`, `roots = 4`,
+  cap 1 over 15 chunks — see [Step 9](#step-9--the-sedov-blast) — and
+  `bin/` does not run it at all. The Sedov viewer of step 11 is `D = 2`
+  only, since a 3D render needs a midplane slice; that render is under
+  [Possible extensions](#possible-extensions).)*
 - **The early phase is where the time step is smallest** — `c_s` inside
   the hot spot scales as `(E₀/V_D(r₀))^{1/2}` — and it is *also* where
   `λ_max` only decreases, so the per-chunk `dt` is a bound. Both facts
@@ -1746,8 +1783,9 @@ where the paragraphs above needed amending:
   with the recalled ones in every digit.
 - **The refined region is a growing *disk*, not a shell** (amended). The
   prediction above — "a refined shell that grows while the interior
-  coarsens", and `PLAN.md`'s "block count rising then falling behind the
-  shock" — assumes the evacuated bubble is flat. It is not: the similarity
+  coarsens", and the step plan's "block count rising then falling behind
+  the shock" (that plan was `PLAN.md`, deleted in step 15) — assumes
+  the evacuated bubble is flat. It is not: the similarity
   solution's `G(λ) ∼ λ^{D/(γ−1)}` is a **steep density ramp**, and a
   Löhner indicator on `ρ` fires throughout it, correctly, because the ramp
   is under-resolved. Measured block history in `D = 2`: 40 → 88 → 112 → …
@@ -2078,9 +2116,9 @@ that **there is exactly one time-stepping loop** (decided):
 
     adapt_to_initial_data!(U, ops; initial, flags, buffer, boundary)
     p = HydroProblem(U, ops; eos, floors, limiter, riemann, fixup)
-    while t < t_end
+    for c in 1:chunk_count(t_end, chunk)         # was `while t < t_end`
         λ  = max_signal_speed(p)                     # block_mapreduce over P
-        dt = cfl · minimum_spacing(forest) / (D · λ)
+        dt = cfl · minimum_spacing(forest) / (D · speed_headroom · λ)
         integ = IRK.init(IMEXProblem(hydro_rhs!, nothing, u, (t, stop), p),
                          IRK.SSPRK33(); dt, stage_limiter = reset_stage!,
                          step_limiter = reset_atmosphere!,   # the reset
@@ -2100,6 +2138,12 @@ that **there is exactly one time-stepping loop** (decided):
             reset_atmosphere!(u, nothing, p, t)       # the reset, per regrid
         end
     end
+
+*(Amended in step 15, to match `evolve!`: the step carries the case's
+`speed_headroom` since step 7, and the loop runs over `chunk_count(t_end,
+chunk)` chunks since step 12, the last one ending on `t_end` exactly — see
+[Step 12 — precision](#step-12--precision). The loop also skips the regrid
+after its last chunk, as the step-7 notes below say.)*
 
 TreeWave has three near-identical loops and records that a fourth would
 be the one to drift; the four cases here differ in their initial data,
@@ -2189,7 +2233,7 @@ What differs is which cases each type can run:
 | type | Sod, Sedov, entropy wave | Kelvin–Helmholtz |
 |---|---|---|
 | `Float64` | everything measured here | everything |
-| `Float32` | same mesh, same floor counts, errors agreeing to ~1% (predicted, TreeWave's pattern) | same mesh and `M(t)` through the linear phase; then divergence by design |
+| `Float32` | same mesh, same floor counts, errors agreeing to ~1% (predicted, TreeWave's pattern; measured in step 12: exact mesh and floors, errors within 1.2e-3) | same mesh and `M(t)` through the linear phase; then divergence by design (measured in step 10) |
 | `Float32x2` | Sod and Sedov run (arithmetic and `sqrt` only; the references are host `Float64`) | does not run: `sin` and `exp` in the initial data, which MultiFloats lacks |
 
 **(Measured in step 12: every cell of the table holds, the error column
@@ -2269,7 +2313,8 @@ theirs. The CPU fold is unchanged for now, so nothing here moves today.
 For this package the line falls as follows. **Exact whatever the fold
 does**: `λ_max`, `indicator_scales`, `peak_compression` and every `p = ∞`
 norm, all of them a `max`; the two floor counts, which sum `1`s and `0`s
-into an exact integer per block and close with `round(Int, …)` — no
+into an exact integer per block and close with `roundint` (`round(Int, …)`
+until step 12) — no
 association changes an integer-valued sum while it fits the mantissa,
 `2^24` at `Float32`, which no mesh here approaches — and of which the
 ghost count is this package's own kernel and host loop besides; and every
@@ -2295,7 +2340,11 @@ per-block values scaled by `weight(key)` and combined over the local
 blocks, with the M7 `Allreduce` inside it and nowhere else — and
 `conserved_totals` is that call with `weight = key -> spacing(key)^D`.
 Once it exists the totals go through it, which is how they turn global
-without a communicator ever appearing in this package.
+without a communicator ever appearing in this package. *(Amended in step
+15: `mesh_mapreduce` is in TreeAMR 0.1.3 and the field-set totals reach it
+through `total_mass`; the state-vector totals and `conserved_scales` do not
+yet — see [Field sets](#field-sets) and [Possible
+extensions](#possible-extensions).)*
 
 ## Running on a device
 
@@ -2314,7 +2363,8 @@ the host bit for bit on the CPU backend of a second run — is TreeAMR's
 Burgers claim, which this package should reproduce for the system at
 `Float32` when a device is present.
 
-**(predicted)** The per-cell arithmetic of a hydro RHS — a `con2prim`,
+**(predicted; measured in step 14, in the next paragraph)** The per-cell
+arithmetic of a hydro RHS — a `con2prim`,
 two reconstructions and a Riemann solve per face — is an order of
 magnitude more work per byte than the wave equation's Laplacian, so on
 unified memory (Apple silicon) the RHS should show a device speedup where
@@ -2364,8 +2414,13 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `bin/symmetry_cpu.sh`, `bin/symmetry_gpu.sh` | the Symmetry jobs: the block-size and thread scans on one 64-core AMD node, and the scan and the device tests on one H200 |
 
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions` and
-`IMEXRungeKutta`; tests add `MultiFloats`; `bin/` adds `CairoMakie` and
-`SixelTerm` in its own environment. TreeAMR is resolved from the General
+`IMEXRungeKutta`; tests add `MultiFloats` (and the standard library's
+`Random`); `bin/` adds `CairoMakie` and
+`SixelTerm` in its own environment. *(Amended in step 15: the compat bounds
+are `TreeAMR = "0.1.3"`, `KernelAbstractions = "0.9.42, 1"`,
+`IMEXRungeKutta = "1.3"` — the first release that runs `Float32x2`, see
+[Step 12](#step-12--precision) — and `julia = "1.11"`.)*
+TreeAMR is resolved from the General
 registry at `TreeAMR = "0.1.3"`, the release with the owner-based
 threading. IMEXRungeKutta is not registered and is located by a
 `[sources]` entry pinning its `main` — the one pin left in the package
@@ -2401,8 +2456,12 @@ follow TreeAMR's `CLAUDE.md`, since the three packages are read together.
 ## Testing
 
 *(Added in step 7b, rewritten in step 7c.)* **There is one suite and it
-runs whole.** Every claim in "Measured results" comes from a test that
-runs on every push, at one thread and at four, over the Julia × OS matrix
+runs whole.** Every physics claim in "Measured results" comes from a test
+that runs on every push *(qualified in step 15: the timings, the benchmark
+and Symmetry tables, the opt-in device runs, and two results recorded but
+not run in the suite — the ramp at `h = 1/1024` in step 6 and the `D = 2`
+tube at `N = 32` in step 5 — are the exceptions, each said where it
+stands)*, at one thread and at four, over the Julia × OS matrix
 of `.github/workflows/CI.yml`: the convergence sweeps and their rates, the
 interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
@@ -2414,7 +2473,13 @@ layer added roughly a minute at one thread and thirty seconds at four to
 step 9's 2 m 43 and 2 m 09, and the blast had
 added 50 s and 30 s to step 8's 1 m 50 and 1 m 42 — and a CI
 entry takes a few times that, a shared runner being slower and the rest of
-it precompilation. `CI.yml`'s `timeout-minutes: 30` is the guard against a
+it precompilation. *(Amended in step 15, with the last numbers recorded:
+after step 12 the suite is **11856 tests in 4 m 26 at one thread and 11890
+in 3 m 44 at four**, the four-thread count higher by the ownership check's
+one assertion per block per thread; the `@inbounds` pass had taken 15% off
+in between and the precision file put about 50 s back, most of it compiling
+the `Float32x2` paths. See [Step 12](#step-12--precision).)*
+`CI.yml`'s `timeout-minutes: 30` is the guard against a
 runtime regression and has room, though less of it than before: the
 one-thread entry is the one to watch, the Kelvin–Helmholtz file being the
 most parallel work any one file holds and therefore the one that gains
@@ -2554,7 +2619,10 @@ back-to-back scatter. So `coverage: true` stays on the floor cell, and it
 stays there for a measurement taken on the version that now carries it
 rather than for an inherited one. The 1.11 column is left above as the
 record of what was measured then; it was not re-taken, because no cell
-runs 1.11 any more. And the 1.13 instrumented entry reading **12 m 38**
+runs 1.11 any more. *(Amended in step 15: the floor cell runs 1.11 again
+since 2026-09-25, and the 1.11 column is once more the one that applies —
+see [The 1.11 floor again](#the-111-floor-again-2026-09-25).)*
+And the 1.13 instrumented entry reading **12 m 38**
 both times is a coincidence and not a number carried over: the
 uninstrumented one moved from 4 m 01 to 3 m 32 over the same interval,
 which is about what the `@inbounds` pass took off everything else.
@@ -2663,7 +2731,9 @@ are made against bounds instead, which is why they survive the move.
 
 ## Milestones
 
-Each has an acceptance test; serial `Float64` correctness first.
+Each has an acceptance test; serial `Float64` correctness first. *(Step 15:
+H0 to H6 are all done, each on its acceptance or on an amendment to it
+recorded in its own entry; H7 is optional and not planned.)*
 
 - **H0 — Scaffolding and prerequisites.** *(Done.)* The two TreeAMR
   prerequisites landed on TreeAMR's `main`; `Project.toml` with the
@@ -2706,7 +2776,11 @@ Each has an acceptance test; serial `Float64` correctness first.
     `julia = "1.10"`.)*
     `OrdinaryDiffEqSSPRK` and `SciMLBase` are dependencies from H0 and
     unused until H1c, so that the floor is fixed before anything relies
-    on it.
+    on it. *(Amended in step 15, for the finished package: neither is a
+    dependency any more. The deps are `TreeAMR = "0.1.3"`,
+    `KernelAbstractions = "0.9.42, 1"` and `IMEXRungeKutta = "1.3"`, the
+    last through a `[sources]` entry, and the floor is `julia = "1.11"`
+    again; see [File layout](#file-layout).)*
 - **H1 — The scheme on a uniform mesh.** *(Done.)* EOS, `con2prim`, MUSCL
   with the three limiters, LLF, HLLE and HLLC, SSPRK33, the six-step RHS
   with `D` flux sets, the exact Riemann solver and the Dirichlet boundary
@@ -2997,13 +3071,21 @@ Each has an acceptance test; serial `Float64` correctness first.
   1% by a factor of eight or more; see [Step 12 —
   precision](#step-12--precision).
 - **H7 — Higher-order reconstruction** *(optional)*. PPM or WENO-Z at
-  `G = 3`, and the interface-order rule re-measured against it.
+  `G = 3`, and the interface-order rule re-measured against it. *(Not
+  planned, and not started: the package is complete at H6. Step 10's
+  comparison with the paper's curves is the one measurement that points at
+  it — at 128² this second-order scheme reaches about half the published
+  `M(1.5)`, where the codes on the reference are piecewise-parabolic or
+  sixth-order.)*
 
 ## Measured results
 
 This section takes the numbers as the milestones produce them, each beside
 the prediction it confirms or corrects. Everything here is `Float64` on the
 CPU backend, and every number is identical at one and at four threads.
+*(Amended in step 15: except where a section says otherwise — the `Float32`
+rows of steps 8, 10 and 12, the device tables and Symmetry scans of step
+14, and the timings, which are wall clock on the machine named.)*
 
 ### Step 3 — the entropy wave on the uniform mesh
 
@@ -3026,7 +3108,8 @@ falling as `N` grows (1.49, 1.25, 1.36 between consecutive `D = 1` pairs;
 1.55 then 1.15 in `D = 2`). This is the TVD limiter clipping the sine's
 two smooth extrema, where it is first order by construction, so L∞ tends
 to 1 while the shrinking width of the clipped region leaves L1 at 2. The
-plan predicted "≥ 1.5 with `:mc`"; that prediction was wrong in L∞ and the
+step plan (deleted in step 15) predicted "≥ 1.5 with `:mc`"; that
+prediction was wrong in L∞ and the
 tests assert 1.2, with the measured value recorded here rather than the
 threshold moved to meet it. It is also the reason the convergence study is
 run with `:none`: under a limiter the study measures the limiter.
@@ -3095,6 +3178,9 @@ monotonically. L∞ is recorded and nothing is asserted on it: on a solution
 with a shock in it, L∞ is the error in the one cell nearest the
 discontinuity and does not even decrease with `h`. Under `:mc` the same
 sweep gives 0.945, which is the number to beat when HLLC is measured.
+*(Amended in step 15: HLLC was measured on the shear layer and never on
+Sod, so this number has nothing beside it; the sweep under HLLC is under
+[Possible extensions](#possible-extensions).)*
 
 **The signal speed, and why the driver will need headroom.**
 
@@ -4098,7 +4184,9 @@ render. That exercises `withbackend`'s `invokelatest`, and it exercises
 `hostcopy` doing the thing it exists for rather than the CPU short-circuit
 it usually takes. It is **not** the device milestone: H6c still owes the
 per-phase table, the opt-in device tests and the benchmark, and nothing
-here was measured for speed. It is one case, at one precision, saying the
+here was measured for speed. *(All three delivered in step 14; see [Step 14
+— the benchmark and the device](#step-14--the-benchmark-and-the-device).)*
+It is one case, at one precision, saying the
 plumbing is connected.
 
 ### A movie (added after step 11)
@@ -4240,7 +4328,9 @@ its cache is cold, and leaves it at a tenth of its 30-minute guard.
 *report* whose consumer reads only `main`, while this is a *check*, and a
 pull request is exactly where a broken viewer should surface. `bin/` sits
 outside `src/` and `test/` with its own environment and its own copy of the
-TreeAMR pin, so nothing else in CI would notice it breaking — which is how
+TreeAMR pin (since TreeAMR's release, its own `Manifest.toml` and compat
+bound — amended in step 15),
+so nothing else in CI would notice it breaking — which is how
 TreeWave's `bin/` went on building against a TreeAMR older than its own
 tests until it failed on the removed `cell_center`. The four renders run as
 four separate processes rather than one, because both scripts define
@@ -4366,8 +4456,8 @@ dependency bump. Three things move with it.
   a TreeAMR change was visible here as soon as it was *pushed*. It is now
   visible only once it is tagged and registered. The old note — "an
   unpushed TreeAMR change is invisible here" — understates the new
-  situation rather than merely restating it, and `CLAUDE.md` and
-  `PLAN.md` say so.
+  situation rather than merely restating it, and `CLAUDE.md` and the
+  step plan (`PLAN.md`, deleted in step 15) said so.
 - **The Julia floor fell from 1.11 to 1.10.** `[sources]` is a 1.11
   feature and was the *only* reason the floor was 1.11; TreeAMR's own
   floor is 1.10, and that is now this package's. The suite is green there
@@ -4906,6 +4996,31 @@ Not planned, listed because they are the obvious next questions:
   that vectorized across `i` on the CPU would be worth another 2× on the
   divergence (0.69 ms against 1.38), which is `map_blocks!`'s contract to
   change or not.
+- **The remaining totals through `mesh_mapreduce`** (added in step 15).
+  TreeAMR 0.1.3 has the global scalar form this document asked for under
+  [Field sets](#field-sets) and [Multi-threading](#multi-threading), and the
+  field-set `conserved_totals` already reaches it through `total_mass`; the
+  state-vector `conserved_totals(U, u)` — the reset's injection — and
+  `conserved_scales` still scale and sum their per-block partials by hand.
+  Moving them is what makes them global under M7 without a communicator
+  here. What would check it: the thread digests, and the injection staying
+  *exactly* zero on every case that floors nowhere.
+- **HLLC on the entropy wave and on Sod** (added in step 15). Both were
+  named as the place HLLC would first be measured — "the HLLE/HLLC
+  comparison has its first number here" and Sod's `:mc` rate of 0.945 as
+  "the number to beat" — and neither was run: the comparison was made where
+  it decides something, on the shear layer, and there it is not close.
+  Every entropy-wave and Sod number in this file is HLLE's.
+- **A 3D Sedov render in `bin/`** (added in step 15). The design said
+  "`bin/` runs it at demo size"; the viewer of step 11 is `D = 2` only,
+  because a 3D render needs a midplane slice, and nothing asked for one.
+- **Two observations recorded and not investigated** (collected in step
+  15, each with its section): which kernel keeps `Float32` on the H200 at
+  1.3–1.45× of `Float64` rather than the 2× that halving every byte would
+  give (step 14, "Symmetry: one H200"); and why `--check-bounds=yes` cost
+  nothing at Julia 1.10 where it costs 1.4× at the release ("TreeAMR's
+  release and the 1.10 floor"). Neither moves a claim, and each rests on
+  one job or one draw.
 - Reflecting boundaries, once the region-form hook has a device form
   upstream; the 2D Sedov in a quadrant is the case that would want them.
 - The isentropic vortex, a second exact smooth solution in 2D that is
@@ -4933,11 +5048,18 @@ uniform reference, the full profile an extension; and the `[sources]`
 pin to TreeAMR's `main` (`m8` having been merged) — which TreeAMR's 0.1.1
 release has since replaced with an ordinary registry dependency.
 
-Still proposed:
+Still proposed *(amended in step 15: neither is, any more)*:
 
 1. **Whether the entropy wave is a case** or only a test fixture; it is
    written above as a case so that the interface-order table has a
-   driver, and it does not appear in `bin/`.
+   driver, and it does not appear in `bin/`. **(Settled in step 7: it is
+   a case.)** `HydroCase(::EntropyWave)` runs it through `evolve!` on the
+   periodic, hook-free path, and it is the case against which the driver's
+   chunking and point-sampled initial data were measured
+   (L1 ratios 0.9424 and 0.9945 against the study, see
+   [Step 7](#step-7--the-driver-and-the-tracked-shock-tube)). It is still
+   not drawn in `bin/`, which is a statement about pictures and not about
+   what it is.
 2. **The reset cadence**, `:stage` against `:step`, is a measurement and
    not a question; it is listed so that it is not mistaken for a
    decision already made. **(Measured in step 9.)** On the blast the two
@@ -4949,6 +5071,11 @@ Still proposed:
    cannot show: a stage vector that the *next* stage's right-hand side
    never sees in an unphysical state, which is a star-in-a-vacuum
    property. See [Floors and the atmosphere](#floors-and-the-atmosphere).
+   *(Amended in step 15, recording what the move to IMEXRungeKutta after
+   step 11 changed: the injection is now an equality under both cadences,
+   since the stage limiter's correction no
+   longer reaches a total, and `:stage` resets 4136 cells on the static
+   `D = 2` blast against `:step`'s 1384.)*
 
 Smaller defaults marked (proposed) in the text — the variable order,
 point samples rather than cell averages for discontinuous initial data,
@@ -4959,3 +5086,9 @@ generalized in step 7, where a case states its data pointwise because the
 adaptation cycle changes `h` under it), and `λ_max` once per chunk in
 steps 4 and 7 — confirmed, but only beside a `speed_headroom` factor and
 a recheck that throws.
+
+**Nothing is open** (step 15). The one question this package was expected
+to take upstream — a limited, positivity-preserving prolongation — was
+measured in step 9 and not made, with its price recorded; it, and every
+other thing measured and not built, is under [Possible
+extensions](#possible-extensions).

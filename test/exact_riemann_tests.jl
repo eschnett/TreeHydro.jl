@@ -88,8 +88,8 @@ end
     @test sol.shock_R
     @test sol.head_L < sol.tail_L < sol.u★ < sol.tail_R
     @test sol.tail_R == sol.head_R          # a shock has one speed
-    # The five speeds, for the record, and the numbers the arrival check
-    # and the figures of step 11 will use.
+    # The five speeds, for the record: the arrival check uses them, and
+    # `bin/visualize1d.jl` draws the exact solution they bound.
     @info "Sod: fan head $(sol.head_L), fan tail $(sol.tail_L), contact " *
           "$(sol.u★), shock $(sol.head_R)"
 end

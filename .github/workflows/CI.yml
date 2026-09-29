@@ -123,8 +123,8 @@ jobs:
         with:
           version: "1"
       # The default cache key carries the job name, so this environment --
-      # which is CairoMakie and a second TreeAMR checkout, and the test
-      # matrix's is neither -- gets its own entry without being told to.
+      # which is CairoMakie and this package by path, and the test matrix's
+      # is neither -- gets its own entry without being told to.
       - uses: julia-actions/cache@v3
       - name: Instantiate the viewer environment
         run: julia --project=bin -e 'using Pkg; Pkg.instantiate()'
