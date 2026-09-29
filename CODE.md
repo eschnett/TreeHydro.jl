@@ -106,7 +106,14 @@ needed from TreeAMR before its first milestone are under
   prolongation of hydro data — is recorded as an upstream question
   rather than built here (see [Operator order](#operator-order)).
 - **Not a production code.** No checkpointing, no HDF5, no unit system.
-  Output is what the viewer in `bin/` needs.
+  Output is what the viewer in `bin/` needs. *(Amended 2026-09-29:
+  checkpointing through TreeAMR 0.1.4's M9a. `evolve!` writes checkpoints
+  and restarts from them, through TreeAMR's `save_checkpoint` and
+  `load_checkpoint`, so that the long device runs TreeAMR's M9a names can
+  outlast a queue's day; HDF5 is TreeAMR's weak dependency and the caller's
+  `using`, not a dependency of this package. It is still not a production
+  code in the other two senses — no unit system, and output only for the
+  viewers. See [Checkpoint and restart](#checkpoint-and-restart).)*
 - **Dirichlet physical boundaries only.** They are what the
   device-capable `CellBoundary` hook can express, and — set to the
   initial state — they are exact for a shock tube or a blast wave until a
@@ -2223,6 +2230,127 @@ the implementation settled:
   is the fine reference's *error*, which it matches to four decimal places,
   and the cell count is the price of that match.
 
+## Checkpoint and restart
+
+*(Added 2026-09-29, on TreeAMR 0.1.4, whose M9a adds `save_checkpoint` and
+`load_checkpoint` through a package extension on HDF5. The plan was decided
+with Erik the same day, keyword names included; what the implementation
+settled is marked.)* A run of this package on an H200 at ten or twenty
+levels outlasts a queue's day, and TreeAMR's M9a names it as one of its
+reasons. **Everything about the file is upstream**: the forest, the field-set
+layout, the atomic and durable write, element types as limbs, the
+provenance and the refusals of a file a version cannot read. That is the
+"no mesh machinery" rule applied to I/O, and it leaves four things to
+`src/checkpoint.jl`: when to write, the run state, the refusal of a restart
+with other parameters, and the files' names and rotation.
+
+**HDF5 is the caller's to load** (decided). TreeAMR's checkpoint functions
+have methods only once `using HDF5` has loaded its extension, and this
+package calls nothing but those exported functions with the plain-data
+`data =` form — never the do-block, never an HDF5 type — so it needs HDF5
+neither in `[deps]` nor as a weak dependency of its own. `test/Project.toml`
+has it; `bin/` does not checkpoint. `evolve!` checks
+`Base.get_extension(TreeAMR, :TreeAMRHDF5Ext)` **before the initial-data
+cycle**, with every other checkpoint keyword, so a job script that forgot
+`using HDF5`, or names a directory that does not exist, fails in a second
+and not at the first write hours in.
+
+**Where: at a chunk boundary, after the regrid and its reset, and nowhere
+else** (decided, as TreeAMR's M9a prescribes for a chunked driver). There
+the fixed-step integrator holds nothing but `(t, u)`: its scratch holds
+nothing from one step to the next, the step is recomputed from the forest
+and the state, and so a restart that restores `u` and the forest begins the
+next chunk with exactly what the uninterrupted run began it with. Before the
+regrid, a restart would have to replay the regrid and the post-regrid reset
+of [Floors and the atmosphere](#floors-and-the-atmosphere); mid-chunk, the
+integrator's stages would have to be saved. The last chunk has no regrid and
+is not a restart point, so it writes nothing.
+
+**What is saved.** The forest and the conserved state `U` with its state
+vector `u`, through TreeAMR, and this package's own plain data `(; recipe,
+run)` in its group `TreeHydro.jl`, format version 1. **Only `U`**: the
+primitive set and the fluxes are scratch, and `update_primitives!` rebuilds
+`P` — ghosts of `U` included, which the file does not hold — at the start of
+every chunk anyway. `u` and not `U.work`, because the post-regrid reset acts
+on `u`. The **run state** is the accumulators behind `evolve!`'s return
+value — the chunk and its end time, the step, regrid and pass counts, the
+three floor counts and the injection, `λ_initial`, the tracking minimum, the
+drift, the scales, the initial totals, and the four histories — so that a
+restarted run's *answer* is the uninterrupted one's and not only its state.
+
+**Reals are stored exactly** (settled in the implementation). The
+accumulators are in `R = float(real(T))`, which is `Float32x2` in
+`test/type_tests.jl`, and TreeAMR's plain data refuse a MultiFloat scalar.
+So `plain_reals` stores a native float as itself and any other `isbits`
+real made of one native float throughout, with no padding, as the matrix of
+its limbs `(nlimbs, n)` — the rule TreeAMR applies to a field set's element
+type, restated because that function is internal to its extension — and a
+scalar as a one-element vector.
+
+**The recipe, and the one thing a restart may change** (decided). A restart
+is called with the same case and keywords as the run it continues, and
+**only `t_end` may change** — beyond the checkpoint's time, or it is refused.
+The recipe is every parameter that decides a number: the working type by
+name, `D`, `N`, `G`, the roots, the periodicity and the extents, the
+equation of state and the floors field by field, the speed headroom,
+`chunk` and `cfl`, `limiter`, `riemann`, `fixup`, `reset` and `accounting`,
+`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g` and `buffer`, and the
+operators. Every real goes through `T` and then `plain_reals`, so `2//25`
+and `0.08` are the same run at `Float64`, as they are. A restart whose
+recipe differs is refused with **one** `ArgumentError` naming every field
+that differs and both values. What the recipe cannot hold is the case's
+closures — its initial data, boundary hook and reference — and those are
+trusted. `backend`, `maxpasses` and the observer are not in it: they decide
+no number of a run past its initial-data cycle, so nothing in the recipe
+keeps a checkpoint written on the host from being continued on a device —
+which TreeAMR's load allows, and which this suite does not test.
+
+**Names and rotation** (decided). The files are
+`"<prefix>.it<iteration>.h5"`, the iteration being the cumulative step
+count since `t = 0`, zero-padded to ten digits — monotonic across restarts,
+what a directory listing should say, and the Cactus convention. After a
+write has succeeded, every file of the prefix but the one just written and
+the newest `num_checkpoints_keep − 1` others is deleted, **including files
+an earlier job left behind**, which is the point in a job chain; the pattern
+is anchored, so neither TreeAMR's `.h5.partial` nor another prefix's files
+ever match. The file just written survives even when it is not the newest
+(settled in the implementation: a run restarted from an older checkpoint
+while newer ones exist), since it is the only one the running job can vouch
+for. `latest_checkpoint(prefix)`, the one export, makes a job chain one
+command for every job, the first included:
+
+    r = evolve!(case; …, checkpoint_path_prefix = prefix,
+                max_walltime_seconds = 23.5 * 3600,
+                restart_file = latest_checkpoint(prefix))
+
+**Three triggers** (decided): every `checkpoint_every_chunks` chunks; when
+`checkpoint_interval_seconds` of wall-clock time have passed since the last
+write or the call (`0` writes at every boundary — settled in the
+implementation, the plan having said "positive"); and before
+`max_walltime_seconds`, timed from the call, runs out. The last is an
+estimate: at each boundary the run stops, having written, if the elapsed
+time plus the **longest chunk seen so far**, regrid included, plus the
+**longest write so far** would pass the limit. Startup and compilation
+happen before the call and are not counted, so the caller leaves a margin
+below the queue's limit. Timing decides only *when* a file is written,
+never what is in it, which is why the bit-identity claims do not depend on
+the machine's load. A stopped run returns `finished = false`, the
+checkpointed state — after the regrid, `U` scattered and its ghosts filled —
+and `l1 = linf = nothing`, there being no answer at `t_end`.
+
+**The observer is not checkpointed** (decided). A restart does not call it
+at `t = 0`, since the run is not there, and whatever an observer
+accumulates is the caller's: a restarted run hands it the chunks it runs and
+no others. `kh_run`, whose McNally diagnostics *are* an observer's records,
+forwards no `evolve!` keyword and so cannot be restarted by accident.
+
+**What it amounts to** (measured; see [Checkpoint and restart,
+measured](#checkpoint-and-restart-measured)). A chain of restarts, one
+chunk per job, is the uninterrupted run **bit for bit** in every field
+`evolve!` returns — on the tracked tube at `Float64` and `Float32x2`, on a
+floored two-dimensional blast, across a change of `t_end`, and in a
+subprocess at another thread count.
+
 ## Precision
 
 Inherited from TreeWave wholesale: every driver takes `T` as a leading
@@ -2423,11 +2551,12 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
+| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeAMR's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12) |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29) |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
@@ -2438,7 +2567,12 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions` and
 `IMEXRungeKutta`; tests add `MultiFloats` (and the standard library's
 `Random`); `bin/` adds `CairoMakie` and
-`SixelTerm` in its own environment. *(Amended in step 15: the compat bounds
+`SixelTerm` in its own environment. *(Amended 2026-09-29: the TreeAMR bound
+is `0.1.4`, the release with checkpoint and restart, and the tests add
+`HDF5 = "0.17"`, which loads TreeAMR's extension; the package itself does not
+depend on HDF5 — see [Checkpoint and restart](#checkpoint-and-restart).
+`bin/Project.toml`'s `0.1.3` admits 0.1.4 and was left alone, since nothing
+in `bin/` checkpoints.)* *(Amended in step 15: the compat bounds
 are `TreeAMR = "0.1.3"`, `KernelAbstractions = "0.9.42, 1"`,
 `IMEXRungeKutta = "1.3"` — the first release that runs `Float32x2`, see
 [Step 12](#step-12--precision) — and `julia = "1.11"`.)*
@@ -2500,7 +2634,15 @@ after step 12 the suite is **11856 tests in 4 m 26 at one thread and 11890
 in 3 m 44 at four**, the four-thread count higher by the ownership check's
 one assertion per block per thread; the `@inbounds` pass had taken 15% off
 in between and the precision file put about 50 s back, most of it compiling
-the `Float32x2` paths. See [Step 12](#step-12--precision).)*
+the `Float32x2` paths. See [Step 12](#step-12--precision).)* *(Amended
+2026-09-29, with checkpoint and restart: **12030 tests in 4 m 28 at one
+thread and 12064 in 3 m 47 at four**, `test/checkpoint_tests.jl` added
+after `type_tests.jl` — restart chains compared with the uninterrupted run
+field by field, the rotation, the refusals, and a restart in a subprocess at
+the other thread count through the standalone `test/restart_workload.jl`.
+It is the first file to load HDF5, and it tests the refusal of a checkpoint
+without HDF5 before it does, which is why it must stay the first. See
+[Checkpoint and restart, measured](#checkpoint-and-restart-measured).)*
 `CI.yml`'s `timeout-minutes: 30` is the guard against a
 runtime regression and has room, though less of it than before: the
 one-thread entry is the one to watch, the Kelvin–Helmholtz file being the
@@ -4969,6 +5111,73 @@ nothing needs a hardware float at all.
 four**, against 3 m 36 and 2 m 57 just before the step on the same machine.
 Most of the 50 s is compiling the `Float32x2` paths, which no other file
 exercises.
+
+### Checkpoint and restart, measured
+
+*(Added 2026-09-29, with [Checkpoint and restart](#checkpoint-and-restart),
+on TreeAMR 0.1.4 and HDF5.jl 0.17.4.)* The claims are all equalities, and
+`test/checkpoint_tests.jl` makes every one of them on every push:
+
+- **A chain of restarts is the uninterrupted run, bit for bit.** The
+  tracked tube of step 7, shortened to ten chunks and run as ten one-chunk
+  jobs (`max_walltime_seconds = 1e-9`, each restarting from
+  `latest_checkpoint`), returns the uninterrupted run's state vector, leaf
+  list, drift, scales, totals, floor counts, injection, step, chunk, regrid
+  and pass counts, tracking, `λ` histories, block and buffer histories and
+  L1 and L∞ errors, compared with `isequal` field by field, across a regrid
+  that changed the mesh. The observer's calls over the chain, concatenated,
+  are the uninterrupted run's — one call at `t = 0`, then one per chunk.
+- **At `Float32x2`**, the same chain over four chunks, with the run state's
+  reals stored as `(2, n)` matrices of `Float32` limbs.
+- **In `D = 2` with the floors firing**: a tracked Sedov blast at
+  `maxlevel_cap = 2` with `buffer = 0`, so that the shock reaches its
+  coarse-fine faces — 328 owned resets, 152 ghost entries and a nonzero
+  energy injection by `t = 1/50` — run as eight one-chunk jobs.
+- **At another thread count**: that blast, checkpointed at chunk 4 of 8 at
+  the suite's thread count and continued in a subprocess at the other, prints
+  the uninterrupted run's digest character for character. Writing the
+  checkpoint changes nothing about the run that writes it.
+- **With a larger `t_end`**: the tube run to `1/50`, continued from its last
+  checkpoint (chunk 3) to `1/20`, is the run to `1/20`. A restart spelled
+  `refine_tol = 0.08, chunk = 0.005` continues one written with `2//25` and
+  `1//200`, the two being the same `Float64`s.
+
+**The cost, on one run** (measured 2026-09-29, one thread, the development
+machine, shared; not in the suite). The configuration is `README.md`'s
+job-chain example: a Sedov blast in `D = 3`, `r₀ = 1/8`, `N = 8`, four roots
+per dimension, `maxlevel_cap = 2`, `chunk = 1/600` to `t_end = 1/20` — 30
+chunks, 1005 steps, 960 blocks growing to 2136, in 595 s. The checkpoint at
+chunk 29 holds 2136 blocks of `8³` cells in five `Float64` variables, a
+state of 43.7 MB; the file is **43.83 MB**, the forest, the provenance and
+the plain data adding 0.2%. Best of five after one that compiles, through
+`save_run` and `load_run`:
+
+| filter | file | ratio | save, `sync = false` | save, `sync = true` | load |
+|---|---|---|---|---|---|
+| none | 43.83 MB | 1.00 | 8.8 ms (4.96 GB/s) | 17.3 ms (2.53 GB/s) | 57.2 ms (0.77 GB/s) |
+| `Shuffle` + H5Zzstd `ZstdFilter(1)` | 27.65 MB | 1.58 | 177.5 ms (0.25 GB/s) | 191.3 ms (0.23 GB/s) | 104.5 ms (0.42 GB/s) |
+
+H5Zzstd was added to a scratch environment for this, not to the package's
+or the tests'. **A checkpoint is free at this size**: the durable write is
+17 ms against a chunk of about 20 s, under a tenth of a percent even if one
+were written every chunk, and the load, which includes building the forest,
+the field set and the state vector, is 57 ms. The compression ratio is
+**1.58**, not the 6× TreeAMR measured on its atmosphere-dominated blast: at
+`t = 29/600` this blast has swept much of the box, and at cap 2 the
+refined region is most of what is stored, so there is less uniform ambient
+to compress — and the filter costs twenty times the save. So TreeAMR's
+recommendation stands here too: **no filter**, unless the disk is what is
+short. A restart from the filtered copy continued to `t_end` exactly as one
+from the unfiltered file.
+
+**The suite** after this change, back to back on the development machine
+under an unknown share of other load: **12030 tests in 4 m 28 at one thread
+and 12064 in 3 m 47 at four**, **6 m 12** with `--check-bounds=yes`, and
+**7 m 27** for the clean tree at Julia 1.11 (TreeAMR 0.1.4 and HDF5 0.17.4
+resolved from the registry). That is within the machine's scatter of step
+12's 4 m 26 and 3 m 44, so the new file's cost inside the suite is not
+separated from it; run alone in a fresh process, compilation of the tube and
+the blast included, the file takes 51 s, 14 s of it the subprocess.
 
 ## Possible extensions
 

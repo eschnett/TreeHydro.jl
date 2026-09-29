@@ -11,7 +11,8 @@ TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
 # IMEXRungeKutta is not in the General registry, so a clean clone finds it
 # here (1.3 is the first to run `Float32x2`, which step 12 tests);
 # TreeAMR is (0.1.3 carries the owner-based threading this package
-# is written against) and needs no entry. `[sources]` is a 1.11 feature,
+# is written against, 0.1.4 the checkpoint and restart `evolve!` uses) and
+# needs no entry. `[sources]` is a 1.11 feature,
 # which the Julia floor below already is.
 [sources]
 IMEXRungeKutta = {rev = "main", url = "https://github.com/eschnett/IMEXRungeKutta.jl"}
@@ -19,5 +20,5 @@ IMEXRungeKutta = {rev = "main", url = "https://github.com/eschnett/IMEXRungeKutt
 [compat]
 IMEXRungeKutta = "1.3"
 KernelAbstractions = "0.9.42, 1"
-TreeAMR = "0.1.3"
+TreeAMR = "0.1.4"
 julia = "1.11"
