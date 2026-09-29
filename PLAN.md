@@ -7,7 +7,7 @@ changes, what it must not change, and what it must measure and record.
 `CLAUDE.md` has the mechanics and the traps. Delete this file when the
 last milestone is marked *(Done.)* in `CODE.md`.
 
-**Steps 0–11, 7b, 7c, 13 and 14 are done; step 12 is next.**
+**Steps 0–14, 7b and 7c are done; step 15, the review pass, is next.**
 
 The steps map onto `CODE.md`'s milestones H0–H6, split so that every step
 ends in a green test suite and a `CODE.md` update, and so that each is a
@@ -504,6 +504,17 @@ Accept: the type table in `CODE.md` measured — Sod and Sedov at
 `Float32` reaching the same mesh and floor counts, errors agreeing to
 ~1%; Sod and Sedov at `Float32x2`; Kelvin–Helmholtz at `Float32`
 agreeing on the mesh and `M(t)` through the linear phase. Record.
+
+*(Done, last of H6. `test/type_tests.jl` runs the tracked tube in `D = 1,
+2`, the static two-level blast and the tracked blast at `Float64`,
+`Float32` and `Float32x2`, and the entropy wave at `Float32`; every mesh
+history, step count and floor count is exact at every type, and the errors
+agree to 1.6e-5 at `Float32` (1.2e-3 on the entropy wave's small L∞) and
+1e-13 at `Float32x2`. What it shook out: a chunk count that `Float32`
+rounded up by one (`chunk_count`, not one `Float64` number moved), a
+`round(Int, ·)` in the floor counts (`roundint`), and IMEXRungeKutta's
+step count, fixed upstream in 1.3. Kelvin–Helmholtz at `Float32` was
+already step 10's. See "Step 12 — precision" in `CODE.md`.)*
 
 ## Step 13 — Threads (H6b)
 

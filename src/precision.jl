@@ -34,9 +34,10 @@ wrap(x, L) = x - L * floor(x / L)
 """
     ceilint(x)
     floorint(x)
+    roundint(x)
 
-`ceil(Int, x)` and `floor(Int, x)`, for a type that may not define
-`Int(::AbstractFloat)`.
+`ceil(Int, x)`, `floor(Int, x)` and `round(Int, x)`, for a type that may not
+define `Int(::AbstractFloat)`.
 
 Both `ceil(Int, x)` and `floor(Int, x)` close through a conversion to
 `Integer` that MultiFloats.jl does not provide — and neither does a detour
@@ -48,10 +49,12 @@ only ever exact. A hardware float never reaches it.
 The fallback allocates, which is why these are confined to what they are used
 for: a count of chunks, of substeps, of buffer cells — host-side control flow,
 evaluated a handful of times per run — and never anything inside a kernel or
-per cell.
+per cell. `roundint` is the floor counts' (added in step 12): a sum of `0`s and
+`1`s in the run's type, closed to an `Int` once per block or once per run.
 """
 ceilint(x) = _toint(ceil(x))
 floorint(x) = _toint(floor(x))
+roundint(x) = _toint(round(x))
 
 # `y` is an exact integer value by construction, so both branches are exact.
 _toint(y::Base.IEEEFloat) = Int(y)

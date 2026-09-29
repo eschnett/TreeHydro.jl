@@ -27,10 +27,13 @@
 #     post-shock gas is 1.8522 times faster than anything at `t = 0` — so
 #     the step is sized from `speed_headroom · λ` and the end-of-chunk
 #     recheck is a *detector* that fires after the damage, not a guard.
-#   * **Chunks are counted, not accumulated.** `nchunks = ceilint(t_end /
-#     chunk)` and `t = min(c · chunk, t_end)`: a `while t < t_end − 1e-12`
-#     guard compares a time against an absolute slack, and at `Float32`
-#     that slack is far below one ulp of `t`. See "Precision" in `CODE.md`.
+#   * **Chunks are counted, not accumulated.** `nchunks = chunk_count(t_end,
+#     chunk)`, chunk `c` ends at `min(c · chunk, t_end)` and the last one at
+#     `t_end` itself: a `while t < t_end − 1e-12` guard compares a time
+#     against an absolute slack, and at `Float32` that slack is far below one
+#     ulp of `t`. And the count is not a bare `ceil` of the quotient, which
+#     at `Float32` can land an ulp above an integer (step 12). See
+#     "Precision" in `CODE.md`.
 
 """
     HydroCase(T, Val(D); initial, eos, floors, boundary = nothing, periodic,
@@ -220,6 +223,34 @@ function check_cfl(dt, h_min, D::Integer, cfl, λ_end; chunk=nothing, λ=nothing
 end
 
 """
+    chunk_count(t_end, chunk)
+
+The number of chunks to `t_end`: `⌈t_end / chunk⌉`, except that a quotient
+within a few ulp of an integer `m` gives `m` — the ulps of the quotient and
+those of `t_end` relative to `chunk` — so that a run meant to be a whole
+number of chunks is not given one more by rounding. The tolerance is the
+rounding a quotient of two values of type `T` can carry — a few ulp of the
+quotient, plus a few ulp of `t_end` measured in units of `chunk` — so it
+never absorbs a genuine remainder, only a sliver. IMEXRungeKutta's
+`step_count` rule, applied to the regrid cadence; see "Step 12 — precision"
+in `CODE.md`.
+
+**Found in step 12.** `ceilint(t_end / chunk)` is exact at `Float64` on every
+case here and was wrong at `Float32` on one: the two-dimensional tracked
+tube's `3//20 / 1//200` is `30.000002f0`, which gave a 31st chunk from
+`30 · chunk`, an ulp below `t_end`, to `t_end` — one step long, with a regrid
+of its own, so the `Float32` run built a mesh history one entry longer than
+the `Float64` run of the same case. The last chunk now ends at `t_end`
+exactly, which it did before whenever the product landed there.
+"""
+function chunk_count(t_end::T, chunk::T) where {T}
+    r = t_end / chunk
+    m = round(r)
+    tol = 4 * (eps(r) + eps(t_end) / chunk)
+    return m ≥ 1 && abs(r - m) ≤ tol ? roundint(m) : ceilint(r)
+end
+
+"""
     tracked_share(P::FieldSet; refine_tol, maxlevel_cap, ε, ε_g, scales)
 
 What fraction of the cells whose Löhner indicator exceeds `refine_tol` sit
@@ -358,10 +389,13 @@ place and takes over the previous chunk's scratch arrays whenever the mesh
 did not change between the two, since a scratch array holds nothing from
 one step to the next.
 
-The chunk count is computed in exact arithmetic, `nchunks = ceilint(t_end /
-chunk)` with the last chunk shortened, and *not* as a `while t < t_end −
-tiny` guard: an absolute slack is meaningless at a type whose ulp is larger
-than it (see "Precision" in `CODE.md`).
+The chunks are counted, `nchunks = `[`chunk_count`](@ref)`(t_end, chunk)`,
+with the last chunk ending at `t_end` exactly and shortened if `chunk` does
+not divide it, and *not* as a `while t < t_end − tiny` guard: an absolute
+slack is meaningless at a type whose ulp is larger than it. Nor is the count
+a bare `ceil` of the float quotient, which at `Float32` can land an ulp above
+an integer and add a one-step chunk (found in step 12; see "Precision" and
+"Step 12 — precision" in `CODE.md`).
 
 ## The headroom and the recheck
 
@@ -496,7 +530,7 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     t_end > 0 || throw(ArgumentError("t_end must be positive, got $t_end."))
     chunk > 0 || throw(ArgumentError(
         "chunk must be positive, got $chunk: it is the regrid cadence, and " *
-        "the number of chunks is counted as ceilint(t_end / chunk)."))
+        "the number of chunks is counted as ⌈t_end / chunk⌉."))
     maxlevel_cap ≥ 0 || throw(ArgumentError(
         "maxlevel_cap must be non-negative, got $maxlevel_cap."))
 
@@ -574,10 +608,10 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     # that changed it, when the state vector has another length.
     integ_prev = nothing
 
-    nchunks = ceilint(t_end / chunk)
+    nchunks = chunk_count(t_end, chunk)
     for c in 1:nchunks
         tstart = min((c - 1) * chunk, t_end)
-        stop = min(c * chunk, t_end)
+        stop = c == nchunks ? t_end : min(c * chunk, t_end)
         stop > tstart || break
 
         # (1) the step, from the finest spacing and the fastest signal the

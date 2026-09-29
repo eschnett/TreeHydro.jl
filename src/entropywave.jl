@@ -320,7 +320,7 @@ function entropywave_errors(::Type{T}, ::Val{D}; N, ops, G=2, roots=4,
     update_primitives!(p, u)
     t_end = T(t_end)
     dt = hydro_dt(forest, T(cfl), max_signal_speed(p), Val(D))
-    nsteps = ceil(Int, t_end / dt)
+    nsteps = ceilint(t_end / dt)
     u = hydro_solve!(p, u, zero(T), t_end, nsteps)
     update_primitives!(p, u)
 

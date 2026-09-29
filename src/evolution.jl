@@ -433,7 +433,7 @@ Requires `P` to be current, as [`max_signal_speed`](@ref) does.
 """
 function floor_hits(p::HydroProblem{T,D}) where {T,D}
     R = float(real(T))
-    return round(Int, sum(block_mapreduce(identity, +, zero(R), p.P; vars=D + 4)))
+    return roundint(sum(block_mapreduce(identity, +, zero(R), p.P; vars=D + 4)))
 end
 
 # The ghost population's count. `block_mapreduce` reduces a block's
@@ -511,7 +511,7 @@ function ghost_floor_hits(p::HydroProblem{T,D}) where {T,D}
     host = Array(counts)
     total = 0
     for b in 1:n
-        total += round(Int, host[b])
+        total += roundint(host[b])
     end
     return total
 end

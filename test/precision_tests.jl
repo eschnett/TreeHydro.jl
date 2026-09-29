@@ -45,6 +45,13 @@ const FLOATTYPES = (Float64, Float32, Float32x2)
     @test TreeHydro.floorint(-T(5 // 2)) === -3
     @test TreeHydro.ceilint(T(2)) === 2                 # already integral
     @test TreeHydro.floorint(T(2)) === 2
+    # `round(Int, ·)` likewise (added in step 12, where the floor counts met
+    # it): ties to even, as `round` has it, and a sum of flags that is already
+    # an integer closes to that integer.
+    @test TreeHydro.roundint(T(5 // 2)) === 2
+    @test TreeHydro.roundint(T(7 // 2)) === 4
+    @test TreeHydro.roundint(-T(5 // 2)) === -2
+    @test TreeHydro.roundint(T(4136)) === 4136
 
     # `Float64(x)` is not universal: MultiFloats defines a conversion only
     # to its own limb type, so `Float64(::Float32x2)` is a `MethodError`

@@ -62,6 +62,10 @@ using TreeHydro
     # one whose reference is a uniform fine run of this code rather than a
     # closed form — so every part it rests on has been asserted above it.
     include("kelvinhelmholtz_tests.jl")
+    # Every case at three float types (step 12): after all of them, because
+    # it reruns four of their drivers at `Float32` and `Float32x2` against the
+    # `Float64` run and asserts only what survives a change of precision.
+    include("type_tests.jl")
     # A run on a device against the same run on the host, at `Float32`. The
     # CPU stands in for the device unless `TREEHYDRO_TEST_BACKEND` names one.
     include("device_tests.jl")

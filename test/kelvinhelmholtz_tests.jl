@@ -579,12 +579,14 @@ end
     # still inside the transient, before the mode takes off — so that the
     # claim is made where it holds.
     #
-    # Measured (t = 2/5, 720 steps, tracked cap 2):
+    # Measured (t = 2/5, 720 steps, tracked cap 2; re-measured in step 12 —
+    # the three numbers below were 156 ulp, 2.552e-4 and 2.029e-6 under
+    # OrdinaryDiffEq, which associated the stage sums differently):
     #   the same 160 blocks at levels [1, 2] at every chunk, the same step
     #   count, tracking 1.0 at both types
-    #   max relative |M₃₂ − M₆₄| over the run 1.857e-5 = 156 ulp of Float32
-    #   max relative |K₃₂ − K₆₄| over the run 2.552e-4
-    #   |M₃₂ − M₆₄| / M at t_end 2.029e-6
+    #   max relative |M₃₂ − M₆₄| over the run 2.387e-5 = 200 ulp of Float32
+    #   max relative |K₃₂ − K₆₄| over the run 2.221e-4 = 1863 ulp
+    #   |M₃₂ − M₆₄| / M at t_end 7.2e-6
     # The tolerances below are a thousand and ten thousand ulp of `Float32`,
     # which is roughly ten times a *linear* accumulation of one ulp over the
     # 720 steps — room for the amplification without room for a divergence.
@@ -604,8 +606,8 @@ end
     n = min(length(a.Ms), length(b.Ms))
     dM = maximum(abs.(b.Ms[1:n] .- a.Ms[1:n]) ./ a.Ms[1:n])
     dK = maximum(abs.(b.Ks[1:n] .- a.Ks[1:n]) ./ a.Ks[1:n])
-    @test dM ≤ 1000 * eps(Float32)           # measured 156 ulp
-    @test dK ≤ 10000 * eps(Float32)          # measured 2144 ulp
+    @test dM ≤ 1000 * eps(Float32)           # measured 200 ulp
+    @test dK ≤ 10000 * eps(Float32)          # measured 1863 ulp
     # And the `Float32` run's own conserved integrals hold to *its* roundoff,
     # which is a different and much looser bound than the `Float64` one.
     for v in 1:4

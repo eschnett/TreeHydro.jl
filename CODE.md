@@ -2181,7 +2181,7 @@ Inherited from TreeWave wholesale: every driver takes `T` as a leading
 positional argument defaulting to `Float64`; physical quantities carry
 `T`, counts do not; **no floating-point literal in an expression where
 `T` is in play** — `T(1//2)`, `T(7//5)`, `oftype(x[1], 2)` inside
-closures; `wrap`/`ceilint`/`floorint`/`tofloat64` from a copied
+closures; `wrap`/`ceilint`/`floorint`/`roundint`/`tofloat64` from a copied
 `precision.jl` where `Base` does not serve a software float.
 
 What differs is which cases each type can run:
@@ -2191,6 +2191,22 @@ What differs is which cases each type can run:
 | `Float64` | everything measured here | everything |
 | `Float32` | same mesh, same floor counts, errors agreeing to ~1% (predicted, TreeWave's pattern) | same mesh and `M(t)` through the linear phase; then divergence by design |
 | `Float32x2` | Sod and Sedov run (arithmetic and `sqrt` only; the references are host `Float64`) | does not run: `sin` and `exp` in the initial data, which MultiFloats lacks |
+
+**(Measured in step 12: every cell of the table holds, the error column
+by a wide margin.)** At `Float32` the tracked tube in `D = 1, 2`, the static
+two-level blast and the tracked blast build the `Float64` mesh history
+exactly, take the same steps and chunks, and floor the same cells — the
+blast's 4136 owned resets and 40 ghost entries at both types; the L1 errors
+agree to **3.6e-6 and 1.6e-5**, the blast's shock radius and peak to 3.4e-8
+and 2.8e-7, and the entropy wave's L1 and L∞ to **3.1e-4 and 1.2e-3** — the
+worst of the table, because its errors are small enough (1.35e-4 and
+2.6e-4) that the *state's* roundoff shows in them. At `Float32x2` the same
+four runs build the same meshes and floors, and agree with `Float64` to
+**1e-13** in every error. Kelvin–Helmholtz at `Float32` is step 10's row:
+the same mesh at every sample and `M(t)` to 200 ulp through `t = 2/5`.
+`test/type_tests.jl` asserts all of it; getting there took one fix in this
+package, one upstream, and a third that only `Float32` could expose — see
+[Step 12 — precision](#step-12--precision).
 
 The two host reference codes — the exact Riemann solver and the Sedov
 quadrature — stay `Float64` at every `T`, converted once at the
@@ -2339,7 +2355,7 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` arrives with step 12 |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12) |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
@@ -2966,7 +2982,7 @@ Each has an acceptance test; serial `Float64` correctness first.
   on the first run of the job**, PR #1: the `viewer` job passed in 11 m 43,
   and the `kh_2d.png` it uploaded carries the same 232 blocks, the same
   `M(1.5) = 0.12346` and the same fitted 2.58036 as the local render.
-- **H6 — Precision, threads, device.** `T` and `backend` on every
+- **H6 — Precision, threads, device.** *(Done.)* `T` and `backend` on every
   driver, the type table above, the thread workload, device tests, the
   benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
   floor counts; `Float32x2` runs Sod and Sedov; digests identical across
@@ -2975,8 +2991,11 @@ Each has an acceptance test; serial `Float64` correctness first.
   ahead of precision: digests identical at one and four threads, the
   device table on Metal and an H200, and scans on Symmetry. See [Step 13 —
   threads](#step-13--threads) and [Step 14 — the benchmark and the
-  device](#step-14--the-benchmark-and-the-device). Precision, step 12, is
-  what remains.)*
+  device](#step-14--the-benchmark-and-the-device).)* **Precision done in
+  step 12, and H6 is done:** `Float32` and `Float32x2` reproduce the Sod and
+  Sedov meshes and floor counts exactly, with errors inside the predicted
+  1% by a factor of eight or more; see [Step 12 —
+  precision](#step-12--precision).
 - **H7 — Higher-order reconstruction** *(optional)*. PPM or WENO-Z at
   `G = 3`, and the interface-order rule re-measured against it.
 
@@ -3930,7 +3949,8 @@ under HLLC and **1.1712** under HLLE at the same resolution, and HLLC at
 same configuration: the **same** 160 blocks at levels `[1, 2]` at every one
 of the 81 samples, the same step count, the same `tracking = 1.0` and the
 same 4 cycle passes; `max |M₃₂ − M₆₄|/M = 1.857e-5`, which is **156 ulp of
-`Float32`**, and `max |K₃₂ − K₆₄|/K = 2.552e-4`. The final state is *not*
+`Float32`**, and `max |K₃₂ − K₆₄|/K = 2.552e-4` (200 ulp and 2.221e-4 since
+the move to IMEXRungeKutta, which associates the stage sums differently). The final state is *not*
 claimed and is not asserted, for the reason the case description gives.
 MultiFloats is skipped entirely: `sin` and `exp` are not implemented there,
 so this case cannot run at `Float32x2` at all, and Sod and Sedov carry that
@@ -4592,7 +4612,8 @@ work-item kernel on a backend that does not vectorize across work items.
 
 `test/device_tests.jl`, run with `TREEHYDRO_TEST_BACKEND=metal` in an
 environment that has Metal, reproduces the host `Float32` run **exactly**:
-the tracked Sod tube's L1 (4.1725063e-3), step count (138) and mesh
+the tracked Sod tube's L1 (4.1725063e-3; 4.172509e-3 since step 12's
+chunk count, on both), step count (138) and mesh
 history, and the static Sedov blast's 1280 resets, 128 ghost hits, shock
 radius and peak. Without the variable the CPU stands in for the device.
 
@@ -4720,7 +4741,8 @@ updates per second per `SSPRK33` step:
 - **The device reproduces the host.** `test/device_tests.jl` passes under
   `TREEHYDRO_TEST_BACKEND=cuda` (14 of 14): the tracked Sod tube at
   `Float32` builds the same mesh history in the same 138 steps with L1
-  4.1725147e-3 against the host's 4.1725063e-3 — 2e-6 relative, the device
+  4.1725147e-3 against the host's 4.1725063e-3 (before step 12 moved the
+  `Float32` run's last chunk end onto `t_end`) — 2e-6 relative, the device
   contracting to `fma` where the host does not, which is what the test's
   1% tolerance is for — and the static Sedov blast floors the same 1280
   owned cells and 128 ghost entries with the same shock radius. (Metal
@@ -4783,6 +4805,58 @@ bit for bit** in everything except the shear layer. **H200 (job 564514):
   population from the final state (which reproduces the driver's own counts
   when run on the host). Metal, contracting nothing here, matched every
   count.
+
+### Step 12 — precision
+
+Done last, after steps 13 and 14. `test/type_tests.jl` runs four drivers —
+the tracked tube in `D = 1` and `D = 2`, the static two-level blast and the
+tracked blast — at `Float64`, `Float32` and `Float32x2`, and the entropy
+wave at `Float32`; the measured table is under
+[Precision](#precision). The step was the three things a change of type
+shook out, none of which a `Float64` run could have shown.
+
+- **`Float32` gave the two-dimensional tube one chunk too many.** `evolve!`
+  counted its chunks as `ceilint(t_end / chunk)`, and at `Float32` the
+  tube's `3//20 / 1//200` is `30.000002f0`: a 31st chunk ran from `30 ·
+  chunk` — an ulp below `t_end` — to `t_end`, one step long, with a regrid
+  of its own, so the `Float32` run's mesh history was one entry longer than
+  the `Float64` run's and its step count one higher (432 against 431). The
+  count is now `chunk_count`, IMEXRungeKutta's step-count rule applied to
+  the regrid cadence — a quotient within a few ulp of an integer is that
+  integer — and the last chunk ends at `t_end` exactly. **Not one `Float64`
+  number moved**: the suite's 145 `@info` lines before and after are
+  identical in every `Float64` line. Three `Float32` lines moved, all in
+  the last digits and all for the same reason, a run that now ends *at*
+  `t_end` rather than an ulp before it — which is why the device tests'
+  tracked-tube L1 reads 4.172509e-3 where step 14 recorded 4.1725063e-3.
+- **`Float32x2` needed `round(Int, ·)` gone from the floor counts.**
+  `floor_hits` and `ghost_floor_hits` closed their sums of flags with
+  `round(Int, x)`, which MultiFloats does not provide; they use `roundint`
+  now, beside `ceilint` and `floorint` in `precision.jl`, and the entropy
+  wave's step count went from `ceil(Int, ·)` to `ceilint` for the same
+  hygiene. Bit-identical at every hardware float.
+- **And the integrator's step count, upstream.** IMEXRungeKutta 1.2's
+  `step_count` ended in `Int(n)`, the same missing method, so no
+  `Float32x2` run got past `init`. That was reported upstream rather than
+  worked around here, and fixed there: IMEXRungeKutta **1.3** supports
+  MultiFloats as state and time type, and this package's compat bound is
+  `1.3` for that reason.
+
+Two properties of the software float, recorded because a test at
+`Float32x2` has to allow for them and a test at a hardware float must not:
+`tracking` on the tracked blast comes back as `1 − 3.6e-15` rather than
+`1`, MultiFloats' division not being correctly rounded (TreeWave met the
+same); and the static blast's momentum injections are `−5.8e-21` and
+`−1.5e-19` (`S_x` and `S_y`) where every hardware float gives exactly zero, the pressure floors being symmetric only
+to its rounding. Neither is a defect of the run. `Float32x2` is also not a
+leak detector — MultiFloats promotes `Float64` *downward* — which is why
+`Float32` carries the type assertions and `Float32x2` the claim that
+nothing needs a hardware float at all.
+
+**The suite: 11856 tests in 4 m 26 at one thread and 11890 in 3 m 44 at
+four**, against 3 m 36 and 2 m 57 just before the step on the same machine.
+Most of the 50 s is compiling the `Float32x2` paths, which no other file
+exercises.
 
 ## Possible extensions
 

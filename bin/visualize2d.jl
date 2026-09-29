@@ -128,8 +128,8 @@ viewer_ops(p=3) = Operators(family=Conservative, prolongation=p, restriction=2)
 `--chunk=1/400` as the `Rational` the drivers want.
 
 A `Rational` and not a `Float64` because the chunk is a cadence the whole
-run is counted in — `ceilint(t_end / chunk)` has to come out exact, and
-`1/400` as a binary float does not.
+run is counted in — the driver's chunk count, `⌈t_end / chunk⌉`, is best
+taken from exact values, and `1/400` as a binary float is not one.
 """
 function parsechunk(str)
     parts = split(str, '/')

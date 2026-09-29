@@ -36,8 +36,9 @@ Two rules follow from `CODE.md` and govern every change here:
 **Scaffolding (H0), the scheme on a uniform mesh (H1), the coarse-fine
 faces on a static mesh (H2), regridding (H3), Sedov with the atmosphere
 reset (H4) and Kelvin–Helmholtz with its viewers (H5) are done; so are
-threads (H6b, step 13) and the benchmark and device (H6c, step 14), done
-ahead of precision (H6a, step 12), which is next.** Taken with them, and
+threads (H6b, step 13), the benchmark and device (H6c, step 14) and, last,
+precision (H6a, step 12) — H6 is done, and `PLAN.md`'s step 15, the review
+pass, is next.** Taken with them, and
 first: the move to **TreeAMR 0.1.3** (owner-based threading, from the
 registry — the `[sources]` pin on its `main` is gone) and to
 **IMEXRungeKutta** for time integration, replacing OrdinaryDiffEq —
@@ -50,15 +51,21 @@ two Symmetry jobs `bin/symmetry_cpu.sh` and `bin/symmetry_gpu.sh`, plus two
 bit-identical kernel fixes (a branch-free `:minmod`, and the divergence
 kernel's sum over directions written out). `test/device_tests.jl` was
 widened afterwards to every driver of the suite in `D = 1, 2, 3`, at
-`Float64` too on CUDA, and passes on Metal (61) and an H200 (124). All of it in `CODE.md`'s
-"IMEXRungeKutta and TreeAMR 0.1.3", "Step 13 — threads" and "Step 14 — the
-benchmark and the device"; what follows is the record up to step 11.
+`Float64` too on CUDA, and passes on Metal (61) and an H200 (124). Step 12
+added `test/type_tests.jl` (four drivers at `Float64`, `Float32` and
+`Float32x2`, the entropy wave at `Float32`), `chunk_count` in `driver.jl`
+and `roundint` in `precision.jl`, and raised IMEXRungeKutta's compat to
+`1.3`, the first release that runs `Float32x2`. All of it in `CODE.md`'s
+"IMEXRungeKutta and TreeAMR 0.1.3", "Step 13 — threads", "Step 14 — the
+benchmark and the device" and "Step 12 — precision"; what follows is the
+record up to step 11.
 `CODE.md` is complete and reviewed. What exists: `Project.toml` with
 `TreeAMR = "0.1.1"` from the General registry — TreeAMR was released, and
 the `[sources]` pin to its GitHub `main` is gone, which also lowered the
 Julia floor from 1.11 to 1.10 (raised back to 1.11 on 2026-09-25 with all
 the Tree* packages); `src/TreeHydro.jl`, the module shell;
-`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`) and
+`src/precision.jl` (`wrap`, `ceilint`, `floorint`, `tofloat64`, and
+`roundint` since step 12) and
 `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`), both ported from
 TreeWave; `src/floors.jl`
 (`Floors`, `apply_floors`, `in_atmosphere`, `atmosphere_state`) and
@@ -151,8 +158,8 @@ H3a step 6, H3b step 7, H4a step 8, H4b step 9, H5a step 10 and H5b
 step 11; step 7b split the suite
 into a short tier and a
 long one and step 7c undid the split, having found that what made CI slow
-was code coverage under threads and not the runner; and `PLAN.md`'s step 12
-(precision, H6a) is next.
+was code coverage under threads and not the runner; steps 13, 14 and 12
+finished H6, in that order.
 
 The measured numbers are in `CODE.md`'s "Measured results": the
 entropy wave is second order in L1 and L∞ with `:none` in `D = 1, 2`
@@ -295,7 +302,9 @@ HLLE, so **HLLC at half the linear resolution is ahead of HLLE at full
 resolution**, and the growth *rates* are 2.5804 against 1.1712. HLLC
 becomes this case's default (`kh_run`'s `riemann` keyword); the
 package-wide default stays HLLE. `Float32` to `t = 2/5` reproduces the
-mesh, the step count and the tracking exactly and `M(t)` to **156 ulp**.
+mesh, the step count and the tracking exactly and `M(t)` to **156 ulp**
+(200 since the move to IMEXRungeKutta, which associates the sums
+differently).
 All of it in `CODE.md`'s "Step 10 — Kelvin–Helmholtz".
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
@@ -434,7 +443,10 @@ and nothing else would notice it breaking.
 `--backend=metal --type=f32` renders too, and reproduces the host
 `Float32` run exactly — measured in step 11 on this machine.
 
-**The suite since the move to IMEXRungeKutta**: 11674 tests in **2 m 58.4
+**The suite since step 12**: 11856 tests in **4 m 26 at one thread** and
+11890 in **3 m 44 at four**, about 50 s of it `test/type_tests.jl`, mostly
+compiling the `Float32x2` paths. Before it, since the move to
+IMEXRungeKutta: 11674 tests in **2 m 58.4
 at one thread** and 11708 in **2 m 35.2 at four** (after step 14, back to
 back, quiet machine); the four-thread count is higher because the
 ownership check has one assertion per block per thread. The last file,
@@ -506,7 +518,8 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   pin on its `main` came back on 2026-09-23 to see the owner-based
   threading before its release, and went again once 0.1.3 carried it.)
   The one `[sources]` entry left is **IMEXRungeKutta's**, which is not
-  registered; a path-tracked dependency's `[sources]` is honoured, so
+  registered (compat `1.3` since step 12: 1.2's step count had no path for
+  a MultiFloat, and the fix was made there, not worked around here); a path-tracked dependency's `[sources]` is honoured, so
   `bin/` and any scratch environment that `develop`s this package find it
   without an entry of their own. So `~/src/jl/TreeAMR` is
   still *not* what the tests see, and the bar is now higher than it was —
@@ -836,6 +849,18 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   that adds a test file runs once under the floor version before it is
   merged — the "Commands" section has the line. The floor is 1.11, and
   every Julia before 1.12 checks this.
+- **A count taken as the ceiling of a float quotient gets one more at
+  `Float32`** (found in step 12). `evolve!` counted its chunks as
+  `ceilint(t_end / chunk)`, which is exact at `Float64` on every case here;
+  at `Float32` the two-dimensional tube's `3//20 / 1//200` is
+  `30.000002f0`, and the 31st chunk ran from `30 · chunk`, an ulp below
+  `t_end`, to `t_end` — one step and one regrid more than the `Float64` run,
+  so the two mesh histories differed in length and nothing else. The count
+  is `chunk_count` now, IMEXRungeKutta's step-count rule: a quotient within
+  a few ulp of an integer is that integer, and the last interval ends at
+  `t_end` exactly. Any new count of intervals built from a float quotient
+  wants the same, and only a `Float32` run will show it missing —
+  `test/type_tests.jl` compares mesh histories exactly for that reason.
 - **Don't name a keyword `maxlevel`.** It shadows TreeAMR's exported
   `maxlevel(forest)` inside the function body. Use `maxlevel_cap`.
 - **A decimal literal in a `T` expression is a leak.** `T(7//5)`, not
@@ -875,7 +900,8 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   by design (the instability amplifies roundoff), so assert the growth
   rate and the early chunks, not the final state — measured, to `t = 2/5`
   the mesh, the step count and the tracking are *equal* and `M(t)` agrees
-  to 156 ulp of `Float32`; and MultiFloats cannot
+  to 200 ulp of `Float32` (156 before the move to IMEXRungeKutta); and
+  MultiFloats cannot
   run it at all (`sin`, `exp` are not implemented), only Sod and Sedov.
 - **A feature that *grows* gets nothing from a travelling margin, and the
   margin is what decides how much of the box is refined** (measured in step

@@ -30,8 +30,8 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
-**Status: all four cases run and all four are drawn — milestones H1, H2,
-H3, H4 and H5 are done.** What exists is
+**Status: all four cases run and all four are drawn, at any thread count,
+on a GPU and at three float types — milestones H1 through H6 are done.** What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the TreeAMR release still
 provides what the scheme is written against, the ideal-gas equation of
@@ -130,6 +130,15 @@ And HLLE against HLLC is not close: the shear layer *is* a contact, HLLE's
 two-wave average is what smears it, and HLLC at half the linear resolution
 is further along than HLLE at full resolution. HLLC becomes this case's
 default; the package-wide default stays HLLE, which is *the* GRMHD flux.
+
+**And the same answer comes back at any thread count, on a GPU, and at a
+lower precision.** Every run is bit-identical at one thread and at four; on
+Apple's Metal every driver reproduces the host `Float32` run bit for bit,
+and on an H200 at `Float64` to `1e-13`, at up to 715 million cell updates
+per second. At `Float32` and at the software float `Float32x2` the tube and
+the blast build the `Float64` mesh and floor the same cells exactly, with
+their errors agreeing to `1.6e-5` and `1e-13` — which took one rounding
+fix in the driver that only `Float32` could expose.
 
 There is one test suite and it runs whole, on every push: the unit tests
 and every physics claim the measured results above rest on — the
