@@ -66,6 +66,13 @@ using TreeHydro
     # it reruns four of their drivers at `Float32` and `Float32x2` against the
     # `Float64` run and asserts only what survives a change of precision.
     include("type_tests.jl")
+    # Checkpoint and restart: after every case and every type, because it
+    # restarts the tracked tube at `Float64` and `Float32x2` and a floored
+    # blast in `D = 2`, and a restarted run is compared with the uninterrupted
+    # one field for field. Before the two files that run a subprocess or a
+    # device, since it loads HDF5 — the first file that does, so the refusal
+    # of a checkpoint without it can be tested first.
+    include("checkpoint_tests.jl")
     # A run on a device against the same run on the host, at `Float32`. The
     # CPU stands in for the device unless `TREEHYDRO_TEST_BACKEND` names one.
     include("device_tests.jl")

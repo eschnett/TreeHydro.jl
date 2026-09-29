@@ -1,0 +1,481 @@
+# Checkpoint and restart for `evolve!` (added 2026-09-29, on TreeAMR 0.1.4's
+# M9a).
+#
+# Everything about the *file* is upstream: TreeAMR's `save_checkpoint` writes
+# the forest, the evolved field sets and an application's plain data, and
+# writes them atomically, durably, with element types as limbs where they
+# are not HDF5 natives and with the provenance of the writer; its
+# `load_checkpoint` rebuilds a forest and a field set through their own
+# validating constructors. Both live in the package extension
+# `TreeAMRHDF5Ext`, which loads with `using HDF5` — the *caller's* `using`,
+# since this package never touches an HDF5 type and so does not depend on
+# HDF5 at all. That is the "no mesh machinery" rule applied to I/O.
+#
+# What is left for this file is what only the application knows:
+#
+#   * **when** to write — at a chunk boundary, *after* the regrid, where a
+#     fixed-step integrator holds nothing but `(t, u)`, so a restart begins
+#     the next chunk with exactly what the uninterrupted run began it with;
+#   * **its own run state** — the accumulators behind `evolve!`'s return
+#     value, which is what makes a restarted run's *answer* the same and
+#     not only its state;
+#   * **the recipe** — every parameter that decides the numbers, so that a
+#     restart with a different one is refused by name rather than run into
+#     a different experiment that looks like the old one;
+#   * **the names** of the files, and their rotation.
+#
+# See "Checkpoint and restart" in `CODE.md`.
+
+# The application's group in the file and the format version of what this
+# package stores there. TreeAMR stores the version and never reads it; the
+# check is `load_run`'s. The name mirrors TreeAMR's own group, "TreeAMR.jl".
+const CHECKPOINT_APPLICATION = "TreeHydro.jl"
+const CHECKPOINT_VERSION = 1
+
+"""
+    checkpointing_available()
+
+Whether TreeAMR's HDF5 extension is loaded, which is what `save_checkpoint`
+and `load_checkpoint` need to have methods at all. It is loaded by `using
+HDF5` beside TreeAMR, in the caller's session: HDF5 is a weak dependency of
+TreeAMR and no dependency of this package, so that a run that never
+checkpoints never loads HDF5 and its binary libraries.
+"""
+checkpointing_available() = Base.get_extension(TreeAMR, :TreeAMRHDF5Ext) !== nothing
+
+# --- names and rotation ------------------------------------------------------
+
+# The file for the checkpoint taken after `iteration` time steps since
+# `t = 0`. The step count is monotonic across restarts, which a chunk index
+# would be too, but it is also what a reader of a directory listing wants to
+# see — how far the run got — and it is the Cactus convention. Ten digits
+# sort lexically as well as numerically up to 10¹⁰ steps; the pattern below
+# reads any number of them.
+checkpoint_filename(prefix, iteration::Integer) =
+    "$prefix.it$(lpad(iteration, 10, '0')).h5"
+
+# `s` quoted for a regular expression, so that a prefix with a `.` or a `+`
+# in it matches itself and nothing else.
+regex_quote(s::AbstractString) = replace(s, r"[\\^$.|?*+()\[\]{}]" => s"\\\0")
+
+"""
+    checkpoint_files(prefix) -> Vector{Tuple{Int,String}}
+
+The checkpoint files of `prefix`, as `(iteration, path)` pairs sorted by
+iteration: the files in `prefix`'s directory whose names are exactly
+`"<basename>.it<digits>.h5"`. Nothing else matches — in particular not
+TreeAMR's `"….h5.partial"`, the file a write in progress or a failed one
+leaves, and not another prefix that merely starts with this one. A
+directory that does not exist holds no checkpoints.
+"""
+function checkpoint_files(prefix::AbstractString)
+    dir, base = splitdir(prefix)
+    found = Tuple{Int,String}[]
+    isempty(base) && return found
+    listed = isempty(dir) ? "." : dir
+    isdir(listed) || return found
+    pattern = Regex("^" * regex_quote(base) * raw"\.it(\d+)\.h5$")
+    for name in readdir(listed)
+        m = match(pattern, name)
+        m === nothing && continue
+        iteration = tryparse(Int, m.captures[1])
+        iteration === nothing && continue
+        path = isempty(dir) ? name : joinpath(dir, name)
+        isfile(path) && push!(found, (iteration, path))
+    end
+    return sort!(found)
+end
+
+"""
+    latest_checkpoint(prefix)
+
+The checkpoint file of `prefix` with the highest iteration, or `nothing` if
+there is none — which is what makes a job chain one command for every job,
+the first included:
+
+```julia
+using HDF5, TreeHydro
+r = evolve!(case; …, checkpoint_path_prefix = prefix,
+            max_walltime_seconds = 23.5 * 3600,
+            restart_file = latest_checkpoint(prefix))
+r.finished || exit(3)          # resubmit
+```
+
+The first job finds nothing and starts from the initial data; every later
+one continues from where the previous one stopped. See "Checkpoint and
+restart" in `CODE.md`.
+"""
+function latest_checkpoint(prefix::AbstractString)
+    files = checkpoint_files(prefix)
+    return isempty(files) ? nothing : last(files)[2]
+end
+
+# Delete every checkpoint file of `prefix` but `keep` and the newest
+# `num_keep − 1` others, and return the paths deleted. Run only after a write
+# has succeeded, so that the newest complete checkpoint is never among them.
+# The file just written survives even when it is not the newest — a run
+# restarted from an older checkpoint while newer ones exist — because it is
+# the only one this run can vouch for. It includes files an earlier job left
+# behind, which is the point in a job chain: the disk holds `num_keep` files
+# whichever job wrote them.
+#
+# The file just written is recognised by its *name*, not its path: every
+# file listed is in `prefix`'s directory by construction, and a path string
+# is not a file's identity — `run//sedov` lists as `run/sedov`, and with
+# `num_keep = 1` a comparison of paths deleted the checkpoint just written.
+function rotate_checkpoints!(prefix::AbstractString, num_keep::Integer;
+                             keep::AbstractString)
+    others = [path for (_, path) in checkpoint_files(prefix)
+              if basename(path) != basename(keep)]
+    removed = others[1:max(0, length(others) - (num_keep - 1))]
+    foreach(path -> rm(path; force=true), removed)
+    return removed
+end
+
+# --- exact reals as plain data -------------------------------------------------
+
+const NativeFloat = Union{Float16,Float32,Float64}
+
+# The one native type an `isbits` type is made of throughout, with no
+# padding — `Float32` for MultiFloats' `Float32x2`, an `NTuple{2,Float32}` of
+# limbs — and `nothing` for anything else. TreeAMR's extension applies the
+# same rule to a field set's element type; it is restated here because that
+# function is internal to the extension, and TreeAMR's `write_plain`, which
+# the run state goes through, refuses a MultiFloat scalar.
+function limb_type(::Type{T}) where {T}
+    T <: Union{NativeFloat,Base.BitInteger} && return T
+    (isstructtype(T) && isconcretetype(T) && fieldcount(T) > 0) || return nothing
+    F = nothing
+    size = 0
+    for i in 1:fieldcount(T)
+        S = fieldtype(T, i)
+        L = limb_type(S)
+        (L === nothing || (F !== nothing && L !== F)) && return nothing
+        F = L
+        size += sizeof(S)
+    end
+    return size == sizeof(T) ? F : nothing
+end
+
+function limbs_of(::Type{R}) where {R}
+    F = isbitstype(R) ? limb_type(R) : nothing
+    F === nothing && throw(ArgumentError(
+        "a checkpoint cannot store the reals of $R exactly: it is neither a " *
+        "native float nor an isbits type made of one native type throughout " *
+        "with no padding, which is stored as its limbs (Float32x2 as two " *
+        "Float32). A file stores bits, and no other type could be read back " *
+        "bit for bit."))
+    return (F, sizeof(R) ÷ sizeof(F))
+end
+
+"""
+    plain_reals(xs)
+
+Values of the run's real type as plain data that read back **bit for bit**:
+a vector of a native float as itself, and a vector of any other `isbits` real
+made of one native float throughout (MultiFloats' `Float32x2`) as the matrix
+of its limbs, `(nlimbs, n)`, limb first as in memory. A scalar is stored as a
+one-element vector and a tuple as a vector. [`from_plain_reals`](@ref) is
+the inverse. This is how a `Float32x2` run's accumulators reach a file whose
+plain data refuse a MultiFloat scalar.
+"""
+plain_reals(x::Real) = plain_reals([x])
+plain_reals(xs::Tuple) = plain_reals(collect(xs))
+function plain_reals(xs::AbstractVector{R}) where {R}
+    R <: NativeFloat && return collect(xs)
+    F, n = limbs_of(R)
+    return collect(reshape(reinterpret(F, collect(xs)), n, length(xs)))
+end
+
+"""
+    from_plain_reals(R, a) -> Vector{R}
+
+The inverse of [`plain_reals`](@ref): the vector of `R` that `a` stores,
+refused if `a` is not what `plain_reals` makes of an `R`.
+"""
+function from_plain_reals(::Type{R}, a) where {R}
+    if R <: NativeFloat
+        a isa AbstractVector{R} || throw(ArgumentError(
+            "a checkpoint value is a $(typeof(a)) where a vector of $R was " *
+            "expected: the file was written by a run in another type, or damaged."))
+        return collect(a)
+    end
+    F, n = limbs_of(R)
+    (a isa AbstractMatrix{F} && size(a, 1) == n) || throw(ArgumentError(
+        "a checkpoint value is a $(typeof(a)) of size $(size(a)) where the " *
+        "$n $F limbs of a vector of $R were expected: the file was written by " *
+        "a run in another type, or damaged."))
+    return collect(reinterpret(R, vec(a)))
+end
+
+from_plain_scalar(::Type{R}, a) where {R} = only(from_plain_reals(R, a))
+
+function from_plain_tuple(::Type{R}, a, ::Val{n}) where {R,n}
+    v = from_plain_reals(R, a)
+    length(v) == n || throw(ArgumentError(
+        "a checkpoint tuple has $(length(v)) entries where $n were expected: " *
+        "the file was written for another dimension, or damaged."))
+    return ntuple(i -> v[i], Val(n))
+end
+
+# A type's name as a module importing nothing but Base prints it —
+# `Float64`, `MultiFloats.MultiFloat{Float32, 2}` — and not `string(T)`,
+# which qualifies a name or not according to what the writer happened to have
+# imported into `Main`. TreeAMR's extension names element types the same way,
+# for the same reason.
+module TypeNames end
+type_name(::Type{T}) where {T} = sprint(show, T; context=:module => TypeNames)
+
+# A parameter struct — the equation of state, the floors — as its type's
+# name, its field names and its field values, each real through
+# `plain_reals`. The names are a list of strings rather than the keys of a
+# group, which keeps `ρ_atm` out of the file's link names.
+function plain_struct(x)
+    names = fieldnames(typeof(x))
+    values = map(n -> plain_field(getfield(x, n)), names)
+    return (; kind=String(nameof(typeof(x))), names=collect(String.(names)),
+            values=Tuple(values))
+end
+plain_field(x::AbstractFloat) = plain_reals(x)
+plain_field(x::Union{Integer,Symbol,AbstractString,Nothing}) = x
+plain_field(x::Tuple) = map(plain_field, x)
+plain_field(x) = throw(ArgumentError(
+    "a case parameter of type $(typeof(x)) has no plain form a checkpoint can " *
+    "compare: extend `plain_field` for it."))
+
+# --- the recipe ------------------------------------------------------------------
+
+"""
+    run_recipe(T, case, D; N, G, roots, ops, chunk, cfl, limiter, riemann,
+               fixup, reset, accounting, refine_tol, coarsen_tol,
+               maxlevel_cap, ε, ε_g, buffer)
+
+Every parameter of an [`evolve!`](@ref) call that decides the numbers, as
+plain data: the working type by name, the mesh (`D`, `N`, `G`, the roots, the
+periodicity, the extents), the case's equation of state, floors and speed
+headroom, the cadence and the step (`chunk`, `cfl`), the scheme (`limiter`,
+`riemann`, `fixup`, `reset`, `accounting`), the refinement criterion
+(`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g`, `buffer`) and the
+operators. `t_end` is not in it, because a restart may move it; nor are
+`backend`, `maxpasses` or the observer, which do not change a number of the
+run once its initial-data cycle is over.
+
+Every real goes through `T` first and then [`plain_reals`](@ref), so a
+`2//25` given to one call and a `T(2//25)` given to the next compare equal,
+as they are the same run. The keys are ASCII (`epsilon`, `epsilon_g`) so that
+a reader in another language finds them.
+
+What the recipe **cannot** hold is the case's closures — `initial`,
+`boundary` and `reference` — so a restart with the same parameters and
+different initial data is not detected. The initial data do not enter a
+restarted run at all, but the boundary hook does: the caller is trusted to
+pass the same case.
+"""
+function run_recipe(::Type{T}, case::HydroCase, ::Val{D}; N, G, roots, ops, chunk,
+                    cfl, limiter, riemann, fixup, reset, accounting, refine_tol,
+                    coarsen_tol, maxlevel_cap, ε, ε_g, buffer) where {T,D}
+    r(x) = plain_reals(T(x))
+    tupleD(x) = x isa Integer ? ntuple(_ -> Int(x), D) : ntuple(d -> Int(x[d]), D)
+    return (; float_type=type_name(T), D=Int(D), N=Int(N), G=tupleD(G),
+            roots=tupleD(roots), periodic=case.periodic,
+            extents=plain_reals([x for ext in case.extents for x in ext]),
+            eos=plain_struct(case.eos), floors=plain_struct(case.floors),
+            speed_headroom=r(case.speed_headroom), chunk=r(chunk), cfl=r(cfl),
+            limiter=limiter, riemann=riemann, fixup=Bool(fixup), reset=reset,
+            accounting=Bool(accounting), refine_tol=r(refine_tol),
+            coarsen_tol=r(coarsen_tol), maxlevel_cap=Int(maxlevel_cap),
+            epsilon=r(ε), epsilon_g=r(ε_g),
+            buffer=buffer === nothing ? nothing : Int(buffer),
+            ops=(; family=Symbol(ops.family), prolongation=Int(ops.prolongation),
+                 restriction=Int(ops.restriction)))
+end
+
+# A recipe value as the refusal prints it: a one-element vector — how a
+# scalar real is stored — as its element.
+describe_plain(x::AbstractVector) = length(x) == 1 ? repr(only(x)) : repr(x)
+describe_plain(x) = repr(x)
+
+"""
+    check_recipe(saved, current, path)
+
+Refuse a restart whose parameters differ from the checkpoint's, with one
+`ArgumentError` that names **every** field that differs and both of its
+values — so that a job script with two wrong keywords is fixed in one round
+and not two. Equality is `isequal` on the plain forms, which for reals is
+equality of the bits in the run's type.
+"""
+function check_recipe(saved, current, path)
+    diffs = String[]
+    for k in unique((keys(saved)..., keys(current)...))
+        a = haskey(saved, k) ? saved[k] : missing
+        b = haskey(current, k) ? current[k] : missing
+        isequal(a, b) && continue
+        was = a === missing ? "absent" : describe_plain(a)
+        is = b === missing ? "absent" : describe_plain(b)
+        push!(diffs, "`$k` is $was in the checkpoint and $is in this call")
+    end
+    isempty(diffs) || throw(ArgumentError(
+        "restart_file $(repr(path)) was written by a run with other parameters: " *
+        join(diffs, "; ") * ". A restart continues the saved run, and a run " *
+        "continued with another parameter would be a different experiment that " *
+        "looks like the old one, so it must be called with the same case and the " *
+        "same keywords — only t_end may change (and backend, maxpasses and the " *
+        "observer, which decide no number of the run). The case's closures, its " *
+        "initial data, boundary hook and reference, cannot be compared and are " *
+        "trusted to be the same."))
+    return nothing
+end
+
+# --- the run state -----------------------------------------------------------------
+
+# The accumulators behind `evolve!`'s return value at the end of chunk `c`,
+# after its regrid: everything a restart needs for its answer, and not only
+# its state, to be the uninterrupted run's. Every real through `plain_reals`.
+function run_state(; chunk, t, nsteps, nregrids, floor_hits, ghost_hits, passes,
+                   converged, acc, λ_initial, tracking, drift, scales, totals0,
+                   nblocks_history, buffer_history, λ_history, λ_end_history)
+    return (; chunk=Int(chunk), t=plain_reals(t), nsteps=Int(nsteps),
+            nregrids=Int(nregrids), floor_hits=Int(floor_hits),
+            ghost_hits=Int(ghost_hits), passes=Int(passes), converged=Bool(converged),
+            reset_hits=Int(acc.hits), injection=plain_reals(acc.injection),
+            lambda_initial=plain_reals(λ_initial), tracking=plain_reals(tracking),
+            drift=plain_reals(drift), scales=plain_reals(scales),
+            totals0=plain_reals(totals0), nblocks_history=Vector{Int}(nblocks_history),
+            buffer_history=Vector{Int}(buffer_history),
+            lambda_history=plain_reals(λ_history),
+            lambda_end_history=plain_reals(λ_end_history))
+end
+
+# --- writing and reading -------------------------------------------------------------
+
+"""
+    save_run(path, forest, U, u; recipe, run, filters = (), sync = true)
+
+One checkpoint: the forest, the conserved state `U` with its state vector
+`u`, and this package's plain data `(; recipe, run)`, through TreeAMR's
+`save_checkpoint` — atomically, so a failed write leaves the previous file
+alone. Only `U` is saved: the primitive set and the fluxes are scratch that
+[`update_primitives!`](@ref) and the right-hand side rebuild from `u` at the
+start of the next chunk, ghosts included. `u` and not `U.work`, because after
+the post-regrid reset the state vector is the authoritative copy.
+"""
+function save_run(path, forest, U, u; recipe, run, filters=(), sync::Bool=true)
+    return save_checkpoint(path, forest; fieldsets=("U" => (U, u),),
+                           application=CHECKPOINT_APPLICATION => CHECKPOINT_VERSION,
+                           data=(; recipe=recipe, run=run), filters=filters,
+                           sync=sync)
+end
+
+"""
+    load_run(path, T; backend = CPU()) -> (; forest, U, u, recipe, run)
+
+Read a checkpoint written by [`save_run`](@ref), refusing one that is not
+this package's — another application's, or a format version other than
+$(CHECKPOINT_VERSION) — with the reason. The field set comes back in the type
+it was saved in; whether that is `T` is the recipe's to say, so that the
+refusal names it with the rest (see [`check_recipe`](@ref)). `T` is passed to
+TreeAMR as the one type it may have to name, which is harmless for a native
+float.
+"""
+function load_run(path::AbstractString, ::Type{T}; backend=CPU()) where {T}
+    ck = load_checkpoint(path; backend=backend, types=(T,))
+    name, version = ck.application
+    written = "It was written by TreeAMR " *
+              "$(something(ck.provenance.treeamr_version, "(unknown version)")) " *
+              "on $(ck.provenance.created)."
+    name == CHECKPOINT_APPLICATION || throw(ArgumentError(
+        "$(repr(path)) is a checkpoint of the application $(repr(name)), not of " *
+        "$(CHECKPOINT_APPLICATION): its run state is that application's, and this " *
+        "package cannot continue a run it did not write. $written"))
+    version == CHECKPOINT_VERSION || throw(ArgumentError(
+        "$(repr(path)) stores TreeHydro's run state in format version $version, " *
+        "and this version of TreeHydro reads version $(CHECKPOINT_VERSION) only. " *
+        "A file from a newer TreeHydro is read by that version — TreeAMR's " *
+        "`checkpoint_environment(path, dir)` writes the environment that wrote " *
+        "it. $written"))
+    (ck.data isa NamedTuple && haskey(ck.data, :recipe) && haskey(ck.data, :run) &&
+     haskey(ck.fieldsets, "U")) || throw(ArgumentError(
+        "$(repr(path)) names $(CHECKPOINT_APPLICATION) version $version but holds " *
+        "no recipe, no run state or no field set \"U\": the file is damaged, or " *
+        "was not written by `evolve!`. $written"))
+    U = ck.fieldsets["U"].fieldset
+    u = ck.fieldsets["U"].state
+    return (; forest=ck.forest, U=U, u=u, recipe=ck.data.recipe, run=ck.data.run)
+end
+
+# --- the keywords ------------------------------------------------------------------------
+
+# The checkpoint keywords of `evolve!`, refused up front — before the
+# initial-data cycle — so that a job script's mistake costs a second and not
+# the queue wait and the hours before the first write.
+function check_checkpoint_keywords(; checkpoint_path_prefix, checkpoint_every_chunks,
+                                   checkpoint_interval_seconds, max_walltime_seconds,
+                                   num_checkpoints_keep, restart_file)
+    prefix = checkpoint_path_prefix
+    triggers = (checkpoint_every_chunks, checkpoint_interval_seconds,
+                max_walltime_seconds)
+    if prefix === nothing
+        all(isnothing, triggers) || throw(ArgumentError(
+            "checkpoint_every_chunks, checkpoint_interval_seconds or " *
+            "max_walltime_seconds was given without checkpoint_path_prefix: the " *
+            "run would be asked to write a checkpoint, or to stop and leave one, " *
+            "with nowhere to write it. Pass checkpoint_path_prefix, such as " *
+            "\"run/sedov\" for files run/sedov.it0000001234.h5."))
+    else
+        prefix isa AbstractString || throw(ArgumentError(
+            "checkpoint_path_prefix must be a string, got $(repr(prefix))."))
+        dir, base = splitdir(prefix)
+        isempty(base) && throw(ArgumentError(
+            "checkpoint_path_prefix $(repr(prefix)) ends in a directory separator: " *
+            "it is the start of each file's name, not a directory, so it needs a " *
+            "stem — \"run/sedov\" writes run/sedov.it0000001234.h5."))
+        isempty(dir) || isdir(dir) || throw(ArgumentError(
+            "the directory of checkpoint_path_prefix, $(repr(dir)), does not " *
+            "exist: the first checkpoint would fail to be written hours into the " *
+            "run. Create it first."))
+        any(!isnothing, triggers) || throw(ArgumentError(
+            "checkpoint_path_prefix was given but no checkpoint_every_chunks, " *
+            "checkpoint_interval_seconds or max_walltime_seconds: nothing would " *
+            "ever write a checkpoint. Pass at least one of them."))
+    end
+    checkpoint_every_chunks === nothing ||
+        (checkpoint_every_chunks isa Integer && checkpoint_every_chunks ≥ 1) ||
+        throw(ArgumentError(
+            "checkpoint_every_chunks must be an integer of at least 1, got " *
+            "$(repr(checkpoint_every_chunks)): it is how many chunks lie between " *
+            "two checkpoints."))
+    checkpoint_interval_seconds === nothing ||
+        (checkpoint_interval_seconds isa Real && checkpoint_interval_seconds ≥ 0) ||
+        throw(ArgumentError(
+            "checkpoint_interval_seconds must be a non-negative number, got " *
+            "$(repr(checkpoint_interval_seconds)): it is the wall-clock time " *
+            "between two checkpoints, and 0 writes one at every chunk boundary."))
+    max_walltime_seconds === nothing ||
+        (max_walltime_seconds isa Real && max_walltime_seconds > 0) ||
+        throw(ArgumentError(
+            "max_walltime_seconds must be a positive number, got " *
+            "$(repr(max_walltime_seconds)): it is the job's wall-time limit, " *
+            "from the call to evolve!, before which the run writes a checkpoint " *
+            "and stops."))
+    (num_checkpoints_keep isa Integer && num_checkpoints_keep ≥ 1) ||
+        throw(ArgumentError(
+            "num_checkpoints_keep must be an integer of at least 1, got " *
+            "$(repr(num_checkpoints_keep)): the newest checkpoint is the one a " *
+            "restart needs, so it is always kept."))
+    if restart_file !== nothing
+        restart_file isa AbstractString || throw(ArgumentError(
+            "restart_file must be a path or nothing, got $(repr(restart_file))."))
+        isfile(restart_file) || throw(ArgumentError(
+            "restart_file $(repr(restart_file)) does not exist. To start from the " *
+            "initial data when there is no checkpoint yet, pass " *
+            "`restart_file = latest_checkpoint(prefix)`, which is nothing then."))
+    end
+    (prefix === nothing && restart_file === nothing) || checkpointing_available() ||
+        throw(ArgumentError(
+            "checkpointing needs TreeAMR's HDF5 extension, which is not loaded: " *
+            "run `using HDF5` (with HDF5 in the environment) before evolve!. HDF5 " *
+            "is optional — a weak dependency of TreeAMR and no dependency of " *
+            "TreeHydro — so that a run that never checkpoints does not load it and " *
+            "its binary libraries."))
+    return nothing
+end

@@ -51,7 +51,8 @@ rather than travels — and the viewers in `bin/` drawing the last three of
 those, rendered in CI on every push. Every run is bit-identical at any
 thread count, reproduces the host on Metal and CUDA, and builds the same
 mesh and floors the same cells at `Float32` and `Float32x2` as at
-`Float64`.*
+`Float64`. And since 2026-09-29 a run writes checkpoints and restarts from
+them through TreeAMR's own, bit-identically — the caller loads HDF5.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for, why it is that way, and every measured number.
@@ -102,6 +103,10 @@ export lohner, cell_tau, indicator_scales, hydro_flags, refinement_buffer
 # reference it is judged against, and the three measurements around them
 export HydroCase, evolve!, uniform_run
 export check_cfl, tracked_share, reduce_to_grid, l1_difference
+
+# Checkpoint and restart: the one helper a job script needs beside `evolve!`'s
+# keywords, the newest checkpoint of a prefix or `nothing`
+export latest_checkpoint
 
 # The entropy wave: the mesh, the exact cell averages, the study
 export EntropyWave, hydro_forest
@@ -166,6 +171,12 @@ include("refinement.jl")
 # the direction the dependency has to run if the driver is to know nothing
 # case-specific.
 include("driver.jl")
+# What `evolve!` writes at a chunk boundary and reads back on a restart: the
+# recipe, the run state, the file names and their rotation, all over TreeAMR's
+# `save_checkpoint` and `load_checkpoint`. After the driver, because its
+# recipe reads a `HydroCase` and says so in its signature; `evolve!` reaches
+# it only when it runs, which is resolved then and not when it is compiled.
+include("checkpoint.jl")
 include("entropywave.jl")
 # The shock tube and the host `Float64` reference it is judged against. The
 # solver comes first because the case reads it: `λ` and the reference both

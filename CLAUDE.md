@@ -42,6 +42,11 @@ measured number in "Measured results" beside the prediction it confirms or
 corrects, and under "Possible extensions" what was measured and deliberately
 not built and what was never measured at all.
 
+**Added since, on 2026-09-29: checkpoint and restart**, on TreeAMR 0.1.4's
+M9a — `evolve!` writes checkpoints at chunk boundaries after the regrid and
+restarts from them, bit-identically; see "Checkpoint and restart" in
+`CODE.md`, and the entries below for the files.
+
 How the milestones map onto the steps, for reading `CODE.md`'s history: H0
 was step 0; H1 steps 1–4; H2 step 5; H3 steps 6 and 7; H4 steps 8 and 9; H5
 steps 10 and 11; and H6 steps 13, 14 and 12, in that order, taken together
@@ -54,11 +59,16 @@ and not the runner.
 What exists, file by file (the names are the ones to grep for; `CODE.md`'s
 "File layout" has the one-line table):
 
-- `Project.toml`: `TreeAMR = "0.1.3"` from the General registry,
+- `Project.toml`: `TreeAMR = "0.1.4"` from the General registry (0.1.4
+  since 2026-09-29, for its checkpoint and restart; 0.1.3 before, for the
+  owner-based threading),
   `KernelAbstractions`, and `IMEXRungeKutta = "1.3"` (the first release
   that runs `Float32x2`) through the one `[sources]` entry left, since it
   is unregistered; `julia = "1.11"`, the floor of all the Tree* packages
-  since 2026-09-25.
+  since 2026-09-25. **No HDF5**: TreeAMR's checkpoint functions live in its
+  HDF5 extension and the caller loads it. `test/Project.toml` adds
+  `MultiFloats`, `Random` and, since 2026-09-29, `HDF5 = "0.17"`, which is
+  what loads that extension in the suite.
 - `src/TreeHydro.jl`, the module shell and its exports.
 - `src/precision.jl` (`wrap`, `ceilint`, `floorint`, `roundint`,
   `tofloat64`) and `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`),
@@ -93,9 +103,22 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `max_signal_speed` each have a `FieldSet` core and a `HydroProblem`
   forwarder.
 - `src/driver.jl`: `HydroCase`, `evolve!` — the one loop, with `reset`
-  (default `:stage`), `accounting`, the post-regrid reset and the
-  `observer` hook — `uniform_run`, `check_cfl`, `chunk_count`,
-  `tracked_share`, `reduce_to_grid` and `l1_difference`.
+  (default `:stage`), `accounting`, the post-regrid reset, the
+  `observer` hook and the checkpoint keywords (`checkpoint_path_prefix`,
+  `checkpoint_every_chunks`, `checkpoint_interval_seconds`,
+  `max_walltime_seconds`, `num_checkpoints_keep`,
+  `checkpoint_hdf5_filters`, `checkpoint_sync_to_disk`, `restart_file`;
+  it returns `finished`, `t`, `chunk`, `checkpoints_written` and
+  `restart_file` beside the rest) — `uniform_run`, `check_cfl`,
+  `chunk_count`, `tracked_share`, `reduce_to_grid` and `l1_difference`.
+- `src/checkpoint.jl` (added 2026-09-29): `CHECKPOINT_APPLICATION` and
+  `CHECKPOINT_VERSION`, `checkpointing_available`, `checkpoint_filename`,
+  `checkpoint_files`, `latest_checkpoint` (the one export),
+  `rotate_checkpoints!`, `plain_reals` / `from_plain_reals` (reals as
+  limbs where they are not native), `run_recipe` / `check_recipe`,
+  `run_state`, `save_run` / `load_run`, and `check_checkpoint_keywords`.
+  Included *after* `driver.jl`, because `run_recipe`'s signature names a
+  `HydroCase`; `evolve!` reaches it only at run time.
 - `src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
   `fill_entropywave_averages!`, `entropywave_reference`,
   `entropywave_errors`, `entropywave_primitive`, `HydroCase(::EntropyWave)`).
@@ -131,7 +154,11 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `exact_riemann_tests.jl`, `sod_tests.jl`, `interface_tests.jl`,
   `refinement_tests.jl`, `driver_tests.jl`, `sedov_tests.jl`,
   `kelvinhelmholtz_tests.jl`, `type_tests.jl` (every case at `Float64`,
-  `Float32` and `Float32x2`), `device_tests.jl` (every driver against the
+  `Float32` and `Float32x2`), `checkpoint_tests.jl` (restart chains
+  against the uninterrupted run, the rotation, the refusals; the first file
+  to load HDF5, and it tests the refusal without it before it does, and
+  reruns the standalone `test/restart_workload.jl` in a subprocess at the
+  other thread count), `device_tests.jl` (every driver against the
   host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device)
   and `threading_tests.jl`, which reruns the standalone
   `test/thread_workload.jl` in a subprocess at the other thread count.
@@ -170,7 +197,10 @@ the linear resolution ahead of HLLE at full (step 10); every run is
 bit-identical at one and at four threads (step 13); Metal reproduces the
 host `Float32` run bit for bit and an H200 runs a step at about 11× a
 64-core node (step 14); and `Float32` and `Float32x2` rebuild the
-`Float64` meshes and floor counts exactly (step 12).
+`Float64` meshes and floor counts exactly (step 12); and a chain of
+restarts is the uninterrupted run bit for bit, at another thread count too,
+with a durable checkpoint of a 43.7 MB `D = 3` state costing 17 ms
+("Checkpoint and restart, measured", 2026-09-29).
 
 `floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
 says so in its signature, and a signature is evaluated where the method is
@@ -181,11 +211,15 @@ defined.
 One suite, run whole, at every thread count; `CODE.md`'s "Testing" has
 the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
-recording a number. The last recorded timings, after step 12 on this
-machine: **11856 tests in 4 m 26 at one thread and 11890 in 3 m 44 at
-four** — the four-thread count is higher because the ownership check has one
-assertion per block per thread, and about 50 s of either is
-`test/type_tests.jl`, mostly compiling the `Float32x2` paths. **This machine
+recording a number. The last recorded timings, after checkpoint and
+restart was added on 2026-09-29, on this machine: **12030 tests in 4 m 28
+at one thread and 12064 in 3 m 47 at four** (after step 12: 11856 in
+4 m 26 and 11890 in 3 m 44) — the four-thread count is higher because the
+ownership check has one assertion per block per thread, and about 50 s of
+either is `test/type_tests.jl`, mostly compiling the `Float32x2` paths.
+`test/checkpoint_tests.jl` alone, in a fresh process, is 51 s with its
+compilation, 14 s of it the subprocess; inside the suite its cost is not
+separable from the scatter. **This machine
 is shared**: runs taken while something else was on it have come back a
 fifth slower, so a timing is worth comparing only against another taken
 back to back under the same load (the step-by-step history is in `CODE.md`,
@@ -216,7 +250,7 @@ Because it overrides `@inbounds` package-wide it never runs the code the
 package actually ships — so it does not replace a plain run, which is the
 only one that can catch a wrong answer. Run both before recording a
 number. After step 12 the checked run took **5 m 56** with the command as
-written, against 4 m 26 plain.
+written, against 4 m 26 plain; on 2026-09-29, **6 m 12** against 4 m 28.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
@@ -247,7 +281,8 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
 ```
 
 After step 12 the clean tree took **7 m 32** at 1.11 with the command as
-written, against the release's 4 m 26 — so budget for nearly twice the run
+written, against the release's 4 m 26 (on 2026-09-29, **7 m 27** against
+4 m 28, with TreeAMR 0.1.4 and HDF5 0.17.4 resolved from the registry) — so budget for nearly twice the run
 you have just done. 1.11 is also the *cheap* version under coverage, which
 is the opposite way round and is why the instrumented cell is the floor
 cell; see "Things that will bite".
@@ -323,8 +358,11 @@ your own with the device package in it (neither this package nor TreeAMR
 depends on one), and so do the device tests, which are opt-in:
 
 ```bash
-julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats"])'
+julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats", "HDF5"])'
 ```
+
+(`HDF5` since 2026-09-29, for `test/checkpoint_tests.jl`; the device file
+alone, as the Symmetry job runs it, does not need it.)
 
 ```bash
 TREEHYDRO_TEST_BACKEND=metal julia --project=/tmp/thgpu test/runtests.jl
@@ -364,11 +402,13 @@ Carried over from TreeAMR and TreeWave where they apply here, plus what is
 specific to a hydro code. Each is in `CODE.md` with its reason.
 
 - **TreeAMR comes from the registry, not from the local checkout**
-  (amended when TreeAMR 0.1.1 was released, and again at 0.1.3).
+  (amended when TreeAMR 0.1.1 was released, again at 0.1.3, and at 0.1.4).
   `Project.toml` has no `[sources]` entry for it: the compat bound is
-  `TreeAMR = "0.1.3"` and a clean checkout resolves it from General. (A
+  `TreeAMR = "0.1.4"` and a clean checkout resolves it from General. (A
   pin on its `main` came back on 2026-09-23 to see the owner-based
-  threading before its release, and went again once 0.1.3 carried it.)
+  threading before its release, and went again once 0.1.3 carried it.
+  0.1.4, for checkpoint and restart, was used from the registry the day it
+  was registered, with no pin at all.)
   The one `[sources]` entry left is **IMEXRungeKutta's**, which is not
   registered (compat `1.3` since step 12: 1.2's step count had no path for
   a MultiFloat, and the fix was made there, not worked around here); a path-tracked dependency's `[sources]` is honoured, so
@@ -914,6 +954,61 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   times — once at `t = 0` and once per chunk — so zipping the two is a
   frame-shifted plot. Take `t` and the block count from your own observer,
   as `kh_run` does with `ts` and `nbs` and as both viewers do.
+- **A checkpoint is written after the regrid, and never before** (added
+  2026-09-29). There the integrator holds nothing but `(t, u)` and the next
+  chunk begins from `u` alone, so a restart is the uninterrupted run bit for
+  bit. A write moved before the regrid — to "save the state the observer
+  saw", say — would make a restart replay the regrid *and* the post-regrid
+  reset, and the chain test in `test/checkpoint_tests.jl` is what would
+  notice. `u` is what is saved, not `U.work`: the post-regrid reset acts on
+  `u`. The last chunk writes nothing — it has no regrid and is not a restart
+  point.
+- **HDF5 is the caller's to load, and `evolve!` checks it before the
+  cycle** (added 2026-09-29). TreeAMR's `save_checkpoint` and
+  `load_checkpoint` have methods only once `using HDF5` has loaded
+  `TreeAMRHDF5Ext`; this package calls nothing but those and never names an
+  HDF5 type, so **do not add HDF5 to `[deps]`** or as a weak dependency —
+  it is in `test/Project.toml` only. A checkpoint keyword without it throws
+  at the call. The test of that refusal runs only while the extension is
+  *not* loaded, and a package cannot be unloaded, so `checkpoint_tests.jl`
+  must stay the first file to load HDF5: a file above it that loaded HDF5
+  would skip the test silently.
+- **Every parameter that decides a number goes in the recipe, and every
+  accumulator in the run state** (added 2026-09-29). A new `evolve!`
+  keyword that changes the numbers and is not added to `run_recipe` lets a
+  restart with a different value run as though it were the same run; a new
+  returned accumulator not added to `run_state` comes back from a restart
+  counted from the checkpoint rather than from `t = 0`. The chain test
+  compares the fields listed in `CKPT_FIELDS`, so a new returned field goes
+  there too. Only `t_end` may change on a restart, and the case's closures
+  (`initial`, `boundary`, `reference`) cannot be compared at all — they are
+  trusted.
+- **A wall-time stop returns the checkpointed state, not an answer** (added
+  2026-09-29). `finished = false`, `l1 = linf = nothing`, and `U`, `u` and
+  `forest` are the state *after* the last chunk's regrid — which is what was
+  saved — with `U` scattered and its ghosts filled. A caller reading `r.l1`
+  must look at `r.finished` first. The limit is timed from the call and
+  estimates the next chunk as the longest so far plus the longest write, so
+  startup and compilation are the caller's margin below the queue's limit.
+- **Rotation deletes matching files from earlier jobs** (added 2026-09-29).
+  After each successful write, every `"<prefix>.it<digits>.h5"` in the
+  prefix's directory but the file just written and the newest
+  `num_checkpoints_keep − 1` others is removed, whichever job or run wrote
+  it — which is the point in a job chain, and means **two runs must never
+  share a prefix**: each would rotate the other's files away. The pattern is
+  anchored, so `.h5.partial` files and longer prefixes are never touched.
+  The file just written is recognised by its *name*, never by comparing
+  path strings: `run//sedov` lists as `run/sedov`, and the first version,
+  which compared paths, deleted the only checkpoint at
+  `num_checkpoints_keep = 1` (found in review; the rotation testset has the
+  doubled separator for that reason).
+- **The observer's state is not checkpointed** (added 2026-09-29). A
+  restart does not call the observer at `t = 0`, and hands it only the
+  chunks it runs; whatever the observer accumulated in an earlier job is the
+  caller's to keep. `kh_run`, whose McNally diagnostics are exactly such
+  records, forwards no `evolve!` keyword, so it cannot be restarted by
+  accident — do not add checkpoint keywords to it without restoring its
+  `ts`, `Ms`, `Ks` and `nbs` from somewhere.
 - **Measured numbers go into `CODE.md`**, beside the prediction they
   confirm or correct, so a regression shows up as a changed number and
   not as a test that merely still passes. The test that produces one runs
@@ -966,8 +1061,10 @@ Match TreeAMR's, since the three packages are read together:
   and step 7c removed, were the one exception and are gone. `bin/output/`
   is gitignored and the viewers write PNGs there.
 - **There is no TreeAMR pin now and still two Manifests** (amended when
-  TreeAMR 0.1.1 was released, and at 0.1.3). Both environments resolve
-  TreeAMR from the registry at `0.1.3`, so the `rev = "main"` entries are
+  TreeAMR 0.1.1 was released, at 0.1.3, and at 0.1.4). Both environments
+  resolve TreeAMR from the registry — the root at `0.1.4`, `bin/` at a
+  `0.1.3` bound that admits it, left alone because nothing in `bin/`
+  checkpoints — so the `rev = "main"` entries are
   gone; what is left is a compat bound in each `Project.toml`, and
   `bin/` still has its own `Manifest.toml` (gitignored, like the root's),
   so `Pkg.update("TreeAMR")` at the root does not touch it. The viewers

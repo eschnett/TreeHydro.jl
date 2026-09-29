@@ -163,6 +163,36 @@ be passed explicitly:
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
 
+**And a run can outlast a job.** `evolve!` writes checkpoints at chunk
+boundaries, after the regrid, and restarts from them through TreeAMR's
+`save_checkpoint` and `load_checkpoint`; a restarted run, or a chain of
+them, is the uninterrupted run bit for bit at any thread count, and a
+restart with any parameter but `t_end` changed is refused by name. HDF5 is
+TreeAMR's optional dependency and not this package's, so the job script
+loads it. One script serves every job of a chain — the first finds no
+checkpoint and starts from the initial data, and each later one continues
+where the previous one stopped:
+
+```julia
+using HDF5, TreeAMR, TreeHydro
+
+prefix = "run/sedov"                  # files run/sedov.it0000001234.h5
+case = HydroCase(SedovBlast(Float64, Val(3); r₀ = 1 // 8); roots = 4)
+r = evolve!(case, Val(3); N = 8,
+            ops = Operators(family = Conservative, prolongation = 3, restriction = 2),
+            t_end = 1 // 20, chunk = 1 // 600, limiter = :minmod,
+            refine_tol = 2 // 25, coarsen_tol = 1 // 50, maxlevel_cap = 2,
+            checkpoint_path_prefix = prefix,
+            checkpoint_interval_seconds = 3600,      # one an hour
+            max_walltime_seconds = 23.5 * 3600,      # stop inside a 24 h queue
+            restart_file = latest_checkpoint(prefix))
+r.finished || exit(3)                 # the job script resubmits on 3
+```
+
+The last two files are kept (`num_checkpoints_keep`), whichever job wrote
+them. The wall-time limit is timed from the call, so leave room for Julia's
+startup and compilation below the queue's own.
+
 **And there are pictures.** `bin/` holds the viewers, in an environment of
 their own so that CairoMakie is never a dependency of the package. They
 contain no time-stepping loop: every frame and every curve comes through
