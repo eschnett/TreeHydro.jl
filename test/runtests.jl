@@ -62,6 +62,10 @@ using TreeHydro
     # one whose reference is a uniform fine run of this code rather than a
     # closed form — so every part it rests on has been asserted above it.
     include("kelvinhelmholtz_tests.jl")
+    # Reflecting walls after the shear layer, whose half box is the case that
+    # needs them: every claim there is the half box against the full one, so
+    # the full one has been asserted first.
+    include("reflecting_tests.jl")
     # Every case at three float types (step 12): after all of them, because
     # it reruns four of their drivers at `Float32` and `Float32x2` against the
     # `Float64` run and asserts only what survives a change of precision.

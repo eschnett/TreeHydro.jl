@@ -283,6 +283,23 @@ end
     @info "Kelvin–Helmholtz to t = 1/10 at $T on $DEVICE_LABEL: M $(dev.Ms[end]) " *
           "against the host's $(host.Ms[end]), worst relative difference over " *
           "the samples $(maximum(abs.(dev.Ms .- host.Ms) ./ host.Ms))"
+
+    # The same layer in its reflecting half box (added 2026-09-29): the
+    # mirrored faces are filled by TreeAMR's transfer kernel with the parity
+    # factors on the device, and the problem's `P` and fluxes are built there
+    # with their parities after every regrid. The wall's normal momentum is
+    # not conserved — the walls push — so its drift is not asserted.
+    khhalf(backend) = kh_run(T, Val(2); N=8, ops=DEVICE_OPS, chunk=1 // 200,
+                             maxlevel_cap=2, refine_tol=2 // 25,
+                             coarsen_tol=1 // 50, t_end=1 // 10, seed=:mirrored,
+                             half=true, backend=backend)
+    host, dev = khhalf(CPU()), khhalf(DEVICE)
+    @test dev.r.forest.reflecting == ((false, false), (true, true))
+    @test dev.nbs == host.nbs
+    @test dev.r.nsteps == host.r.nsteps
+    @test all(device_close.(dev.Ms, host.Ms, T))
+    @test dev.r.injection == host.r.injection == (zero(T), zero(T), zero(T), zero(T))
+    @test all(v -> dev.r.drift[v] ≤ device_drift_bound(dev.r, v, T), (1, 2, 4))
 end
 
 @testset "The floors fire on the same cells on $DEVICE_LABEL in D = 3 at $T" for T in DEVICE_TYPES

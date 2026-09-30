@@ -119,7 +119,14 @@ needed from TreeAMR before its first milestone are under
   initial state — they are exact for a shock tube or a blast wave until a
   wave reaches the boundary, which the driver checks in advance.
   Reflecting and outflow conditions read the interior and are CPU-only
-  upstream; nothing here needs them.
+  upstream; nothing here needs them. *(Amended 2026-09-29: that was true of
+  TreeAMR's region-form hook and stale about reflection, which TreeAMR has
+  had since 0.1.3 as a **first-class face** and not a hook at all — M10
+  declares it on the forest and the ghost schedule fills it with mirrored
+  copies and a sign per variable, on every backend. This package now wires
+  it through, and the Kelvin–Helmholtz half box uses it; see
+  [Boundaries](#boundaries). Outflow is still CPU-only upstream and still
+  unused.)*
 
 ## Upstream prerequisites
 
@@ -1018,6 +1025,7 @@ in [Measured results](#step-9--the-sedov-blast).
 | empty source-term slot in the divergence kernel | geometric source terms |
 | Löhner indicator on `ρ` and `p` | the same, plus `B` |
 | Dirichlet boundary from the initial state | an analytic exterior |
+| a reflecting face (TreeAMR's M10) with a parity per variable *(added 2026-09-29)* | equatorial, bitant and octant reflection symmetry |
 
 **Not used, on purpose:** the exact Riemann solver as a flux; Roe's
 solver and any characteristic decomposition; operator (Strang) splitting;
@@ -1301,6 +1309,29 @@ What that gives per case:
 | Sod | Dirichlet in `x`, periodic transversally | the `x` states are the initial ones until a wave arrives; transversally the planar solution is translation-invariant, and a Dirichlet boundary set to the *initial* state there would be wrong from the first step |
 | Sedov | Dirichlet (the ambient state) on every face | the ambient gas is uniform and at rest until the shock arrives; this is the case that runs the hook on edges and corners |
 | Kelvin–Helmholtz | periodic in all directions | intrinsic: the shear flow and its `sin(4πx)` seed in `x`, McNally's two-interface setup in `y` |
+| Kelvin–Helmholtz, half box *(added 2026-09-29)* | periodic in `x`, reflecting at `y = 0` and `y = ½` | the mirrored seed makes the full box its own mirror image in both lines, so the lower half between two mirrors is the whole flow at half the cells |
+
+**Reflecting faces (added 2026-09-29).** A face can be a **mirror**: the
+solution beyond it is its own mirror image, with the velocity normal to it
+reversed. This is TreeAMR's M10 and it is **not a boundary hook** — the face
+is declared when the forest is built (`reflecting = ((lo, hi), …)`) and the
+ghost schedule fills it itself, by mirrored copies, restrictions and
+prolongations with a parity factor per variable, in the same transfer
+kernel as every other exchange and so on every backend, edges and corners
+included. The boundary hook never sees such a face, and a case whose every
+non-periodic face reflects needs none. What the package supplies is the
+**parity** of each variable, which TreeAMR refuses to build a field set
+over a reflecting forest without, because it is physics:
+[`state_parity`](@ref) makes slot `1 + d` odd across a face normal to `d`
+and everything else even — the same rule for the conserved state and for
+the primitive set, whose two diagnostic slots (the signal speed and the
+floor flag) are scalars — and [`flux_parity`](@ref) gives a flux component
+the product of its variable's parity and its face normal's. `HydroCase`
+carries the faces as `reflecting`, `evolve!` builds its forest with them,
+and the checkpoint recipe records them. `HydroCase(w::KelvinHelmholtz;
+half = true)` is the case that uses them; see [Kelvin–Helmholtz
+instability](#kelvinhelmholtz-instability) and [Reflecting walls,
+measured](#reflecting-walls-measured).
 
 **Dirichlet from the initial data** is
 `boundary = boundary_by_coordinates(initial_U)`, the `CellBoundary` form,
@@ -1987,6 +2018,23 @@ assumed, and each recorded with its number under "Step 10" below:
   the clock. `M` first *decays* while the ramp sheds the transient, so a
   window opened at `t = 0` would measure that instead.
 
+**The half box (added 2026-09-29).** `KelvinHelmholtz(…; seed =
+:mirrored)` multiplies the seeded mode by `sin(2πy)`: McNally's mode at the
+lower interface, its mirror image at the upper one, and zero on both mirror
+lines. Under it the whole setup is its own mirror image in `y = 0` and `y =
+½` — the profiles of `ρ` and `v_x` always were, and McNally's `v_y = a
+sin(4πx)` was not, being even in a line where a normal velocity must be odd
+— so `HydroCase(w; half = true)` runs the lower half alone, periodic in `x`
+and reflecting at both `y` faces, with the full box's root blocks. The
+envelope is evaluated at the mirror point and negated in the upper half,
+so that the initial data is odd **exactly** and not to roundoff, and
+`mode_amplitude` reads the upper half's `v_y` reversed under this seed, so
+that the two interfaces add rather than cancel and the two boxes report
+one `M`. The half box refuses McNally's seed. It exists for the showcase
+(`showcase/`), a zoom through twenty levels where halving the cells is
+worth having; the claims of this section are all made on the full box
+under McNally's seed, which is unchanged.
+
 A note on what it is *not*: a `Float32` Kelvin–Helmholtz run will not
 reproduce the `Float64` one late in the run. The instability amplifies
 roundoff exponentially, so the two diverge in detail while agreeing in
@@ -2547,7 +2595,7 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` step limiter, the `reset_stage!` stage limiter, and the injection accounting |
 | `src/reconstruction.jl` | the three slopes, face states |
 | `src/riemann.jl` | LLF, HLLE, HLLC fluxes, direction-generic |
-| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `convergence_rate` |
+| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `convergence_rate`, and the parity tables `state_parity` and `flux_parity` for reflecting faces (added 2026-09-29) |
 | `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
@@ -2556,13 +2604,14 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29) |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29); `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box (added 2026-09-29) |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
 | `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
 | `bin/benchmark.jl` | as in TreeWave: the phase table per thread count or device, one tab-separated row per phase, and `--scan=N:roots,…` for a block-size scan in one process; runs against the package environment |
 | `bin/symmetry_cpu.sh`, `bin/symmetry_gpu.sh` | the Symmetry jobs: the block-size and thread scans on one 64-core AMD node, and the scan and the device tests on one H200 |
+| `showcase/` | the Kelvin–Helmholtz zoom movie (added 2026-09-29): an environment of its own, `simulate.jl` (the zoom-window loop, writing one frame file per movie frame), `render.jl` (the movie from the frames), `kh_zoom.jl` (the schedule, the camera, the folding, the window), the configurations and the Symmetry job; see [The zoom showcase](#the-zoom-showcase) |
 
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions` and
 `IMEXRungeKutta`; tests add `MultiFloats` (and the standard library's
@@ -5179,6 +5228,105 @@ resolved from the registry). That is within the machine's scatter of step
 separated from it; run alone in a fresh process, compilation of the tube and
 the blast included, the file takes 51 s, 14 s of it the subprocess.
 
+### Reflecting walls, measured
+
+*(Added 2026-09-29, with [reflecting faces](#boundaries), on TreeAMR
+0.1.4.)* `test/reflecting_tests.jl` makes each claim on every push, on the
+shear layer under the mirrored seed to `t = 1/5` (`N = 8`, four roots, the
+calibrated thresholds, `chunk = 1/200`, HLLC, minmod):
+
+- **The half box is the full box's lower half, to roundoff and not bit for
+  bit, and the reason is the full box.** The step counts, the chunk counts,
+  the mesh (every lower-half block, level and extent) and the block count
+  at every sample are equal exactly — `λ_max` and the indicator's
+  references are maxima, which do not reassociate. The state is not: the
+  worst difference over the four variables is **4.0e-15** on the uniform
+  `32²` mesh after 120 steps and **7.5e-15** on the tracked cap-2 mesh after
+  360, against roundoff bounds `8 eps · nsteps · max|U_v|` of 4.3e-13 and
+  1.3e-12 in the density. The full box's own asymmetry — its lower half
+  against its upper half mirrored — is **3.6e-15** and **6.4e-15**, the same
+  size: the initial data is exactly symmetric (the seed is written to be),
+  but HLLC's star state sums `A + X_L − X_R` in one order at a face and in
+  another at its mirror image, and floating-point addition does not
+  reassociate. So it is the *periodic* box that breaks the symmetry, by a
+  few ulp per step, while the half box's mirrors are exact. `M(t)` agrees to
+  4.2e-17 and 3.9e-16. A parity with a sign in the wrong slot would be an
+  O(1) difference at the walls.
+- **A wall conserves mass, `S_x` and energy** to the roundoff bound of the
+  periodic case, on both meshes, and floors nothing. **`S_y` is not
+  conserved and is not asserted**: the walls push on the gas with their
+  pressures, which differ once the layer moves.
+- **Every field set a run builds carries its parity** — `evolve!`'s `U`,
+  the scratch primitives of the adaptation cycle, the problem's `P` and
+  fluxes, the host copy — and a forest without a reflecting face gets
+  `nothing`, so every other case builds exactly what it built before.
+- **A restart of the half box is the uninterrupted run, bit for bit**, with
+  the walls in the file's forest and in its recipe; a recipe written before
+  the field existed reads as having none (`test/checkpoint_tests.jl`).
+- **On a device**, the half box through `kh_run` builds the host's mesh in
+  the host's steps with `M(t)` at `sqrt(eps)` (`test/device_tests.jl`, the
+  CPU standing in unless a device is named).
+
+**The suite** after this change, on the development machine under other
+load: **12396 tests in 4 m 46 at one thread and 12430 in 4 m 10 at four**,
+**6 m 36** with `--check-bounds=yes`, and **7 m 47** for the clean tree at
+Julia 1.11. The four-thread run overlapped a precompilation of the
+showcase's environment, so it is an upper bound.
+
+### The zoom showcase
+
+*(Added 2026-09-29.)* `showcase/` makes a 1080p movie of the shear layer in
+its reflecting half box, zooming through the refinement levels:
+
+- level `ℓ` is allowed only in a box about the camera, sized for the largest
+  view that needs it;
+- the clock is slowed by the zoom factor, `dt/dτ = V₀/Z`, so pixel speeds
+  stay fixed;
+- the frames are sampled by TreeAMR's `interpolate` and written as files for
+  a separate renderer.
+
+Its loop is a second one on purpose. `evolve!` fixes `chunk` and
+`maxlevel_cap` for a run, and the zoom needs both per chunk. The loop follows
+`evolve!`'s order. `showcase/README.md` has the design, the commands and every
+number.
+
+**The pilot's finding decides what the movie can be.** The coarse pilot ran
+at 128–256 finest cells across the view, levels 3 → 12 over nine doublings,
+on the CPU, in 10–13 min, with no floor hit and exactly zero injection. It
+zoomed into a braid and a vortex core of the `L = 1/160` layer at `t = 1.5`.
+The Löhner criterion stopped asking for levels at **9** on the braid and at
+**7** on the core. Beyond a zoom of about 64 the view is a smooth ramp.
+
+- Under the slowed clock each level gets half the simulated time of the one
+  before: level 9 appears at `t = 2.713`, 0.016 time units before the end.
+- A contact smeared at one resolution does not re-steepen at the next, and
+  strain thins a sheet only at an order-one rate. So no feature thinner than
+  what level 9 resolved ever forms, and the criterion — correctly — refines
+  nothing finer.
+- The argument that makes the slowed clock self-similar is true of a
+  disturbance *growing* on a sheet and false of the sheet *thinning*, and
+  the thinning is what feeds each new level.
+
+On the core, the diffused centre is a smooth extremum where `τ ∝ h²`: the
+factor of 4 per level equals the criterion's 0.08/0.02 hysteresis band, and
+level-8 blocks refine and coarsen on alternate frames.
+
+**On the H200 (2026-09-29).**
+
+- **The uncut run** (512–1024 cells across the view, levels 4 → 16) took
+  24.8 min for 88328 steps. It also stopped creating levels at 9, reached at
+  ×32; beyond that each frame cost 1–9 steps.
+- **The cut run** stops the zoom at level 10, ×64. Its target is a secondary
+  billow picked in the uncut run's frame at `t = 2.5947`: up to then the
+  level windows cover the whole box, so the flow does not depend on the
+  camera. The run took 20.0 min for 92621 steps and up to 9.9M cells. Every
+  level kept pace with the view.
+- Both runs had no floor hit and exactly zero injection.
+
+So the slowed clock carries about **ten levels** of real detail at this
+resolution, and a target that sits in the secondary structure is worth one
+of them.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:
@@ -5243,8 +5391,13 @@ Not planned, listed because they are the obvious next questions:
   nothing at Julia 1.10 where it costs 1.4× at the release ("TreeAMR's
   release and the 1.10 floor"). Neither moves a claim, and each rests on
   one job or one draw.
-- Reflecting boundaries, once the region-form hook has a device form
-  upstream; the 2D Sedov in a quadrant is the case that would want them.
+- ~~Reflecting boundaries, once the region-form hook has a device form
+  upstream; the 2D Sedov in a quadrant is the case that would want them.~~
+  *(Done 2026-09-29, and there was no hook to wait for: TreeAMR's reflecting
+  faces are first-class and run on every backend. The Kelvin–Helmholtz half
+  box uses them; the Sedov quadrant would need only its case — reflecting
+  low faces, the ambient Dirichlet hook on the high ones. See [Reflecting
+  walls, measured](#reflecting-walls-measured).)*
 - The isentropic vortex, a second exact smooth solution in 2D that is
   stationary and would isolate the limiter's clipping from advection.
 - The next package: constrained-transport MHD, which is where the

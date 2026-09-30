@@ -1,0 +1,81 @@
+#!/bin/bash
+# The showcase on one H200: the simulation on the device, then the movie
+# rendered on the node's host cores from the frame files it wrote.
+#
+#     sbatch showcase/symmetry_showcase.sh                         # production, ≤ 24 h
+#     SHOWCASE_CONFIG=showcase/configs/pilot.toml \
+#         sbatch --partition=h200debugq --time=1:00:00 showcase/symmetry_showcase.sh
+#     SHOWCASE_OUT=/mnt/beegfs/…/treehydro-showcase-<job> \
+#         SHOWCASE_RESTART=latest sbatch showcase/symmetry_showcase.sh
+#
+# `SHOWCASE_WALLTIME=0.8` stops with a checkpoint before 0.8 h, for a chain
+# of `h200debugq` jobs each continuing from `SHOWCASE_RESTART=latest`.
+#
+# Submit from a checkout of its own (rsync the tree to a fresh directory,
+# never into one whose jobs are running). The environment is a scratch one
+# with CUDA added, as for `bin/symmetry_gpu.sh`: neither the package nor the
+# showcase's own environment may gain a CUDA dependency. `SHOWCASE_RENDER=0`
+# skips the render; `SHOWCASE_SIM=0` skips the simulation and renders what is
+# in `SHOWCASE_OUT`.
+
+#SBATCH --partition=h200q
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+# Not the default 21 GB per CPU, which the h200 QOS's group memory limit
+# holds pending; the host side needs a few GB.
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:h200:1
+#SBATCH --time=24:00:00
+#SBATCH --job-name=treehydro-showcase
+#SBATCH --output=treehydro-showcase-%j.out
+
+set -euo pipefail
+export PATH="$HOME/.juliaup/bin:$PATH"
+REPO="${TREEHYDRO_REPO:-$PWD}"
+CONFIG="${SHOWCASE_CONFIG:-$REPO/showcase/configs/production.toml}"
+case "$CONFIG" in /*) ;; *) CONFIG="$REPO/$CONFIG" ;; esac
+ENVDIR="${SHOWCASE_ENV:-/mnt/beegfs/eschnetter/claude/treehydro-showcase}"
+OUTDIR="${SHOWCASE_OUT:-/mnt/beegfs/eschnetter/claude/treehydro-showcase-${SLURM_JOB_ID:-local}}"
+RESTART="${SHOWCASE_RESTART:-}"
+# `latest` is the newest checkpoint in the output directory: how a chain of
+# wall-time-limited jobs continues.
+if [ "$RESTART" = latest ]; then
+    RESTART=$(ls -t "$OUTDIR"/checkpoints/*.h5 | head -n 1)
+fi
+mkdir -p "$ENVDIR" "$OUTDIR"
+
+echo "# $(hostname) $(date -Iseconds) config $CONFIG out $OUTDIR"
+nvidia-smi --query-gpu=name,memory.total --format=csv
+julia --version
+julia --project="$ENVDIR" -e "
+    using Pkg
+    # The depot's registry can predate the TreeAMR release this needs.
+    Pkg.Registry.update()
+    Pkg.develop(path = \"$REPO\")
+    for p in (\"CUDA\", \"KernelAbstractions\", \"TreeAMR\", \"HDF5\", \"CairoMakie\")
+        p in keys(Pkg.project().dependencies) || Pkg.add(p)
+    end
+    Pkg.instantiate()
+    Pkg.precompile()
+    using CUDA; CUDA.versioninfo()"
+
+JL=(julia --project="$ENVDIR" -t 16)
+
+if [ "${SHOWCASE_SIM:-1}" != 0 ]; then
+    # The device's memory once a minute beside the frame log, which records
+    # the host's own peak.
+    nvidia-smi --query-gpu=timestamp,memory.used,utilization.gpu --format=csv -l 60 \
+        > "$OUTDIR/gpu.csv" &
+    SMI=$!
+    "${JL[@]}" "$REPO/showcase/simulate.jl" --config="$CONFIG" --out="$OUTDIR" \
+        --backend=cuda ${RESTART:+--restart="$RESTART"} \
+        ${SHOWCASE_WALLTIME:+--walltime-hours="$SHOWCASE_WALLTIME"}
+    kill $SMI || true
+fi
+
+if [ "${SHOWCASE_RENDER:-1}" != 0 ]; then
+    "${JL[@]}" "$REPO/showcase/render.jl" --frames="$OUTDIR" --out="$OUTDIR/kh_zoom.mp4"
+fi
+echo "# done $(date -Iseconds)"
+ls -la "$OUTDIR"

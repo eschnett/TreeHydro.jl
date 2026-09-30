@@ -25,6 +25,73 @@
 # Under `stored = true` — the `con2prim` launch, and nothing else here —
 # the kernel's index *is* the stored index and adds nothing.
 
+# --- parity across a reflecting face -------------------------------------
+
+"""
+    reflects(forest) -> Bool
+
+Whether any face of `forest` is **reflecting** — TreeAMR's M10, declared
+when the forest is built and filled by the ghost schedule itself, mirrored
+copies with a sign per variable, on every backend. It is not a boundary
+hook, and a case with reflecting faces needs none there.
+"""
+reflects(forest::Forest) = any(r -> r[1] || r[2], forest.reflecting)
+
+"""
+    state_parity(forest, nvars) -> Vector{NTuple{D,Parity}} or nothing
+
+The parity of each variable of a **cell-centered** hydro field set under a
+mirror across a face normal to each dimension, or `nothing` on a forest
+with no reflecting face — where TreeAMR asks for none and the field set is
+exactly what it was before (added 2026-09-29).
+
+The conserved state `(ρ, S₁…S_D, E)` and the primitive set `(ρ, v₁…v_D, p,
+λ, hit)` share the rule: slot `1 + d` is the `d` component of a vector and
+changes sign in a mirror normal to `d` (`OddParity`) and in no other, and
+everything else is a scalar — the density, the energy, the pressure, and
+the primitive set's two diagnostic slots, the cell's signal speed
+`max_d(|v_d| + c_s)` and its floor-hit flag, both of which are the same at
+a point and at its mirror image. So one function serves `U` (`nvars = D +
+2`) and `P` (`nvars = D + 4`), and it refuses any other count rather than
+guess what the extra slots are.
+
+This is physics the mesh cannot know, which is why TreeAMR refuses a field
+set over a reflecting forest without it: a variable with no declared
+parity has no value beyond the wall, and the first prolongation that reads
+its ghosts would carry that into the interior. See "Boundaries" in
+`CODE.md`.
+"""
+function state_parity(forest::Forest{D}, nvars::Integer) where {D}
+    reflects(forest) || return nothing
+    nvars in (D + 2, D + 4) || throw(ArgumentError(
+        "a hydro field set holds the $(D + 2) conserved variables or the " *
+        "$(D + 4) primitives and diagnostics, got nvars = $nvars: the parity " *
+        "of an extra slot is physics this function does not know."))
+    return [ntuple(e -> v == 1 + e ? OddParity : EvenParity, D) for v in 1:nvars]
+end
+
+"""
+    flux_parity(forest, d) -> Vector{NTuple{D,Parity}} or nothing
+
+The parity of each component of the flux set in direction `d` — the flux
+of `(ρ, S₁…S_D, E)` through a face normal to `d` — or `nothing` on a forest
+with no reflecting face. A flux is the product of a state variable and the
+face normal, so in a mirror normal to `e` it takes the **product** of the
+two parities: the variable's (odd for `S_e`) and the normal's (odd for `d =
+e`). The mass flux through a face normal to `y` is odd across a wall normal
+to `y`, and the `y` momentum flux through it — `ρ v_y² + p` — is even, as
+the pressure is.
+
+The flux sets carry no ghosts and are never mirrored, but TreeAMR asks
+every field set over a reflecting forest for its parity, and the one given
+is the true one rather than a placeholder.
+"""
+function flux_parity(forest::Forest{D}, d::Integer) where {D}
+    reflects(forest) || return nothing
+    odd(v, e) = (v == 1 + e) ⊻ (d == e)
+    return [ntuple(e -> odd(v, e) ? OddParity : EvenParity, D) for v in 1:(D + 2)]
+end
+
 """
     HydroProblem(U, ops; eos, floors, limiter, riemann = :hlle, fixup = true,
                  boundary = nothing, prims = nothing, fluxes = nothing,
@@ -142,7 +209,8 @@ function HydroProblem(U::FieldSet{T,D}, ops::Operators; eos::EquationOfState,
         "variables in $D dimensions; got nvars=$(U.nvars)."))
 
     P = prims === nothing ?
-        FieldSet{T}(forest, D + 4; G=U.G, centering=U.centering, backend=backend) :
+        FieldSet{T}(forest, D + 4; G=U.G, centering=U.centering,
+                    parity=state_parity(forest, D + 4), backend=backend) :
         prims
     P.forest === forest || throw(ArgumentError(
         "the primitive set must be over the same forest as the conserved " *
@@ -162,7 +230,8 @@ function HydroProblem(U::FieldSet{T,D}, ops::Operators; eos::EquationOfState,
 
     fluxes = fluxes === nothing ?
              ntuple(d -> FieldSet{T}(forest, D + 2; G=0,
-                                     centering=facecentered(D, d), backend=backend),
+                                     centering=facecentered(D, d),
+                                     parity=flux_parity(forest, d), backend=backend),
                     D) : fluxes
     all(f -> all(==(0), f.G), fluxes) || throw(ArgumentError(
         "a flux set carries no ghosts: it is computed over the closed range " *

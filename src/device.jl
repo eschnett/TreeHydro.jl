@@ -76,7 +76,10 @@ function hostcopy(fs::FieldSet{T}) where {T}
     # array — which `hostcopy!` would then reject. `G` has no default at
     # all, which is what turns the first of those mistakes into an error
     # message instead of a wrong answer.
-    host = FieldSet{T}(fs.forest, fs.nvars; G=fs.G, centering=fs.centering)
+    # The parity too, which a field set over a reflecting forest cannot be
+    # built without (TreeAMR's M10), and which is `nothing` everywhere else.
+    host = FieldSet{T}(fs.forest, fs.nvars; G=fs.G, centering=fs.centering,
+                       parity=fs.parity)
     return hostcopy!(host, fs)
 end
 
