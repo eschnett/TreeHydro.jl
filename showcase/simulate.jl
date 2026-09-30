@@ -409,6 +409,8 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
     # The regrid after a frame is the next frame's cost: it prepares the
     # mesh that frame is computed on, so it is logged there.
     tregrid_carry = 0.0
+    ck_minutes = Float64(cfg["run"]["checkpoint_minutes"])
+    last_ck = time()
     tracking = cam["track"] === true
     stagnation = cam["track"] == "stagnation"
     gain = Float64(cam["stagnation_gain"])
@@ -512,9 +514,22 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
 
         frame_max = max(frame_max, time() - tframe)
         levelup = nxt.ℓ_view > fr.ℓ_view && cfg["run"]["checkpoint_levels"] === true
+        periodic = ck_minutes > 0 && time() - last_ck ≥ 60 * ck_minutes
         stopping = k == stop_after ||
                    (walltime > 0 && time() - wall0 + 3 * frame_max > walltime)
-        (levelup || stopping) && checkpoint(k, stopping ? "stop" : "level$(nxt.ℓ_view)")
+        if levelup || stopping
+            checkpoint(k, stopping ? "stop" : "level$(nxt.ℓ_view)")
+            last_ck = time()
+        elseif periodic
+            checkpoint(k, "periodic")
+            last_ck = time()
+            # The newest two periodic files; the per-level ones are all kept.
+            old = sort(filter(f -> startswith(f, "periodic_f"),
+                              readdir(joinpath(out, "checkpoints"))))
+            for f in old[1:(end - min(2, length(old)))]
+                rm(joinpath(out, "checkpoints", f))
+            end
+        end
         if stopping
             @info "stopped after frame $k at t = $(fr.t): restart with --restart"
             return nothing

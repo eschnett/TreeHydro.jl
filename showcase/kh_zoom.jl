@@ -91,6 +91,10 @@ const SHOWCASE_DEFAULTS = Dict{String,Any}(
     "run" => Dict{String,Any}(
         "checkpoint_levels" => true,  # a checkpoint at every new finest level
         "walltime_hours" => 0.0,      # 0 is no limit
+        # A checkpoint this often besides the per-level ones, the newest two
+        # kept: on the pre-emptible queue a requeued job resumes from the
+        # newest, so this bounds what a preemption costs. 0 is none.
+        "checkpoint_minutes" => 10.0,
     ),
 )
 
