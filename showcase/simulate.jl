@@ -418,6 +418,20 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
     target = Tuple(Float64.(cam["target"]))
     drift = Tuple(Float64.(cam["drift"]))
     t_target = Float64(cam["target_time"])
+    # A restart in the zoom from before `target_time` re-aims the camera: the
+    # anchor glides in a straight line from where the checkpoint left it to
+    # `target` by `target_time`, whatever `drift` says, so the frames before
+    # the restart and after it join without a jump. That is how a target is
+    # picked from a run's own frames once the zoom has started — valid while
+    # the mesh up to `target_time` has not depended on the camera.
+    if k0 > 0 && frames[k0 + 1].phase !== :intro && t_target > frames[k0 + 1].t
+        tk = frames[k0 + 1].t
+        drift = ((target[1] - P[1]) / (t_target - tk), (target[2] - P[2]) / (t_target - tk))
+        vP = drift
+        Δt_next = frames[k0 + 2].t - tk
+        Ppred = (P[1] + Δt_next * vP[1], P[2] + Δt_next * vP[2])
+        @info "re-aimed from $P at t = $tk to $target at t = $t_target (drift $drift)"
+    end
 
     for k in (k0 + 1):sched.ksim
         tframe = time()

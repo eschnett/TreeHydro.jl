@@ -8,7 +8,8 @@
 #     SHOWCASE_OUT=/mnt/beegfs/…/treehydro-showcase-<job> \
 #         SHOWCASE_RESTART=latest sbatch showcase/symmetry_showcase.sh
 #
-# `SHOWCASE_WALLTIME=0.8` stops with a checkpoint before 0.8 h. Use the debug
+# `SHOWCASE_WALLTIME=0.8` stops with a checkpoint before 0.8 h, and
+# `SHOWCASE_STOP_AFTER=K` after frame K (a stage whose frames choose a target). Use the debug
 # queue once, to get started, and never as a chain: a run continuing from a
 # checkpoint goes to `h200q`. `h200preq` runs on the debug nodes when they are
 # idle and requeues a preempted job, which with `SHOWCASE_RESTART=latest`
@@ -77,7 +78,8 @@ if [ "${SHOWCASE_SIM:-1}" != 0 ]; then
     SMI=$!
     "${JL[@]}" "$REPO/showcase/simulate.jl" --config="$CONFIG" --out="$OUTDIR" \
         --backend=cuda ${RESTART:+--restart="$RESTART"} \
-        ${SHOWCASE_WALLTIME:+--walltime-hours="$SHOWCASE_WALLTIME"}
+        ${SHOWCASE_WALLTIME:+--walltime-hours="$SHOWCASE_WALLTIME"} \
+        ${SHOWCASE_STOP_AFTER:+--stop-after="$SHOWCASE_STOP_AFTER"}
     kill $SMI || true
 fi
 
