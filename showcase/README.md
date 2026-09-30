@@ -195,6 +195,17 @@ running.
 sbatch showcase/symmetry_showcase.sh
 ```
 
+**Queues.**
+
+- **`h200debugq`** is for getting started, once. Never chain jobs there.
+- **`h200q`** is for a run that continues from a checkpoint.
+- **`h200preq`** runs on the debug-reserved nodes when they are idle. A debug
+  job can preempt it, and a preempted job is requeued, so submit it with
+  `SHOWCASE_RESTART=latest`: the requeued job then continues from its newest
+  checkpoint, or starts fresh if there is none yet.
+- **Memory.** The script requests 64 GB of host memory. The default is 21 GB
+  per CPU, 341 GB in all, which the group's memory limit holds pending.
+
 It builds a scratch environment with CUDA under
 `/mnt/beegfs/eschnetter/claude/treehydro-showcase`, runs the simulation on the
 device, renders on the node's 16 host cores, and leaves everything in
