@@ -168,6 +168,25 @@ moves at `drift` onto it; after it, the gas carries the anchor. A point can
 therefore be picked in a frame from deep in an earlier run, as long as the
 mesh up to that time did not depend on the camera.
 
+**The strain-matched zoom** (option 1; `configs/pilot_strain.toml`). The
+slowed clock gives each new level half the simulated time of the one before,
+but the sheet thins by strain, at a fixed rate. The braid's strain was
+measured on the first pilot's checkpoints at σ ≈ 4, with eigenvalues ±3.6 to
+±4.1 from t = 1.5 to 2.73. So option 1 changes three things:
+
+- **The clock.** `movie.clock_exponent = 0` stops the clock slowing with the
+  zoom, and `movie.V_zoom = ln 2 / (σ T_level)` makes one doubling of the
+  zoom last as long as the strain takes to halve a sheet.
+- **The camera.** `camera.track = "stagnation"` re-finds the braid's
+  stagnation point near the anchor every frame. A tracer leaves a hyperbolic
+  point exponentially, as fast as the zoom closes in.
+- **The regrid margin.** The steps per frame now grow with the zoom, so
+  `scheme.buffer_speed = 0.75` makes the margin cover the gas speed, which is
+  what carries the contacts, instead of the sound speed.
+
+The price is that the steps grow with the zoom: the deepest doubling costs as
+much as all the others together.
+
 **Production** is one H200 job on Symmetry. Submit it from a checkout of its
 own: rsync the tree to a fresh directory, never into one whose jobs are
 running.
@@ -199,6 +218,9 @@ render-only rerun.
 | `camera.target` | a vortex core | the pilot's braid point | the anchor when the zoom starts, or the guess for `target_mode` |
 | `camera.target_mode` | fixed | braid | `braid` (pressure maximum on ρ ≈ 1.5) or `core` (pressure minimum) nearest the guess, found at the zoom start |
 | `camera.lock_gain` | 0 | 0 | a pull toward the density gradients near the anchor |
+| `camera.track` | true | true | `true` (a tracer), `false`, or `"stagnation"` |
+| `movie.clock_exponent`, `V_zoom` | 1, V0 | 1, V0 | the clock during the zoom, `dt/dτ = V · 2^(−α ζ)` |
+| `scheme.buffer_speed` | `"signal"` | `"signal"` | the speed the regrid margin covers |
 
 The renderer's options are in its header: `--colormap=` (default `lipari`),
 `--mesh=zoomout|always|none`, `--title=`, `--still=K`, `--from=`/`--to=`,

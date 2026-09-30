@@ -96,7 +96,7 @@ billow's centre. Searched on a 256² grid over ±0.1 about the guess, in the
 guess's own image of the reconstructed plane, so the anchor does not jump to
 another periodic copy.
 """
-function find_target(Pfs, guess, mode, backend; halfwidth=0.1, n=256)
+function find_target(Pfs, guess, mode, backend; halfwidth=0.1, n=256, missing_ok=false)
     host, dev = pointbuffers(n * n, backend)
     xs = [guess[1] + ((i - 0.5) / n - 0.5) * 2halfwidth for i in 1:n]
     ys = [guess[2] + ((j - 0.5) / n - 0.5) * 2halfwidth for j in 1:n]
@@ -115,7 +115,8 @@ function find_target(Pfs, guess, mode, backend; halfwidth=0.1, n=256)
             p > best && ((best, at) = (p, (xs[i], ys[j])))
         end
     end
-    isfinite(best) || error("find_target: no $mode point within $halfwidth of $guess")
+    isfinite(best) || (missing_ok ? (return nothing) :
+                       error("find_target: no $mode point within $halfwidth of $guess"))
     return at
 end
 
@@ -247,6 +248,10 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
     N = Int(mesh["N"])
     cfl = T(ratio(sc["cfl"]))
     headroom = T(ratio(sc["headroom"]))
+    # The speed the regrid margin covers: the fastest signal, or a feature
+    # speed from the configuration.
+    buffer_speed = sc["buffer_speed"] == "signal" ? nothing : Float64(sc["buffer_speed"])
+    bspeed(λ) = buffer_speed === nothing ? λ : buffer_speed
     refine_tol, coarsen_tol = ratio(sc["refine_tol"]), ratio(sc["coarsen_tol"])
     limiter, riemann = Symbol(sc["limiter"]), Symbol(sc["riemann"])
     ops = Operators(family=Conservative, prolongation=Int(sc["prolongation"]),
@@ -273,7 +278,7 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
 
     # How many chunks a frame interval is split into, so that the travel
     # margin stays within half a block at the view's level.
-    nsub_for(fr, λ, Δt) = max(1, ceil(Int, headroom * λ * Δt /
+    nsub_for(fr, λ, Δt) = max(1, ceil(Int, headroom * bspeed(λ) * Δt /
                                            (spacing_at(fr.ℓ_view, g) * (N ÷ 2 - 1))))
 
     newproblem(U; prims=nothing, fluxes=nothing) =
@@ -295,7 +300,7 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
                                              maxlevel_cap=g.ℓ_floor),
                                  fs.forest, floorcap)
         buffer0 = refinement_buffer(forest, g.ℓ_floor,
-                                    headroom * λ0 * Δt1 / nsub_for(frames[2], λ0, Δt1))
+                                    headroom * bspeed(λ0) * Δt1 / nsub_for(frames[2], λ0, Δt1))
         _, passes, converged = adapt_to_initial_data!(U, ops; initial=initial_U,
                                                       flags=criterion, buffer=buffer0,
                                                       maxpasses=g.ℓ_floor + 3)
@@ -362,7 +367,7 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
         flags = windowed(hydro_flags(p; refine_tol=refine_tol, coarsen_tol=coarsen_tol,
                                      maxlevel_cap=ℓv),
                          forest, ext -> block_cap(ext, C, ℓv, g))
-        bufferwidth = refinement_buffer(forest, ℓv, headroom * λ * Δt)
+        bufferwidth = refinement_buffer(forest, ℓv, headroom * bspeed(λ) * Δt)
         pairs = (U => p.schedule, p.P => nothing, ntuple(d -> p.fluxes[d] => nothing, 2)...)
         if regrid!(forest, pairs; flags=flags, buffer=bufferwidth, boundary=nothing)
             nregrids += 1
@@ -405,6 +410,8 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
     # mesh that frame is computed on, so it is logged there.
     tregrid_carry = 0.0
     tracking = cam["track"] === true
+    stagnation = cam["track"] == "stagnation"
+    gain = Float64(cam["stagnation_gain"])
     lock_gain = Float64(cam["lock_gain"])
     target = Tuple(Float64.(cam["target"]))
     drift = Tuple(Float64.(cam["drift"]))
@@ -456,6 +463,18 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
         if fr.t < t_target
             P = (target[1] + drift[1] * (fr.t - t_target),
                  target[2] + drift[2] * (fr.t - t_target))
+        elseif active && stagnation
+            # The braid's stagnation point near the anchor, searched over most of
+            # the view (at least a few cells of the view's level), approached a
+            # fraction of the way per frame so the camera glides.
+            Wy = view_size(fr, g)[2]
+            found = find_target(p.P, Ppred, "braid", backend; halfwidth=0.6 * Wy,
+                                missing_ok=true)
+            Pold = P
+            target_now = found === nothing ? Ppred : found
+            P = (Ppred[1] + gain * (target_now[1] - Ppred[1]),
+                 Ppred[2] + gain * (target_now[2] - Ppred[2]))
+            vP = ((P[1] - Pold[1]) / Δt, (P[2] - Pold[2]) / Δt)
         elseif active && tracking
             vpred = velocity_at(p.P, Ppred, backend)
             P = (P[1] + Δt / 2 * (vP[1] + vpred[1]), P[2] + Δt / 2 * (vP[2] + vpred[2]))
@@ -473,8 +492,9 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
             @info "zoom target ($(cam["target_mode"])) at t = $(fr.t): $P"
         end
         vP = nxt.t ≤ t_target ? drift :
-             (active || nxt.phase === :zoom) && tracking ? velocity_at(p.P, P, backend) :
-             (0.0, 0.0)
+             stagnation && active ? vP :
+             (active || nxt.phase === :zoom) && (tracking || stagnation) ?
+             velocity_at(p.P, P, backend) : (0.0, 0.0)
         Δt_next = nxt.t - fr.t
         Ppred = (P[1] + Δt_next * vP[1], P[2] + Δt_next * vP[2])
         t2 = time()

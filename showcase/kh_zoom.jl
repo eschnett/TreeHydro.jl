@@ -33,6 +33,12 @@ const SHOWCASE_DEFAULTS = Dict{String,Any}(
         "prolongation" => 3,
         "refine_tol" => "2/25",
         "coarsen_tol" => "1/50",
+        # The speed the regrid margin covers: "signal" is TreeHydro's own,
+        # headroom · λ; a number is a feature speed — on this subsonic flow the
+        # features are contacts carried with the gas, at |v| ≤ ¾, four times
+        # slower than λ, and a zoom whose steps grow with the zoom cannot
+        # afford to regrid for sound waves that refine nothing.
+        "buffer_speed" => "signal",
     ),
     "mesh" => Dict{String,Any}(
         "roots" => 2,           # root blocks along x; the half box has (roots, roots/2)
@@ -47,6 +53,13 @@ const SHOWCASE_DEFAULTS = Dict{String,Any}(
         "supersample" => 1,     # s×s samples per pixel, box-averaged
         "fps" => 30,
         "V0" => 0.15,           # simulated time per movie second at zoom 1
+        # The clock during the zoom: dt/dτ = V · 2^(−α ζ), with V easing from
+        # V0 to V_zoom over the ease-in. α = 1 is the slowed clock (feature
+        # speed per pixel constant); α = 0 with V_zoom = ln 2 / (σ T_level) is
+        # the strain-matched zoom — one doubling per halving of a sheet under
+        # strain σ. V_zoom < 0 means V0.
+        "clock_exponent" => 1.0,
+        "V_zoom" => -1.0,
         "intro" => 10.0,        # movie seconds at zoom 1 before the zoom starts
         "T_level" => 5.0,       # movie seconds per zoom doubling
         "ease" => 2.0,          # movie seconds of ease-in and of ease-out
@@ -68,7 +81,10 @@ const SHOWCASE_DEFAULTS = Dict{String,Any}(
                                      # target picked at a later time is reached by
                                      # moving with it, and tracked with the gas after
         "glide" => 3.0,         # doublings over which the anchor glides to the centre
-        "track" => true,        # advect the anchor with the gas
+        "track" => true,        # advect the anchor with the gas; or "stagnation":
+                                # re-find the braid's stagnation point near the
+                                # anchor every frame, which a tracer cannot hold
+        "stagnation_gain" => 0.3,    # the fraction of the way to it per frame
         "lock_gain" => 0.0,     # pull per frame toward the |∇ρ|² centroid near the anchor
         "lock_radius" => 0.15,  # in view heights
     ),
@@ -211,6 +227,8 @@ function Schedule(cfg, g::Geometry)
     T, E = Float64(mv["T_level"]), Float64(mv["ease"])
     To, Eo = Float64(mv["T_out"]), Float64(mv["ease_out"])
     V0 = Float64(mv["V0"])
+    Vz = Float64(mv["V_zoom"]) < 0 ? V0 : Float64(mv["V_zoom"])
+    α = Float64(mv["clock_exponent"])
     τ1 = Float64(mv["intro"])
     τ2 = τ1 + L * T + E
     τ3 = τ2 + Float64(mv["hold"])
@@ -226,8 +244,9 @@ function Schedule(cfg, g::Geometry)
     phase_at(τ) = τ < τ1 ? :intro : τ < τ2 ? :zoom : τ < τ3 ? :hold :
                   τ < τ4 ? :out : :final
     # The simulated time by composite Simpson over each frame interval — the
-    # rate `V₀ 2^{−ζ}` is smooth there — frozen once the hold ends.
-    rate(τ) = V0 * 2.0^(-ζ_at(τ))
+    # rate `V 2^{−α ζ}` is smooth there — frozen once the hold ends.
+    Vat(τ) = V0 + (Vz - V0) * smoothstep((τ - τ1) / max(E, 1e-9))
+    rate(τ) = Vat(τ) * 2.0^(-α * ζ_at(τ))
     nframes = floor(Int, τ5 * fps) + 1
     frames = Frame[]
     t = 0.0
