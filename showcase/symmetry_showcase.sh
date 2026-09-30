@@ -35,7 +35,9 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --time=24:00:00
 #SBATCH --job-name=treehydro-showcase
-#SBATCH --output=treehydro-showcase-%j.out
+# The job log on scratch, like everything a job writes: the home directory
+# has a quota that a job log filling it would break for every other job.
+#SBATCH --output=/mnt/beegfs/eschnetter/claude/treehydro-showcase-%j.out
 
 set -euo pipefail
 export PATH="$HOME/.juliaup/bin:$PATH"
