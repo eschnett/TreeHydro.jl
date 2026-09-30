@@ -357,6 +357,25 @@ flow — and the point — are the same in any run.
   what `run.checkpoint_minutes` (every 10 min, the newest two kept) now
   bounds.
 
+**The strain-matched billow zoom, 2026-09-30** (`configs/production_strain*.toml`,
+Symmetry, one H200 per job, all in
+`/mnt/beegfs/eschnetter/claude/treehydro-showcase-strainprod`):
+
+- **Stage A** (job 566175, `h200debugq`, under 5 min): the intro to t = 2.1
+  and the zoom to ×4.
+- **Stage B** (job 566190, `h200q`): restarted from the ×2 checkpoint,
+  re-aimed at the secondary billow in stage A's frame 640, which the camera
+  reached exactly (0.5737, 0.2843). Every level kept pace to level 10 at ×65.
+  But the camera rode the billow's centre, and by ×64 that centre had mixed
+  into a smooth blob. The job was cancelled at ×67 after 48 min, 1180 steps
+  a frame and 9.6M cells.
+- **The cut** (job 566206, `h200q`, 51 min including the render): restarted
+  from B's ×16 checkpoint with `max_level = 9`, so the zoom eases to ×32 and
+  holds there. The movie is 1553 frames and 46 MB.
+- **What it shows:** crisp spirals at ×8, stretched sheets around a smooth
+  core at ×32. At ×27 in the zoom-out there are fresh tertiary spirals beside
+  the billow: the next target, if the zoom goes deeper.
+
 On the core, the diffused centre is smooth, and the criterion's hysteresis
 band (0.08 against 0.02, a factor of 4) equals the `h²` scaling of `τ` at a
 smooth extremum. So level-8 blocks there refine and coarsen on alternate
