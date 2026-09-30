@@ -464,17 +464,24 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
             P = (target[1] + drift[1] * (fr.t - t_target),
                  target[2] + drift[2] * (fr.t - t_target))
         elseif active && stagnation
-            # The braid's stagnation point near the anchor, searched over most of
-            # the view (at least a few cells of the view's level), approached a
-            # fraction of the way per frame so the camera glides.
+            # The braid's stagnation point: predicted with the gas velocity there
+            # (a stagnation point of the pattern moves with the gas at it), then
+            # corrected toward the pressure maximum on the contact near the
+            # prediction. The search covers a quarter of the view, and no more
+            # than 0.02 of the box, so that it cannot hop to another braid; the
+            # correction is a fraction `gain` of the way and at most 1% of the
+            # view per frame, so that the camera glides.
             Wy = view_size(fr, g)[2]
-            found = find_target(p.P, Ppred, "braid", backend; halfwidth=0.6 * Wy,
-                                missing_ok=true)
-            Pold = P
-            target_now = found === nothing ? Ppred : found
-            P = (Ppred[1] + gain * (target_now[1] - Ppred[1]),
-                 Ppred[2] + gain * (target_now[2] - Ppred[2]))
-            vP = ((P[1] - Pold[1]) / Δt, (P[2] - Pold[2]) / Δt)
+            found = find_target(p.P, Ppred, "braid", backend;
+                                halfwidth=min(Wy / 4, 0.02), missing_ok=true)
+            if found !== nothing
+                d = (gain * (found[1] - Ppred[1]), gain * (found[2] - Ppred[2]))
+                s = hypot(d...)
+                s > 0.01 * Wy && (d = d .* (0.01 * Wy / s))
+                P = (Ppred[1] + d[1], Ppred[2] + d[2])
+            else
+                P = Ppred
+            end
         elseif active && tracking
             vpred = velocity_at(p.P, Ppred, backend)
             P = (P[1] + Δt / 2 * (vP[1] + vpred[1]), P[2] + Δt / 2 * (vP[2] + vpred[2]))
@@ -492,7 +499,6 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
             @info "zoom target ($(cam["target_mode"])) at t = $(fr.t): $P"
         end
         vP = nxt.t ≤ t_target ? drift :
-             stagnation && active ? vP :
              (active || nxt.phase === :zoom) && (tracking || stagnation) ?
              velocity_at(p.P, P, backend) : (0.0, 0.0)
         Δt_next = nxt.t - fr.t
