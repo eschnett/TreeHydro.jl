@@ -337,6 +337,26 @@ flow — and the point — are the same in any run.
 - Aimed at a secondary billow, the flow carries one level more detail than
   the smooth blob edge did.
 
+**The strain-matched pilot, 2026-09-30** (Symmetry job 566127, one H200 on
+`h200preq`, `configs/pilot_strain.toml`):
+
+- 128–256 cells across a 960×540 view, levels 2 → 11 over nine doublings,
+  t from 1.5 to 3.40 during the zoom.
+- 691182 steps, 3046 mesh changes, up to 1.63M cells, with no floor hit and
+  exactly zero injection. The render took 73 s.
+- **Every level kept pace with the view to the end, at ×512** — against ×32
+  under the slowed clock at the same resolution. The sheet stays a crisp
+  contact at every zoom.
+- **But at the stagnation point there is one stretched contact and little
+  else.** For most of the zoom the view is a straight line, curving only in
+  the last doubling. The zoom-out shows the braid's many layers.
+- **Cost.** The steps grow as `2^ℓ`: the last doubling took about half of
+  them, at 1200–2400 steps a frame.
+- **Preemption.** The job was preempted and requeued three times during the
+  level-11 hold. Each time it resumed from the level checkpoint, which is
+  what `run.checkpoint_minutes` (every 10 min, the newest two kept) now
+  bounds.
+
 On the core, the diffused centre is smooth, and the criterion's hysteresis
 band (0.08 against 0.02, a factor of 4) equals the `h²` scaling of `τ` at a
 smooth extremum. So level-8 blocks there refine and coarsen on alternate
