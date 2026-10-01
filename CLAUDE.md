@@ -51,6 +51,16 @@ did the same that day): the checkpoint is written *before* the regrid, a
 restart regrids first through the loop's own `regrid_chunk!`, and so may
 change the regridding criterion, which it reports.
 
+**Added since, also on 2026-09-29: reflecting walls and the zoom
+showcase.** TreeAMR's reflecting faces (M10, first-class, on every backend —
+not a hook) are wired through: `HydroCase` carries `reflecting`, every
+field set a run builds carries a parity, and `HydroCase(w::KelvinHelmholtz;
+half = true)` runs the shear layer's lower half between two mirrors under
+the `:mirrored` seed. `showcase/` uses it for 1080p movies that zoom
+through the refinement levels — to ×256 and level 12 at best, with the
+strain-matched clock; see "Reflecting faces" under "Boundaries"
+and "The zoom showcase" in `CODE.md`, and `showcase/README.md`.
+
 How the milestones map onto the steps, for reading `CODE.md`'s history: H0
 was step 0; H1 steps 1–4; H2 step 5; H3 steps 6 and 7; H4 steps 8 and 9; H5
 steps 10 and 11; and H6 steps 13, 14 and 12, in that order, taken together
@@ -97,8 +107,10 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `max_signal_speed`, `floor_hits`, `ghost_floor_hits` (the package's one
   launch of its own, through `TreeAMR.launch_by_owner!`), `hydro_dt`,
   `conserved_totals` (field-set and state-vector forms),
-  `conserved_scales`, `check_reset`, `forest_levels` and
-  `convergence_rate`.
+  `conserved_scales`, `check_reset`, `forest_levels`,
+  `convergence_rate`, and the parity tables `reflects`, `state_parity` and
+  `flux_parity` (added 2026-09-29) that every field set over a reflecting
+  forest is built with.
 - `src/stepping.jl`: `state_partition`, `hydro_integrator` (IMEXRungeKutta's
   `SSPRK33`, stage arithmetic by block owner, the reset in both hooks) and
   `hydro_solve!`.
@@ -153,7 +165,9 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   order read once per chunk through the observer), `growth_rate`, and the
   two measurement drivers `kh_run` and `kh_uniform`, which install that
   observer and are the only place either diagnostic can be taken; `kh_run`
-  passes an `observer` of the caller's through after its own).
+  passes an `observer` of the caller's through after its own). Since
+  2026-09-29 also `seed = :mcnally | :mirrored` and `HydroCase(w; half =
+  true)`, the reflecting half box, which refuses McNally's seed.
 - `src/benchmark.jl` (`benchmark_phases`, `benchmark_driver`).
 - Tests, **one suite run whole**, included by `test/runtests.jl` in the
   dependency order: `precision_tests.jl`, `prerequisite_tests.jl`,
@@ -161,7 +175,9 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `reset_tests.jl`, `stepping_tests.jl`, `entropywave_tests.jl`,
   `exact_riemann_tests.jl`, `sod_tests.jl`, `interface_tests.jl`,
   `refinement_tests.jl`, `driver_tests.jl`, `sedov_tests.jl`,
-  `kelvinhelmholtz_tests.jl`, `type_tests.jl` (every case at `Float64`,
+  `kelvinhelmholtz_tests.jl`, `reflecting_tests.jl` (the parity tables,
+  and the half box against the full box — to roundoff, not bit for bit,
+  and why), `type_tests.jl` (every case at `Float64`,
   `Float32` and `Float32x2`), `checkpoint_tests.jl` (restart chains
   against the uninterrupted run, a restart with a changed criterion, a
   finished run continued, the rotation, the refusals; the first file
@@ -184,6 +200,16 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   scatter against the similarity profile; `--movie`; `--cap=` and
   `--chunk=`), `benchmark.jl`, and the two Symmetry jobs
   `symmetry_cpu.sh` and `symmetry_gpu.sh`.
+- `showcase/` (added 2026-09-29): the Kelvin–Helmholtz zoom movie, in an
+  environment of its own like `bin/`'s (`Project.toml` with CairoMakie and
+  HDF5 and a `[sources]` entry for TreeHydro). `kh_zoom.jl` (the
+  configuration, `Geometry`, `Schedule`, `camera_centre`, `fold`, the
+  interval folds and `block_cap` — pure, shared by both scripts),
+  `simulate.jl` (the zoom-window loop, `evolve!`'s order from TreeHydro's
+  pieces, one HDF5 frame file per movie frame, a checkpoint per new level),
+  `render.jl` (the movie from the frame files, CairoMakie, no mesh),
+  `configs/` (`smoke`, `pilot`, `production`), `symmetry_showcase.sh` and
+  `README.md`. `showcase/output/` is gitignored.
 - One workflow with two jobs, `CI.yml`'s `test` and `viewer`, and a
   `README.md`.
 
@@ -222,10 +248,10 @@ the discipline and the measurement behind it. Every claim in "Measured
 results" comes from a test that runs here, so this is what to run before
 recording a number. The last recorded timings, after checkpoint and
 restart was added on 2026-09-29, on this machine: **12030 tests in 4 m 28
-at one thread and 12064 in 3 m 47 at four** (after step 12: 11856 in
-4 m 26 and 11890 in 3 m 44; on 2026-10-01, with the checkpoint moved
-before the regrid, 12084 in 5 m 02 and 12118 in 4 m 34 on a busier draw of
-the machine) — the four-thread count is higher because the
+at one thread and 12064 in 3 m 47 at four** (after reflecting walls, the same day and under load: 12396 in 4 m 46 and 12430 in 4 m 10, 6 m 36 checked, 7 m 47 at 1.11; after step 12: 11856 in
+4 m 26 and 11890 in 3 m 44; on 2026-10-01, with the walls and the checkpoint
+moved before the regrid: 12447 in 5 m 01 and 12481 in 4 m 28) — the
+four-thread count is higher because the
 ownership check has one assertion per block per thread, and about 50 s of
 either is `test/type_tests.jl`, mostly compiling the `Float32x2` paths.
 `test/checkpoint_tests.jl` alone, in a fresh process, is 51 s with its
@@ -262,7 +288,7 @@ package actually ships — so it does not replace a plain run, which is the
 only one that can catch a wrong answer. Run both before recording a
 number. After step 12 the checked run took **5 m 56** with the command as
 written, against 4 m 26 plain; on 2026-09-29, **6 m 12** against 4 m 28;
-on 2026-10-01, **6 m 28** against 5 m 02.
+on 2026-10-01, **6 m 33** against 5 m 01.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
@@ -295,7 +321,7 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
 After step 12 the clean tree took **7 m 32** at 1.11 with the command as
 written, against the release's 4 m 26 (on 2026-09-29, **7 m 27** against
 4 m 28, with TreeAMR 0.1.4 and HDF5 0.17.4 resolved from the registry;
-on 2026-10-01, **7 m 35** against 5 m 02) — so budget for nearly twice the run
+on 2026-10-01, **7 m 45** against 5 m 01) — so budget for nearly twice the run
 you have just done. 1.11 is also the *cheap* version under coverage, which
 is the opposite way round and is why the instrumented cell is the floor
 cell; see "Things that will bite".
@@ -408,6 +434,32 @@ Each builds a scratch environment under
 `/mnt/beegfs/eschnetter/claude/treehydro-{cpu,gpu}` that `develop`s the
 checkout (`TREEHYDRO_CPU_ENV`, `TREEHYDRO_GPU_ENV` override it) and writes
 its TSVs to `/mnt/beegfs/eschnetter/claude/treehydro-bench-$SLURM_JOB_ID`.
+
+The zoom showcase (added 2026-09-29), in its own environment, simulation
+and rendering as two separate steps; `showcase/README.md` has the knobs and
+the measured costs. The smoke configuration is a quarter of a minute and
+the renderer a few seconds more:
+
+```bash
+julia --project=showcase -e 'using Pkg; Pkg.instantiate()'
+```
+
+```bash
+julia -t 4 --project=showcase showcase/simulate.jl --config=showcase/configs/smoke.toml --out=showcase/output/smoke
+```
+
+```bash
+julia --project=showcase showcase/render.jl --frames=showcase/output/smoke
+```
+
+`--still=K` renders one frame as a PNG, and `--stop-after=K` /
+`--restart=FILE` on the simulation are how a zoom target is chosen: run
+the intro, look at its last frame, put the target in the configuration and
+restart from the intro's checkpoint. The production run is one H200 job:
+
+```bash
+sbatch showcase/symmetry_showcase.sh
+```
 
 ## Things that will bite
 
@@ -1035,6 +1087,43 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   records, forwards no `evolve!` keyword, so it cannot be restarted by
   accident — do not add checkpoint keywords to it without restoring its
   `ts`, `Ms`, `Ks` and `nbs` from somewhere.
+- **Every field set over a reflecting forest needs its parity, and the
+  parity is physics** (added 2026-09-29). TreeAMR refuses a `FieldSet` over
+  a forest with a reflecting face unless `parity` gives every variable
+  `EvenParity` or `OddParity` in each such dimension. `state_parity(forest,
+  nvars)` is the table for `U` (`D + 2`) and `P` (`D + 4`): slot `1 + d` odd
+  in `d`, everything else even — the two diagnostic slots of `P` are
+  scalars — and `flux_parity(forest, d)` the product rule for the fluxes.
+  A new `FieldSet{T}(forest, …)` anywhere a reflecting forest can reach
+  must pass one; on every other forest both return `nothing`. And a
+  reflecting face is **not a hook**: the boundary hook never sees it, and
+  a case whose every non-periodic face reflects has `boundary = nothing`.
+- **The half box is the full box to roundoff, not bit for bit, and the
+  full box is why** (measured 2026-09-29). HLLC's star state sums `A + X_L
+  − X_R` in one order at a face and in another at its mirror image, so the
+  periodic box drifts from its own mirror image by a few ulp per step,
+  while the half box's mirrors are exact. `test/reflecting_tests.jl`
+  asserts equal steps and meshes exactly and the states at a roundoff
+  bound; do not "fix" that into an equality. The mirrored seed's envelope is
+  evaluated at the mirror point and negated in the upper half for the same
+  reason — `sin(2π(1 − y))` is not `−sin(2πy)` in floating point — and
+  `mode_amplitude` reverses the upper half's `v_y` under that seed, or the
+  two interfaces cancel.
+- **The showcase's loop is a second loop, on purpose, and it must follow
+  `evolve!`'s order** (decided 2026-09-29): step, CFL recheck, observe,
+  regrid, rebuild the problem, `gather!`, `integ_prev = nothing`,
+  `reset_atmosphere!`. It exists because `evolve!` fixes `chunk` and
+  `maxlevel_cap` for a whole run and the zoom needs both per chunk — frame
+  times that shrink with the zoom, and a cap that is a window about the
+  camera. A change to `evolve!`'s order is a change to
+  `showcase/simulate.jl` too.
+- **The showcase window is sized for the zoom-out, not the zoom-in.** Level
+  `ℓ` is allowed in a box covering the *largest* view that needs it — twice
+  the height of the smallest — because the zoom-out reads the final mesh at
+  every zoom, and a box sized for the current view would leave its outer
+  part at the level below. The zoom-out stays centred on the anchor for the
+  same reason; the pan home happens at zoom 1, where the floor level covers
+  the whole box.
 - **Measured numbers go into `CODE.md`**, beside the prediction they
   confirm or correct, so a regression shows up as a changed number and
   not as a test that merely still passes. The test that produces one runs

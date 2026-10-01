@@ -1,0 +1,35 @@
+# The coarse movie: the production's pacing and phases at a quarter of its
+# linear resolution — 128 to 256 finest cells across the view instead of 512
+# to 1024, 12 refinement levels instead of 20, a 960×540 frame — so that it
+# runs on a laptop in well under an hour and shows whether the camera, the
+# clock and the window work before the production run is paid for.
+
+[physics]
+# A thinner ramp than McNally's 1/40: by t = 1.5, when the zoom starts, the
+# layer has rolled into spirals of several turns rather than just begun to.
+L = "1/160"
+
+[mesh]
+N = 16
+roots = 2
+n_min = 128
+max_level = 12
+
+[movie]
+width = 960
+height = 540
+supersample = 1
+fps = 30
+V0 = 0.15
+intro = 10.0
+T_level = 5.0
+ease = 2.0
+hold = 4.0
+T_out = 0.75
+ease_out = 1.5
+final = 4.0
+
+[camera]
+# A vortex core of the lower interface at t = 1.5 (the pressure minimum);
+# the braid's stagnation point is at (0.5605, 0.2363).
+target = [0.3730, 0.2520]

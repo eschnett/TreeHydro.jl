@@ -1,0 +1,52 @@
+# Option 1 aimed at secondary structure: the strain-matched zoom
+# (`pilot_strain.toml`) at production resolution — 512 to 1024 cells across a
+# 1080p view — into a secondary billow rather than the braid, whose stagnation
+# point turned out to hold one straight contact. Secondary billows exist only
+# at this resolution, so the target is picked from this run's own frames, in
+# two stages:
+#
+#   A. The intro runs to t = 2.1, when they are forming, and the zoom to ×4.
+#      Below ×4 every level's window covers the whole box, so the flow there
+#      does not depend on the camera, and the stage-A camera (a braid point) is
+#      only a placeholder. Stop there (`--stop-after`).
+#   B. Pick a billow in a stage-A frame at zoom 2–4, set `target` and
+#      `target_time` to it, and restart from stage A's level-5 checkpoint
+#      (×2): the camera glides onto the target by `target_time` and follows
+#      the gas from there, to ×256, refinement level 12.
+
+[physics]
+L = "1/160"
+
+[scheme]
+buffer_speed = 0.75
+
+[mesh]
+N = 32
+roots = 2
+n_min = 512
+max_level = 12
+
+[movie]
+width = 1920
+height = 1080
+supersample = 2
+fps = 30
+V0 = 0.2
+intro = 10.5
+clock_exponent = 0.0
+V_zoom = 0.035
+T_level = 5.0
+ease = 2.0
+hold = 5.0
+T_out = 0.75
+ease_out = 1.5
+final = 4.0
+minimap = 384
+
+[camera]
+target = [0.5605, 0.2363]
+target_mode = "braid"
+track = true
+
+[run]
+walltime_hours = 23.0

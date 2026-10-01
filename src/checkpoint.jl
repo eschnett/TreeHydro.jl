@@ -262,12 +262,12 @@ plain_field(x) = throw(ArgumentError(
 Every parameter of an [`evolve!`](@ref) call that decides the numbers, as
 plain data, **except the regridding criterion** ([`run_criterion`](@ref)),
 which a restart may change: the working type by name, the mesh (`D`, `N`,
-`G`, the roots, the periodicity, the extents), the case's equation of state,
-floors and speed headroom, the cadence and the step (`chunk`, `cfl`), the
-scheme (`limiter`, `riemann`, `fixup`, `reset`, `accounting`) and the
-operators. `t_end` is not in it, because a restart may move it; nor are
-`backend`, `maxpasses` or the observer, which do not change a number of the
-run once its initial-data cycle is over.
+`G`, the roots, the periodicity, the reflecting faces, the extents), the
+case's equation of state, floors and speed headroom, the cadence and the
+step (`chunk`, `cfl`), the scheme (`limiter`, `riemann`, `fixup`, `reset`,
+`accounting`) and the operators. `t_end` is not in it, because a restart may
+move it; nor are `backend`, `maxpasses` or the observer, which do not change
+a number of the run once its initial-data cycle is over.
 
 Every real goes through `T` first and then [`plain_reals`](@ref), so a
 `2//25` given to one call and a `T(2//25)` given to the next compare equal,
@@ -286,6 +286,7 @@ function run_recipe(::Type{T}, case::HydroCase, ::Val{D}; N, G, roots, ops, chun
     tupleD(x) = x isa Integer ? ntuple(_ -> Int(x), D) : ntuple(d -> Int(x[d]), D)
     return (; float_type=type_name(T), D=Int(D), N=Int(N), G=tupleD(G),
             roots=tupleD(roots), periodic=case.periodic,
+            reflecting=case.reflecting,
             extents=plain_reals([x for ext in case.extents for x in ext]),
             eos=plain_struct(case.eos), floors=plain_struct(case.floors),
             speed_headroom=r(case.speed_headroom), chunk=r(chunk), cfl=r(cfl),
@@ -459,6 +460,9 @@ function load_run(path::AbstractString, ::Type{T}; backend=CPU()) where {T}
         "is damaged, or was not written by `evolve!`. $written"))
     U = ck.fieldsets["U"].fieldset
     u = ck.fieldsets["U"].state
+    # Every version-2 recipe records the reflecting faces: a file from before
+    # they existed is version 1 and refused above, so the reading of a recipe
+    # without them as "none" (added 2026-09-29) has nothing left to read.
     return (; forest=ck.forest, U=U, u=u, recipe=ck.data.recipe,
             criterion=ck.data.criterion, run=ck.data.run)
 end

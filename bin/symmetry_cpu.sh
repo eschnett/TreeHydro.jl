@@ -27,7 +27,9 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --time=1:00:00
 #SBATCH --job-name=treehydro-cpu
-#SBATCH --output=treehydro-cpu-%j.out
+# The job log on scratch, like everything a job writes: the home directory
+# has a quota that a job log filling it would break for every other job.
+#SBATCH --output=/mnt/beegfs/eschnetter/claude/treehydro-cpu-%j.out
 
 set -euo pipefail
 export PATH="$HOME/.juliaup/bin:$PATH"

@@ -25,6 +25,8 @@
 #   * a two-dimensional restart whose interface schedules or ghosts are not
 #     rebuilt as an uninterrupted run rebuilds them;
 #   * a restart whose continuation depends on the thread count;
+#   * a reflecting forest whose walls or parities do not survive a load, and
+#     a file from before the recipe recorded them that no longer reads;
 #   * a restart with another parameter, or from another application's file,
 #     running instead of refusing.
 #
@@ -398,6 +400,44 @@ end
     @test ragged.nchunks == 4
     @test [load_checkpoint(f).data.run.chunk for f in ragged.checkpoints_written] ==
           [1, 2, 3]
+end
+
+# The reflecting half box of the shear layer, cut to four chunks: the one
+# configuration whose forest has mirrored faces, which the file must carry
+# and the restart must rebuild the parities of (added 2026-09-29).
+ckpt_half_kh(; kwargs...) =
+    evolve!(HydroCase(KelvinHelmholtz(Float64, Val(2); seed=:mirrored); half=true),
+            Val(2); N=8, ops=CKPT_OPS, t_end=1 // 50, chunk=1 // 200,
+            limiter=:minmod, riemann=:hllc, refine_tol=2 // 25, coarsen_tol=1 // 50,
+            maxlevel_cap=1, accounting=true, kwargs...)
+
+@testset "A reflecting half box restarts exactly, and records its walls" begin
+    # Guards the mirrored faces across a load: the forest's reflecting flags
+    # and every field set's parity come back from the file, and the ghost
+    # schedule rebuilt from them mirrors as the uninterrupted run's did. A
+    # parity lost on the way would be refused by TreeAMR at the first field
+    # set, and a wall lost would be a different run — which the recipe names.
+    ref = ckpt_half_kh()
+    calls, files = ckpt_chain(ckpt_half_kh, joinpath(mktempdir(), "halfkh"))
+    @test length(calls) == ref.nchunks
+    @test ckpt_same(last(calls), ref)
+    @test first(files).data.recipe.reflecting == ((false, false), (true, true))
+    @test first(files).forest.reflecting == ((false, false), (true, true))
+
+    # A recipe written before the field existed is a version-1 file — the
+    # format went to 2 on 2026-10-01, after the walls — and is refused for
+    # its version, which names the reason, before its missing field could
+    # be read as anything (amended 2026-10-01; it used to read as "none").
+    ck = load_checkpoint(CKPT_FILE)
+    old = Base.structdiff(ck.data.recipe, NamedTuple{(:reflecting,)})
+    @test !haskey(old, :reflecting)
+    path = joinpath(mktempdir(), "old.h5")
+    U, u = ck.fieldsets["U"].fieldset, ck.fieldsets["U"].state
+    save_checkpoint(path, ck.forest; fieldsets=("U" => (U, u),),
+                    application="TreeHydro.jl" => 1,
+                    data=(; recipe=old, run=ck.data.run), sync=false)
+    err = ckpt_refusal(() -> ckpt_sod(; restart_file=path))
+    @test err isa ArgumentError && occursin("after the regrid", err.msg)
 end
 
 @testset "Another application's file, or a future version's, is refused" begin

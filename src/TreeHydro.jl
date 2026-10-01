@@ -89,8 +89,10 @@ export slope, face_states
 # The physical flux and the three approximate Riemann solvers
 export physical_flux, signal_speed, riemann_flux
 
-# The right-hand side and what a driver needs around it
+# The right-hand side and what a driver needs around it, and the parity of
+# each field set's variables across a reflecting face
 export HydroProblem, hydro_rhs!, update_primitives!
+export state_parity, flux_parity
 export max_signal_speed, floor_hits, ghost_floor_hits, hydro_dt
 export conserved_totals, conserved_scales, hydro_solve!
 export forest_levels, convergence_rate
