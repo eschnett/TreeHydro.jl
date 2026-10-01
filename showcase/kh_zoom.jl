@@ -85,6 +85,8 @@ const SHOWCASE_DEFAULTS = Dict{String,Any}(
                                 # re-find the braid's stagnation point near the
                                 # anchor every frame, which a tracer cannot hold
         "stagnation_gain" => 0.3,    # the fraction of the way to it per frame
+        "view_radius" => 0.3,        # track = "view": the mean velocity within this
+                                     # many view heights of the anchor
         "lock_gain" => 0.0,     # pull per frame toward the |∇ρ|² centroid near the anchor
         "lock_radius" => 0.15,  # in view heights
     ),

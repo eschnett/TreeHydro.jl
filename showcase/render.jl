@@ -9,7 +9,7 @@
 # Options:
 #   --frames=DIR     the simulation's output directory (required)
 #   --out=FILE       .mp4 (H.264, yuv420p) or .gif; default DIR/kh_zoom.mp4
-#   --colormap=NAME  any Makie colormap; default `lipari`
+#   --colormap=NAME  any Makie colormap; default `plasma`
 #   --mesh=MODE      block outlines: `zoomout` (fade in for the zoom-out, the
 #                    default), `always` or `none`
 #   --no-minimap, --no-text   leave out the inset, the captions
@@ -29,7 +29,7 @@ using Printf
 include(joinpath(@__DIR__, "kh_zoom.jl"))
 
 function parse_render_args(args)
-    opts = Dict{String,String}("colormap" => "lipari", "mesh" => "zoomout",
+    opts = Dict{String,String}("colormap" => "plasma", "mesh" => "zoomout",
                                "title" => "Kelvin–Helmholtz instability",
                                "crf" => "16")
     for a in args
@@ -165,10 +165,16 @@ function main(args=ARGS)
     if showmini
         image!(scene, mx0 .. (mx0 + m), my0 .. (my0 + m), mini; colormap=cmap,
                colorrange=(lo, hi), interpolate=false)
-        lines!(scene, Point2f[(mx0, my0), (mx0 + m, my0), (mx0 + m, my0 + m),
-                              (mx0, my0 + m), (mx0, my0)]; color=(:white, 0.8),
-               linewidth=1.5)
+        # Every overlay is white over a dark outline, so that it reads on any
+        # colour the flow puts behind it.
+        frame = Point2f[(mx0, my0), (mx0 + m, my0), (mx0 + m, my0 + m), (mx0, my0 + m),
+                        (mx0, my0)]
+        lines!(scene, frame; color=(:black, 0.7), linewidth=3.5)
+        lines!(scene, frame; color=(:white, 0.9), linewidth=1.5)
+        lines!(scene, rect; color=:black, linewidth=5)
         lines!(scene, rect; color=:white, linewidth=2)
+        CairoMakie.scatter!(scene, ring; marker=:circle, markersize=round(Int, 0.03 * H),
+                            color=:transparent, strokecolor=:black, strokewidth=5)
         CairoMakie.scatter!(scene, ring; marker=:circle, markersize=round(Int, 0.03 * H),
                             color=:transparent, strokecolor=:white, strokewidth=2)
     end
@@ -182,22 +188,30 @@ function main(args=ARGS)
     bartext = Observable("")
     titlealpha = Observable(0.0)
     if showtext
-        shadow = (:black, 0.6)
         for (obs, pos, align) in ((ttext, (pad, H - pad), (:left, :top)),
                                   (ztext, (pad, pad + 1.4fs), (:left, :bottom)),
                                   (ltext, (pad, pad), (:left, :bottom)))
-            text!(scene, Point2f(pos...) .+ Point2f(1.5, -1.5); text=obs, align=align,
-                  fontsize=fs, color=shadow)
+            # A black stroked copy underneath, the white text over it: CairoMakie
+            # draws a text's own stroke on top of its glyphs.
+            text!(scene, Point2f(pos...); text=obs, align=align, fontsize=fs,
+                  color=:black, strokecolor=:black, strokewidth=4)
             text!(scene, Point2f(pos...); text=obs, align=align, fontsize=fs, color=:white)
         end
+        lines!(scene, barpts; color=:black, linewidth=6)
         lines!(scene, barpts; color=:white, linewidth=3)
-        text!(scene, lift(p -> isempty(p) ? Point2f(0, 0) : (p[1] + p[2]) / 2 .+ Point2f(0, 8),
-                          barpts); text=bartext, align=(:center, :bottom), fontsize=fs,
+        barlabel = lift(p -> isempty(p) ? Point2f(0, 0) : (p[1] + p[2]) / 2 .+ Point2f(0, 8),
+                        barpts)
+        text!(scene, barlabel; text=bartext, align=(:center, :bottom), fontsize=fs,
+              color=:black, strokecolor=:black, strokewidth=4)
+        text!(scene, barlabel; text=bartext, align=(:center, :bottom), fontsize=fs,
               color=:white)
         if !isempty(title)
-            text!(scene, Point2f(W / 2, H / 2); text=title, align=(:center, :center),
-                  fontsize=round(Int, 0.07 * H), font=:bold,
-                  color=lift(a -> (:white, a), titlealpha))
+            for (col, sw) in ((:black, 6), (:white, 0))
+                text!(scene, Point2f(W / 2, H / 2); text=title, align=(:center, :center),
+                      fontsize=round(Int, 0.07 * H), font=:bold,
+                      color=lift(a -> (col, a), titlealpha),
+                      strokecolor=lift(a -> (:black, a), titlealpha), strokewidth=sw)
+            end
         end
     end
 

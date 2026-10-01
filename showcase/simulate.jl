@@ -122,6 +122,30 @@ end
 
 # The gas velocity at a reconstructed point: `v_y` takes the fold's sign,
 # being the velocity normal to the mirror.
+"""
+    mean_velocity(Pfs, X, R, backend) -> (vx, vy)
+
+The gas velocity averaged over a 9×9 grid of points within `R` of `X` — the
+camera's velocity under `camera.track = "view"`. A tracer follows one fluid
+element and, inside a vortex, orbits with it, so a camera on it swings round;
+the mean over the middle of the view keeps the drift of the pattern as a whole
+and averages the rotation out.
+"""
+function mean_velocity(Pfs, X, R, backend; n=9)
+    host = NTuple{2,T}[]
+    signs = Int[]
+    for j in 1:n, i in 1:n
+        x′, y′, s = fold(X[1] + ((i - 0.5) / n - 0.5) * 2R, X[2] + ((j - 0.5) / n - 0.5) * 2R)
+        push!(host, (x′, y′))
+        push!(signs, s)
+    end
+    dev = backend isa CPU ? host :
+          (d = allocate(backend, NTuple{2,T}, length(host)); copyto!(d, host); d)
+    v = Array(interpolate(Pfs, dev, Lagrange(2); vars=2:3).values)
+    m = length(host)
+    return (sum(v[1, 1, j] for j in 1:m) / m, sum(signs[j] * v[2, 1, j] for j in 1:m) / m)
+end
+
 function velocity_at(Pfs, X, backend)
     x′, y′, s = fold(X[1], X[2])
     host = [(x′, y′)]
@@ -411,7 +435,13 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
     tregrid_carry = 0.0
     ck_minutes = Float64(cfg["run"]["checkpoint_minutes"])
     last_ck = time()
-    tracking = cam["track"] === true
+    tracking = cam["track"] === true || cam["track"] == "view"
+    view_radius = Float64(cam["view_radius"])
+    # The camera's velocity at `X` in frame `fr`: the gas there, or the mean
+    # gas velocity over the middle of the view.
+    camvel(X, fr) = cam["track"] == "view" ?
+                    mean_velocity(p.P, X, view_radius * view_size(fr, g)[2], backend) :
+                    velocity_at(p.P, X, backend)
     stagnation = cam["track"] == "stagnation"
     gain = Float64(cam["stagnation_gain"])
     lock_gain = Float64(cam["lock_gain"])
@@ -499,7 +529,7 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
                 P = Ppred
             end
         elseif active && tracking
-            vpred = velocity_at(p.P, Ppred, backend)
+            vpred = camvel(Ppred, fr)
             P = (P[1] + Δt / 2 * (vP[1] + vpred[1]), P[2] + Δt / 2 * (vP[2] + vpred[2]))
         end
         ρ = emit(fr, (; step=tstep, regrid=tregrid, steps=steps_frame, nsub))
@@ -516,7 +546,7 @@ function run_showcase(cfg, out, backend; restart=nothing, stop_after=-1,
         end
         vP = nxt.t ≤ t_target ? drift :
              (active || nxt.phase === :zoom) && (tracking || stagnation) ?
-             velocity_at(p.P, P, backend) : (0.0, 0.0)
+             camvel(P, fr) : (0.0, 0.0)
         Δt_next = nxt.t - fr.t
         Ppred = (P[1] + Δt_next * vP[1], P[2] + Δt_next * vP[2])
         t2 = time()
