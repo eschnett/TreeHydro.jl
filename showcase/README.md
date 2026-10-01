@@ -376,6 +376,27 @@ Symmetry, one H200 per job, all in
   core at ×32. At ×27 in the zoom-out there are fresh tertiary spirals beside
   the billow: the next target, if the zoom goes deeper.
 
+**The strain-matched zoom into a tertiary spiral, 2026-09-30/10-01**
+(`configs/production_strain_c.toml`, Symmetry job 566253, `h200q`, one H200,
+`/mnt/beegfs/eschnetter/claude/treehydro-showcase-tertiary`):
+
+- **Setup.** Restarted from stage B's ×16 checkpoint. The camera glides onto
+  the multi-turn spiral that the ×32 cut showed beside the billow at
+  t = 3.385, then follows the gas.
+- **The target.** The spiral formed under that run's mesh, but it was there
+  in this one too. At ×74 the view holds a chain of three crisp tertiary
+  billows.
+- **Deeper.** They merge into layered turbulent mixing: crisp at ×131 and
+  softer by ×256.
+- **Levels.** Every level kept pace through all eight doublings, to level 12
+  at ×256 (t = 3.735). Up to 17.8M cells.
+- **Cost.** 1571215 steps and 6038 mesh changes; 10 h 23 min in all, of which
+  stepping took 10.1 h and regridding 7 min. **The 5 s hold at level 12
+  alone cost 5.7 h** (4726 steps a frame) — twice the estimate, and the
+  first thing to shorten.
+- **Result.** No floor hit and exactly zero injection. The render took 279 s,
+  and the movie is 2071 frames and 71 MB.
+
 On the core, the diffused centre is smooth, and the criterion's hysteresis
 band (0.08 against 0.02, a factor of 4) equals the `h²` scaling of `τ` at a
 smooth extremum. So level-8 blocks there refine and coarsen on alternate
