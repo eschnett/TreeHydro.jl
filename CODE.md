@@ -5327,6 +5327,23 @@ So the slowed clock carries about **ten levels** of real detail at this
 resolution, and a target that sits in the secondary structure is worth one
 of them.
 
+**The strain-matched clock (2026-09-30/10-01).** The fix is a clock that
+does not slow with the zoom: one doubling per `ln 2/σ` of simulated time,
+with the braid's strain `σ ≈ 4` measured on the pilot's checkpoints. A sheet
+then thins as fast as the camera closes in.
+
+- **The pilot** kept every level busy to ×512, against ×32 under the slowed
+  clock. But the braid's stagnation point holds one straight contact.
+- **At production resolution, aimed at a tertiary spiral** picked from a run's
+  own frames, every level kept pace through eight doublings to level 12 at
+  ×256.
+- **The price.** The steps double per level: 1.1M steps and about 7 h on one
+  H200 with a 2 s hold, 10.4 h with 5 s.
+- **The camera.** It follows the mean gas velocity over the view rather than
+  one tracer, which cut its swing 3.6×.
+
+`showcase/README.md` has every run.
+
 ## Possible extensions
 
 Not planned, listed because they are the obvious next questions:

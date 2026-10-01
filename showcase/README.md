@@ -1,8 +1,10 @@
 # A Kelvin–Helmholtz zoom
 
 A 1080p movie of a Kelvin–Helmholtz instability in which the camera zooms
-through twenty refinement levels and stays crisp, then zooms back out to
-show how far it went. It is built in two independent steps:
+through the refinement levels and stays crisp — to ×256 and refinement level
+12 in the best of them, `configs/production_strain_d.toml` — then zooms back
+out to show how far it went. (The goal was twenty levels; what limits the
+depth is the flow's detail, not the mesh, and "Measured" below says how.) It is built in two independent steps:
 
 - `simulate.jl` runs the shear layer and writes one small file per movie frame;
 - `render.jl` turns those files into a movie.

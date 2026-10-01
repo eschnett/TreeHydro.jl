@@ -52,8 +52,9 @@ showcase.** TreeAMR's reflecting faces (M10, first-class, on every backend —
 not a hook) are wired through: `HydroCase` carries `reflecting`, every
 field set a run builds carries a parity, and `HydroCase(w::KelvinHelmholtz;
 half = true)` runs the shear layer's lower half between two mirrors under
-the `:mirrored` seed. `showcase/` uses it for a 1080p movie that zooms
-through twenty refinement levels; see "Reflecting faces" under "Boundaries"
+the `:mirrored` seed. `showcase/` uses it for 1080p movies that zoom
+through the refinement levels — to ×256 and level 12 at best, with the
+strain-matched clock; see "Reflecting faces" under "Boundaries"
 and "The zoom showcase" in `CODE.md`, and `showcase/README.md`.
 
 How the milestones map onto the steps, for reading `CODE.md`'s history: H0
