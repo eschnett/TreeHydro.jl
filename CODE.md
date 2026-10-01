@@ -2141,6 +2141,7 @@ that **there is exactly one time-stepping loop** (decided):
             counts by population — floor_hits and ghost_floor_hits from
             the recovery, reset_hits from the reset — block count
         observer(p, t, u)                            # before the regrid invalidates U
+        maybe save_run(forest, U, u; recipe, criterion, run)   # the checkpoint
         flags = hydro_flags(P; refine_tol, coarsen_tol, cap)
         if regrid!(forest, (U => p.schedule, P => nothing, F_1 => nothing, …);
                    flags, buffer, boundary)
@@ -2154,7 +2155,11 @@ that **there is exactly one time-stepping loop** (decided):
 `speed_headroom` since step 7, and the loop runs over `chunk_count(t_end,
 chunk)` chunks since step 12, the last one ending on `t_end` exactly — see
 [Step 12 — precision](#step-12--precision). The loop also skips the regrid
-after its last chunk, as the step-7 notes below say.)*
+after its last chunk, as the step-7 notes below say.)* *(Amended
+2026-10-01: the checkpoint is written after the observer and before the
+regrid, and the regrid — flags, margin, `regrid!`, problem, gather, reset —
+is one function, `regrid_chunk!`, which a restart calls first; see
+[Checkpoint and restart](#checkpoint-and-restart).)*
 
 TreeWave has three near-identical loops and records that a fourth would
 be the one to drift; the four cases here differ in their initial data,
@@ -2235,7 +2240,11 @@ the implementation settled:
 *(Added 2026-09-29, on TreeAMR 0.1.4, whose M9a adds `save_checkpoint` and
 `load_checkpoint` through a package extension on HDF5. The plan was decided
 with Erik the same day, keyword names included; what the implementation
-settled is marked.)* A run of this package on an H200 at ten or twenty
+settled is marked. **Amended 2026-10-01**, Erik's decision to keep the
+checkpoint mechanisms of TreeAMR's applications alike: the checkpoint moved
+from after the regrid to before it, as TreeGeneralizedHarmonic's was written
+the same day, so that a restart may change the regridding criterion and
+regrid with it first; the paragraphs below say where.)* A run of this package on an H200 at ten or twenty
 levels outlasts a queue's day, and TreeAMR's M9a names it as one of its
 reasons. **Everything about the file is upstream**: the forest, the field-set
 layout, the atomic and durable write, element types as limbs, the
@@ -2255,24 +2264,49 @@ cycle**, with every other checkpoint keyword, so a job script that forgot
 `using HDF5`, or names a directory that does not exist, fails in a second
 and not at the first write hours in.
 
-**Where: at a chunk boundary, after the regrid and its reset, and nowhere
-else** (decided, as TreeAMR's M9a prescribes for a chunked driver). There
-the fixed-step integrator holds nothing but `(t, u)`: its scratch holds
-nothing from one step to the next, the step is recomputed from the forest
-and the state, and so a restart that restores `u` and the forest begins the
-next chunk with exactly what the uninterrupted run began it with. Before the
-regrid, a restart would have to replay the regrid and the post-regrid reset
-of [Floors and the atmosphere](#floors-and-the-atmosphere); mid-chunk, the
-integrator's stages would have to be saved. The last chunk has no regrid and
-is not a restart point, so it writes nothing.
+**Where: at a chunk boundary, after the observer and before the regrid, and
+nowhere else** (amended 2026-10-01; it was *after the regrid and its reset*,
+decided on 2026-09-29 as TreeAMR's M9a prescribes for a chunked driver). At
+a chunk boundary the fixed-step integrator holds nothing but `(t, u)`: its
+scratch holds nothing from one step to the next and the step is recomputed
+from the forest and the state; mid-chunk, the integrator's stages would have
+to be saved. The first version wrote after the regrid because a restart
+then has nothing to replay. Writing before it, the restart **replays the
+regrid** as the first thing it does, before its next step:
+`update_primitives!(p, u)` rebuilds the primitives — with `U`'s ghosts,
+which the file does not hold — exactly as step (2) of the chunk left them,
+the flags are computed from them with the criterion the restart is given,
+and `regrid_chunk!`, the one function the loop's own regrid calls —
+`hydro_flags`, the margin derived from the chunk's `λ_end` (the last entry
+of `λ_end_history`, which the run state already carried) and pushed onto
+`buffer_history`, `regrid!`, the rebuilt problem, the gather and the
+post-regrid reset of [Floors and the atmosphere](#floors-and-the-atmosphere)
+— does the rest. Being the same code path is what keeps the replay exact:
+with the criterion unchanged it is the regrid the uninterrupted run made
+there, bit for bit. What it buys is the point of the change: **a restart may
+change the criterion**, and regrids with the new one before it steps — so a
+run whose refinement turns out wrong is corrected from its last checkpoint,
+not from `t = 0`. The price is one indicator evaluation per restart.
+
+A second consequence (amended 2026-10-01): **the last chunk is a restart
+point too**, where `t_end` is a whole number of chunks in `T` — `1/20 = 10 ·
+1/200` is, at `Float64`; `7/400` is not — because a longer run would have
+regridded there, and a continuation of the finished run does. Elsewhere it
+writes nothing: a continued run's chunks would not line up with it, which
+the restart's own check of `c_done · chunk == t` would refuse anyway. The
+wall-time trigger never fires on the last chunk, which finishes the run.
 
 **What is saved.** The forest and the conserved state `U` with its state
 vector `u`, through TreeAMR, and this package's own plain data `(; recipe,
-run)` in its group `TreeHydro.jl`, format version 1. **Only `U`**: the
-primitive set and the fluxes are scratch, and `update_primitives!` rebuilds
-`P` — ghosts of `U` included, which the file does not hold — at the start of
-every chunk anyway. `u` and not `U.work`, because the post-regrid reset acts
-on `u`. The **run state** is the accumulators behind `evolve!`'s return
+criterion, run)` in its group `TreeHydro.jl`, **format version 2** (amended
+2026-10-01; version 1 held `(; recipe, run)` after the regrid, and is
+refused with that reason, since this version would regrid its state a
+second time). **Only `U`**: the primitive set and the fluxes are scratch,
+and `update_primitives!` rebuilds `P` — ghosts of `U` included, which the
+file does not hold — before a restart's regrid and at the start of every
+chunk. `u` and not `U.work`: the state vector is the integrator's and the
+authoritative copy (with the checkpoint after the regrid the reason was that
+the post-regrid reset acts on `u`). The **run state** is the accumulators behind `evolve!`'s return
 value — the chunk and its end time, the step, regrid and pass counts, the
 three floor counts and the injection, `λ_initial`, the tracking minimum, the
 drift, the scales, the initial totals, and the four histories — so that a
@@ -2287,18 +2321,26 @@ its limbs `(nlimbs, n)` — the rule TreeAMR applies to a field set's element
 type, restated because that function is internal to its extension — and a
 scalar as a one-element vector.
 
-**The recipe, and the one thing a restart may change** (decided). A restart
-is called with the same case and keywords as the run it continues, and
-**only `t_end` may change** — beyond the checkpoint's time, or it is refused.
-The recipe is every parameter that decides a number: the working type by
-name, `D`, `N`, `G`, the roots, the periodicity and the extents, the
-equation of state and the floors field by field, the speed headroom,
-`chunk` and `cfl`, `limiter`, `riemann`, `fixup`, `reset` and `accounting`,
-`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g` and `buffer`, and the
-operators. Every real goes through `T` and then `plain_reals`, so `2//25`
+**The recipe and the criterion, and the two things a restart may change**
+(decided 2026-09-29 with one, amended 2026-10-01 to two). A restart is
+called with the same case and keywords as the run it continues, and **only
+`t_end` and the regridding criterion may change** — `t_end` beyond the
+checkpoint's time, or it is refused. The recipe is every parameter that
+decides a number but the criterion: the working type by name, `D`, `N`,
+`G`, the roots, the periodicity and the extents, the equation of state and
+the floors field by field, the speed headroom, `chunk` and `cfl`,
+`limiter`, `riemann`, `fixup`, `reset` and `accounting`, and the operators.
+The **criterion** (`run_criterion`) is `refine_tol`, `coarsen_tol`,
+`maxlevel_cap`, `ε`, `ε_g` and `buffer` — the six were in the recipe until
+2026-10-01. Every real goes through `T` and then `plain_reals`, so `2//25`
 and `0.08` are the same run at `Float64`, as they are. A restart whose
 recipe differs is refused with **one** `ArgumentError` naming every field
-that differs and both values. What the recipe cannot hold is the case's
+that differs and both values; a restart whose criterion differs is run,
+with one `@info` naming every field that differs and both values, and
+returns their names as `criterion_changed` — `nothing` on a run from the
+initial data, empty on a restart that changes nothing. The criterion
+decides numbers too, which is why it is reported rather than accepted
+silently: the log says where a run stopped being the one it began as. What the recipe cannot hold is the case's
 closures — its initial data, boundary hook and reference — and those are
 trusted. `backend`, `maxpasses` and the observer are not in it: they decide
 no number of a run past its initial-data cycle, so nothing in the recipe
@@ -2335,7 +2377,8 @@ happen before the call and are not counted, so the caller leaves a margin
 below the queue's limit. Timing decides only *when* a file is written,
 never what is in it, which is why the bit-identity claims do not depend on
 the machine's load. A stopped run returns `finished = false`, the
-checkpointed state — after the regrid, `U` scattered and its ghosts filled —
+checkpointed state — before the regrid (amended 2026-10-01; it was after),
+on the mesh the last chunk ran on, `U` scattered and its ghosts filled —
 and `l1 = linf = nothing`, there being no answer at `t_end`.
 
 **The observer is not checkpointed** (decided). A restart does not call it
@@ -2348,8 +2391,11 @@ forwards no `evolve!` keyword and so cannot be restarted by accident.
 measured](#checkpoint-and-restart-measured)). A chain of restarts, one
 chunk per job, is the uninterrupted run **bit for bit** in every field
 `evolve!` returns — on the tracked tube at `Float64` and `Float32x2`, on a
-floored two-dimensional blast, across a change of `t_end`, and in a
-subprocess at another thread count.
+floored two-dimensional blast, across a change of `t_end`, from a finished
+run's last chunk, and in a subprocess at another thread count — and all of
+it held unchanged when the checkpoint moved before the regrid on
+2026-10-01. A restart with another criterion regrids with it at the
+checkpoint's boundary, before its next step.
 
 ## Precision
 
@@ -2551,7 +2597,7 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
-| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeAMR's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
+| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeAMR's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the criterion a restart may change and its report (2026-10-01), the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
@@ -5137,10 +5183,36 @@ on TreeAMR 0.1.4 and HDF5.jl 0.17.4.)* The claims are all equalities, and
   the suite's thread count and continued in a subprocess at the other, prints
   the uninterrupted run's digest character for character. Writing the
   checkpoint changes nothing about the run that writes it.
-- **With a larger `t_end`**: the tube run to `1/50`, continued from its last
-  checkpoint (chunk 3) to `1/20`, is the run to `1/20`. A restart spelled
+- **With a larger `t_end`**: the tube run to `1/50`, continued from its
+  checkpoint at chunk 3 to `1/20`, is the run to `1/20`. A restart spelled
   `refine_tol = 0.08, chunk = 0.005` continues one written with `2//25` and
-  `1//200`, the two being the same `Float64`s.
+  `1//200`, the two being the same `Float64`s, and reports no criterion
+  changed.
+
+*(Amended 2026-10-01, when the checkpoint moved before the regrid.)* Every
+equality above held unchanged — the same tests, with only the counts of
+files written amended for the last chunk's — and two more were added:
+
+- **From a finished run.** The tube run to `1/50` — four chunks of `1/200`
+  exactly — writes a checkpoint at its last chunk too, holding its own
+  returned state and mesh, unregridded; continued from it to `1/20`, it is
+  the run to `1/20`, bit for bit. A run to `7/400`, three and a half
+  chunks, writes at chunks 1–3 only.
+- **With another criterion.** The tube's mesh first moves at chunk 3's
+  regrid, from 12 blocks to 16. Restarted from chunk 3's checkpoint with
+  `coarsen_tol = 1/20` in place of `1/50`, the restart's first regrid —
+  before its first step — leaves **14** blocks, and the run goes on with one
+  regrid more to another L1 error in as many steps; with `buffer = 0`
+  in place of the derived 7 cells, it records a margin of 0 at chunk 3 and
+  refines nothing there (12 blocks). The histories up to the checkpoint
+  are the uninterrupted run's, and `criterion_changed` names the field.
+
+The suite after the move, on the development machine under an unknown share
+of other load: **12084 tests in 5 m 02 at one thread and 12118 in 4 m 34 at
+four**, **6 m 28** with `--check-bounds=yes`, and **7 m 35** for the clean
+tree at Julia 1.11 — 54 tests more than on 2026-09-29, and a slower draw of
+the machine than that day's, not a cost of the change: the new testsets
+restart the tube, a second each.
 
 **The cost, on one run** (measured 2026-09-29, one thread, the development
 machine, shared; not in the suite). The configuration is `README.md`'s

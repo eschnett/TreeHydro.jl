@@ -493,12 +493,15 @@ restarts from one through TreeAMR's `save_checkpoint` and
 This package does not depend on HDF5. See "Checkpoint and restart" in
 `CODE.md`.
 
-A checkpoint is written at a chunk boundary, **after the regrid** and its
-reset and never before, where the integrator holds nothing but `(t, u)`: so
-a restart begins the next chunk with exactly what the uninterrupted run
-began it with, and a restarted run, or a chain of them, is the uninterrupted
-run bit for bit at any thread count — its state, its mesh and every number
-returned here. The last chunk has no regrid and writes nothing.
+A checkpoint is written at a chunk boundary, where the integrator holds
+nothing but `(t, u)`, after the observer and **before the regrid** (amended
+2026-10-01, after TreeGeneralizedHarmonic; it was after the regrid): a
+restart regrids first, with the criterion it is given and through the
+loop's own code, and then steps. With the criterion unchanged a restarted
+run, or a chain of them, is the uninterrupted run bit for bit at any thread
+count — its state, its mesh and every number returned here. The last chunk
+is a restart point too where `t_end` is a whole number of chunks in `T`,
+since a longer run would have regridded there; elsewhere it writes nothing.
 
 - `checkpoint_path_prefix` — the files are
   `"\$checkpoint_path_prefix.it0000001234.h5"`, numbered by the cumulative
@@ -508,8 +511,9 @@ returned here. The last chunk has no regrid and writes nothing.
 - `checkpoint_interval_seconds` — write when this much wall-clock time has
   passed since the last write (or the call); `0` writes at every boundary.
 - `max_walltime_seconds` — the job's limit, timed from the call. When the
-  elapsed time plus the longest chunk so far plus the longest write so far
-  would pass it, the run writes a checkpoint and **stops**. Startup and
+  elapsed time plus the longest chunk so far, regrid included, plus the
+  longest write so far would pass it, the run writes a checkpoint and
+  **stops**, before that chunk's regrid. Startup and
   compilation happen before the call and are not counted: leave a margin
   below the queue's limit.
 - `num_checkpoints_keep` — after each successful write, every file of the
@@ -526,12 +530,15 @@ returned here. The last chunk has no regrid and writes nothing.
   initial data. [`latest_checkpoint`](@ref)`(prefix)` is the idiom, being
   `nothing` for the first job of a chain.
 
-A restart must be called with the same case and the same keywords, **only
-`t_end` excepted**, which may move beyond the checkpoint's time; anything
-else that decides a number is refused with an `ArgumentError` naming it (see
-[`run_recipe`](@ref)). The case's closures cannot be compared, and are
-trusted. The initial-data cycle does not run and the observer is **not**
-called at `t = 0`; an observer's own records are the caller's and are not
+A restart must be called with the same case and the same keywords, **except
+`t_end`**, which may move beyond the checkpoint's time, **and the regridding
+criterion** — `refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g` and
+`buffer` ([`run_criterion`](@ref)) — which the restart's first regrid uses;
+a changed criterion is reported field by field with `@info` and returned as
+`criterion_changed`. Anything else that decides a number is refused with an
+`ArgumentError` naming it (see [`run_recipe`](@ref)). The case's closures
+cannot be compared, and are trusted. The initial-data cycle does not run
+and the observer is **not** called at `t = 0`; an observer's own records are the caller's and are not
 in the file, so an observer that accumulates must be given its earlier
 records by the caller (which is why [`kh_run`](@ref), whose diagnostics are
 an observer's, takes no checkpoint keywords).
@@ -564,12 +571,15 @@ statistics beside it describe the same thing.
 
 `finished` is `false` when `max_walltime_seconds` stopped the run. Then `t`
 and `chunk` are the time and the index of the last chunk run, `U`, `u` and
-`forest` are the **checkpointed** state — after that chunk's regrid, with `U`
-scattered and its ghosts filled — and `l1` and `linf` are `nothing`, there
-being no answer at `t_end`; every accumulator is the run's so far. On a
-finished run `t` is `t_end` and `chunk` is `nchunks`. `checkpoints_written`
-lists the files this call wrote, some of which a later rotation may have
-deleted, and `restart_file` is the file the call started from, or `nothing`.
+`forest` are the **checkpointed** state — before that chunk's regrid, on the
+mesh it was computed on, with `U` scattered and its ghosts filled — and `l1`
+and `linf` are `nothing`, there being no answer at `t_end`; every
+accumulator is the run's so far. On a finished run `t` is `t_end` and
+`chunk` is `nchunks`. `checkpoints_written` lists the files this call wrote,
+some of which a later rotation may have deleted, `restart_file` is the file
+the call started from, or `nothing`, and `criterion_changed` is `nothing`
+for a run from the initial data and, on a restart, the criterion's fields
+that differ from the checkpoint's, empty when none does.
 """
 evolve!(case::HydroCase{T,D}, valD::Val{D}=case.valD; kwargs...) where {T,D} =
     evolve!(T, case, valD; kwargs...)
@@ -613,25 +623,31 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
                               checkpoint_interval_seconds, max_walltime_seconds,
                               num_checkpoints_keep, restart_file)
     # Built only where a file is written or read, so that a run that never
-    # checkpoints never asks its case for a plain form.
-    recipe = checkpoint_path_prefix === nothing && restart_file === nothing ?
-             nothing :
-             run_recipe(T, case, Val(D); N=N, G=G, roots=roots, ops=ops,
-                        chunk=chunk, cfl=cfl, limiter=limiter, riemann=riemann,
-                        fixup=fixup, reset=reset, accounting=accounting,
-                        refine_tol=refine_tol, coarsen_tol=coarsen_tol,
-                        maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g, buffer=buffer)
+    # checkpoints never asks its case for a plain form. The criterion apart
+    # from the rest: a restart may change it (amended 2026-10-01).
+    recipe, regrid_criterion =
+        checkpoint_path_prefix === nothing && restart_file === nothing ?
+        (nothing, nothing) :
+        (run_recipe(T, case, Val(D); N=N, G=G, roots=roots, ops=ops, chunk=chunk,
+                    cfl=cfl, limiter=limiter, riemann=riemann, fixup=fixup,
+                    reset=reset, accounting=accounting),
+         run_criterion(T; refine_tol=refine_tol, coarsen_tol=coarsen_tol,
+                       maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g, buffer=buffer))
 
     # A restart reads its file first, and refuses it, before anything else is
     # built: the forest is the file's, and every parameter that decides a
-    # number must be the one it was written with.
+    # number must be the one it was written with — but the criterion, which
+    # is reported where it changed.
     ck = restart_file === nothing ? nothing : load_run(restart_file, T; backend=backend)
+    criterion_changed = nothing
     if ck !== nothing
         check_recipe(ck.recipe, recipe, restart_file)
         eltype(ck.U.work) === T || throw(ArgumentError(
             "restart_file $(repr(restart_file)) holds its state in " *
             "$(eltype(ck.U.work)) and this run computes in $T, although its " *
             "recipe names $(ck.recipe.float_type): the file is damaged."))
+        criterion_changed = check_criterion(ck.criterion, regrid_criterion,
+                                            restart_file)
     end
 
     # Bound once, in either branch, so that the margin below captures a
@@ -722,9 +738,9 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         # restored exactly. The problem is rebuilt from `U` — its schedules,
         # the interface schedules and the spacings are all derived — and its
         # ghosts, which the file does not hold, are filled by the
-        # `update_primitives!` that opens the next chunk, as they are after
-        # every chunk of an uninterrupted run. The observer is *not* called
-        # at `t = 0`: the run is not at `t = 0`.
+        # `update_primitives!` that opens the regrid below, as they are at
+        # the end of every chunk of an uninterrupted run. The observer is
+        # *not* called at `t = 0`: the run is not at `t = 0`.
         U, u, saved = ck.U, ck.u, ck.run
         acc.injection .= from_plain_reals(R, saved.injection)
         acc.hits = saved.reset_hits
@@ -764,8 +780,31 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
 
     # The previous chunk's integrator, whose scratch the next one takes over
     # while the mesh stays put; `nothing` at the start and after every regrid
-    # that changed it, when the state vector has another length.
+    # that changed it, when the state vector has another length — and after
+    # a restart: IMEXRungeKutta's scratch carries no value from one step to
+    # the next, so a fresh one is the same run.
     integ_prev = nothing
+
+    # **A restart regrids first** (amended 2026-10-01). The checkpoint was
+    # written before chunk `c_done`'s regrid, so the primitives are rebuilt
+    # from `u` — which is what step (2) of that chunk left them as — the
+    # flags computed from them with the criterion this call is given, and the
+    # mesh regridded before the next step, by the loop's own `regrid_chunk!`
+    # with the margin derived from the chunk's own `λ_end`. With the
+    # criterion unchanged that is the regrid the uninterrupted run made
+    # there, bit for bit; changed, it is the one the restart asked for.
+    if ck !== nothing
+        update_primitives!(p, u)
+        rg = regrid_chunk!(forest, p, u, t_done, derive_buffer(λ_end_history[end]),
+                           buffer_history; ops=ops, case=case, limiter=limiter,
+                           riemann=riemann, fixup=fixup, reset=reset, accounting=acc,
+                           refine_tol=refine_tol, coarsen_tol=coarsen_tol,
+                           maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g)
+        if rg.moved
+            nregrids += 1
+            p, u = rg.p, rg.u
+        end
+    end
 
     # When to write and when to stop, by the wall clock: the longest chunk
     # seen, regrid included, and the longest write are what the next chunk
@@ -828,75 +867,70 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         # (4) whatever is watching, before the regrid invalidates `U`.
         observer === nothing || observer(p, stop, u)
 
-        # (5) the regrid. Not after the last chunk: the mesh that comes back
-        # is then the one the returned state was computed on.
-        c < nchunks || break
-        flags = hydro_flags(p; refine_tol=refine_tol, coarsen_tol=coarsen_tol,
-                            maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g)
-        bufferwidth = derive_buffer(λ_end)
-        push!(buffer_history, bufferwidth)
-        pairs = (U => p.schedule, p.P => nothing,
-                 ntuple(d -> p.fluxes[d] => nothing, Val(D))...)
-        if regrid!(forest, pairs; flags=flags, buffer=bufferwidth,
-                   boundary=case.boundary)
-            nregrids += 1
-            # `prims` and `fluxes` are handed back in because `regrid!`
-            # resized them in place; reallocating would throw that away.
-            p = HydroProblem(U, ops; eos=case.eos, floors=case.floors,
-                             limiter=limiter, riemann=riemann, fixup=fixup,
-                             boundary=case.boundary, prims=p.P, fluxes=p.fluxes,
-                             accounting=acc)
-            u = statevector(U)
-            gather!(u, U)
-            integ_prev = nothing
-            # The reset's second call site, on the freshly gathered `u`: the
-            # `p = 3` prolongation into a new fine block is unlimited and
-            # acts on ρ, S and E separately, so it can leave an owned cell
-            # below the floors — which would otherwise wait for the first
-            # stage of the next chunk to be caught. `nothing` for the
-            # integrator: there is none here, and the hook does not read it.
-            reset === :none || reset_atmosphere!(u, nothing, p, stop)
-        end
-
-        # (6) the checkpoint, here and nowhere else: after the regrid and its
-        # reset, where the integrator holds nothing but `(t, u)` and the next
-        # chunk begins from `u` alone. Not after the last chunk, which has no
-        # regrid and is not a restart point — the loop has left by then.
-        checkpointing || continue
-        now = time()
-        chunk_max = max(chunk_max, now - chunk_start)
-        due = (checkpoint_every_chunks !== nothing &&
-               c % checkpoint_every_chunks == 0) ||
-              (checkpoint_interval_seconds !== nothing &&
-               now - last_write ≥ checkpoint_interval_seconds)
-        stopping = max_walltime_seconds !== nothing &&
-                   (now - t0) + chunk_max + write_max > max_walltime_seconds
-        if due || stopping
-            path = checkpoint_filename(checkpoint_path_prefix, nsteps)
-            state = run_state(; chunk=c, t=stop, nsteps, nregrids, floor_hits=hits,
-                              ghost_hits=ghosts, passes, converged, acc, λ_initial,
-                              tracking, drift, scales, totals0, nblocks_history,
-                              buffer_history, λ_history, λ_end_history)
-            save_run(path, forest, U, u; recipe=recipe, run=state,
-                     filters=checkpoint_hdf5_filters, sync=checkpoint_sync_to_disk)
-            push!(written, path)
-            rotate_checkpoints!(checkpoint_path_prefix, num_checkpoints_keep;
-                                keep=path)
-            last_write = time()
-            write_max = max(write_max, last_write - now)
+        # (5) the checkpoint, **before the regrid** (amended 2026-10-01, after
+        # TreeGeneralizedHarmonic; it was after the regrid): the state at the
+        # end of the chunk on the chunk's own mesh, where the integrator holds
+        # nothing but `(t, u)`, so that a restart regrids first — with the
+        # criterion it is given, which may differ — and then steps. The last
+        # chunk is a restart point too where `t_end` is a whole number of
+        # chunks in `T`: a longer run would have regridded there, and its
+        # restart does. Elsewhere it is not, since a continued run's chunks
+        # would not line up with it.
+        stopping = false
+        if checkpointing && (c < nchunks || stop == c * chunk)
+            now = time()
+            chunk_cost = max(chunk_max, now - chunk_start)
+            due = (checkpoint_every_chunks !== nothing &&
+                   c % checkpoint_every_chunks == 0) ||
+                  (checkpoint_interval_seconds !== nothing &&
+                   now - last_write ≥ checkpoint_interval_seconds)
+            stopping = c < nchunks && max_walltime_seconds !== nothing &&
+                       (now - t0) + chunk_cost + write_max > max_walltime_seconds
+            if due || stopping
+                path = checkpoint_filename(checkpoint_path_prefix, nsteps)
+                state = run_state(; chunk=c, t=stop, nsteps, nregrids,
+                                  floor_hits=hits, ghost_hits=ghosts, passes,
+                                  converged, acc, λ_initial, tracking, drift,
+                                  scales, totals0, nblocks_history, buffer_history,
+                                  λ_history, λ_end_history)
+                save_run(path, forest, U, u; recipe=recipe,
+                         criterion=regrid_criterion, run=state,
+                         filters=checkpoint_hdf5_filters,
+                         sync=checkpoint_sync_to_disk)
+                push!(written, path)
+                rotate_checkpoints!(checkpoint_path_prefix, num_checkpoints_keep;
+                                    keep=path)
+                last_write = time()
+                write_max = max(write_max, last_write - now)
+            end
         end
         # Stopped with the checkpoint just written: the state that comes back
-        # is the one in the file, after the regrid.
+        # is the one in the file, before the regrid.
         if stopping
             finished = false
             break
         end
+
+        # (6) the regrid. Not after the last chunk: the mesh that comes back
+        # is then the one the returned state was computed on.
+        c < nchunks || break
+        rg = regrid_chunk!(forest, p, u, stop, derive_buffer(λ_end), buffer_history;
+                           ops=ops, case=case, limiter=limiter, riemann=riemann,
+                           fixup=fixup, reset=reset, accounting=acc,
+                           refine_tol=refine_tol, coarsen_tol=coarsen_tol,
+                           maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g)
+        if rg.moved
+            nregrids += 1
+            p, u = rg.p, rg.u
+            integ_prev = nothing
+        end
+        chunk_max = max(chunk_max, time() - chunk_start)
     end
 
-    # A stopped run has no answer at `t_end`. Its `U` is made current — the
-    # post-regrid reset changed `u` and not `U.work`, and the ghosts are the
-    # regrid's — so that what comes back is the checkpointed state, filled.
-    finished || update_primitives!(p, u)
+    # A stopped run has no answer at `t_end`. Its `U` is current already —
+    # scattered from `u` with its ghosts filled by step (2), before the
+    # checkpoint, as a finished run's is — so what comes back is the
+    # checkpointed state, filled.
     errs = (!finished || case.reference === nothing) ? (l1=nothing, linf=nothing) :
            begin
         err = u .- case.reference(U, t_end)
@@ -920,7 +954,56 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
             λ_end_history=λ_end_history, h=minimum_spacing(T, forest),
             l1=errs.l1, linf=errs.linf, U=hostcopy(U), u=u, forest=forest,
             finished=finished, t=t_done, chunk=c_done,
-            checkpoints_written=written, restart_file=restart_file)
+            checkpoints_written=written, restart_file=restart_file,
+            criterion_changed=criterion_changed)
+end
+
+"""
+    regrid_chunk!(forest, p, u, t, bufferwidth, buffer_history; ops, case,
+                  limiter, riemann, fixup, reset, accounting, refine_tol,
+                  coarsen_tol, maxlevel_cap, ε, ε_g) -> (; moved, p, u)
+
+The regrid at the end of a chunk of [`evolve!`](@ref), at time `t`: the
+flags from `p`'s primitives, which must be current, with the criterion
+given; the margin `bufferwidth`, recorded in `buffer_history`; `regrid!` of
+the conserved state, the primitives and the fluxes together; and, where the
+mesh moved, the problem rebuilt, the state vector gathered and the
+post-regrid reset. It returns what it rebuilt — the problem and state vector
+handed in when nothing moved.
+
+One function for two call sites (factored out 2026-10-01): the loop's
+regrid, and the one a restart makes first, the checkpoint having been
+written before it. Being the same code path is what makes a restart with
+an unchanged criterion the uninterrupted run bit for bit.
+"""
+function regrid_chunk!(forest, p::HydroProblem{T,D}, u, t, bufferwidth,
+                       buffer_history; ops, case, limiter, riemann, fixup, reset,
+                       accounting, refine_tol, coarsen_tol, maxlevel_cap, ε,
+                       ε_g) where {T,D}
+    U = p.U
+    flags = hydro_flags(p; refine_tol=refine_tol, coarsen_tol=coarsen_tol,
+                        maxlevel_cap=maxlevel_cap, ε=ε, ε_g=ε_g)
+    push!(buffer_history, bufferwidth)
+    pairs = (U => p.schedule, p.P => nothing,
+             ntuple(d -> p.fluxes[d] => nothing, Val(D))...)
+    moved = regrid!(forest, pairs; flags=flags, buffer=bufferwidth,
+                    boundary=case.boundary)
+    moved || return (; moved, p, u)
+    # `prims` and `fluxes` are handed back in because `regrid!` resized them
+    # in place; reallocating would throw that away.
+    p = HydroProblem(U, ops; eos=case.eos, floors=case.floors, limiter=limiter,
+                     riemann=riemann, fixup=fixup, boundary=case.boundary,
+                     prims=p.P, fluxes=p.fluxes, accounting=accounting)
+    u = statevector(U)
+    gather!(u, U)
+    # The reset's second call site, on the freshly gathered `u`: the `p = 3`
+    # prolongation into a new fine block is unlimited and acts on ρ, S and E
+    # separately, so it can leave an owned cell below the floors — which
+    # would otherwise wait for the first stage of the next chunk to be
+    # caught. `nothing` for the integrator: there is none here, and the hook
+    # does not read it.
+    reset === :none || reset_atmosphere!(u, nothing, p, t)
+    return (; moved, p, u)
 end
 
 """
