@@ -9,8 +9,8 @@
 # three near-identical ones and records that a fourth would be the one to
 # drift — so a **case is data**: a small struct holding the primitive
 # initial-data closure, the equation of state, the floors, the boundary hook
-# or `nothing`, the periodicity, the extents, the root brick, the speed
-# headroom, and the exact reference or `nothing`. Nothing in this file knows
+# or `nothing`, the periodicity, the reflecting faces, the extents, the root
+# brick, the speed headroom, and the exact reference or `nothing`. Nothing in this file knows
 # what a shock tube is. See "Regridding: one driver, restart per chunk" in
 # `CODE.md`.
 #
@@ -37,14 +37,24 @@
 
 """
     HydroCase(T, Val(D); initial, eos, floors, boundary = nothing, periodic,
-              extents, roots, speed_headroom = 1, reference = nothing)
+              reflecting = no reflecting face, extents, roots,
+              speed_headroom = 1, reference = nothing)
 
 Everything [`evolve!`](@ref) needs to know about a *problem*, and nothing
 about how time passes: the primitive initial data as a pure `x -> P`
 closure, the equation of state and the floors, the physical-boundary hook
-or `nothing`, the periodicity per dimension, the physical extents, the root
-brick, the speed headroom, and an optional exact reference
-`(U, t) -> state vector`.
+or `nothing`, the periodicity per dimension, the reflecting faces, the
+physical extents, the root brick, the speed headroom, and an optional exact
+reference `(U, t) -> state vector`.
+
+`reflecting` is one `(lo, hi)` pair of flags per dimension, TreeAMR's own
+form: a face so marked is a **mirror**, and the solution beyond it is its
+own mirror image with the normal momentum reversed. It is declared on the
+forest and filled by TreeAMR's ghost schedule, mirrored copies with the
+parity [`state_parity`](@ref) gives, on every backend — it is *not* a
+boundary hook, and a case whose every non-periodic face reflects needs no
+hook at all *(added 2026-09-29; before that this package had Dirichlet
+faces only)*. A dimension cannot be both periodic and reflecting.
 
 **A case is data** (decided in `CODE.md`, "Regridding: one driver, restart
 per chunk"). The four cases of this package differ in their initial data,
@@ -87,8 +97,9 @@ struct HydroCase{T,D,INI,EOS,FLR,BC,REF}
     initial::INI                 # x -> P, the primitive tuple
     eos::EOS
     floors::FLR
-    boundary::BC                 # a CellBoundary, or nothing if fully periodic
+    boundary::BC                 # a CellBoundary, or nothing if no face needs one
     periodic::NTuple{D,Bool}
+    reflecting::NTuple{D,Tuple{Bool,Bool}}   # (lo, hi) mirrors, TreeAMR's M10
     extents::NTuple{D,Tuple{T,T}}
     roots::NTuple{D,Int}
     speed_headroom::T
@@ -97,7 +108,8 @@ struct HydroCase{T,D,INI,EOS,FLR,BC,REF}
 end
 
 function HydroCase(::Type{T}, ::Val{D}; initial, eos::EquationOfState,
-                   floors::Floors, boundary=nothing, periodic, extents, roots,
+                   floors::Floors, boundary=nothing, periodic,
+                   reflecting=ntuple(_ -> (false, false), D), extents, roots,
                    speed_headroom=1, reference=nothing) where {T,D}
     per = periodic isa Tuple ? ntuple(d -> Bool(periodic[d]), D) :
           ntuple(_ -> Bool(periodic), D)
@@ -106,6 +118,16 @@ function HydroCase(::Type{T}, ::Val{D}; initial, eos::EquationOfState,
         "for D = $D: periodicity is the case's physics — the shock tube is " *
         "Dirichlet along its own axis and periodic across it — and not one " *
         "property of the box."))
+    length(reflecting) == D || throw(ArgumentError(
+        "a case needs one (lo, hi) pair of reflecting flags per dimension, got " *
+        "$(length(reflecting)) for D = $D."))
+    refl = ntuple(d -> (Bool(reflecting[d][1]), Bool(reflecting[d][2])), D)
+    for d in 1:D
+        per[d] && any(refl[d]) && throw(ArgumentError(
+            "dimension $d is both periodic and reflecting ($(refl[d])): a " *
+            "periodic dimension has no faces — its last block is its first " *
+            "block's neighbour — so there is nothing there to mirror."))
+    end
     rs = roots isa Tuple ? ntuple(d -> Int(roots[d]), D) : ntuple(_ -> Int(roots), D)
     length(rs) == D || throw(ArgumentError(
         "a case needs one root count per dimension, got $(length(rs)) for " *
@@ -124,14 +146,17 @@ function HydroCase(::Type{T}, ::Val{D}; initial, eos::EquationOfState,
         "value below 1 would size the time step for a signal slower than the " *
         "one just measured. Sod's measured growth is 1.8522 and its case uses " *
         "2; a case whose speed cannot grow uses 1."))
-    (boundary !== nothing || all(per)) || throw(ArgumentError(
-        "the case is not periodic in every dimension ($per) but has no " *
-        "boundary hook: the ghost regions facing outside the domain would " *
-        "hold whatever the allocation left there. Pass `boundary`, or make " *
-        "every dimension periodic."))
+    # A face that is neither periodic nor reflecting is an outer face, and
+    # only an outer face needs the hook: TreeAMR never hands it a mirror.
+    outer = any(d -> !per[d] && !(refl[d][1] && refl[d][2]), 1:D)
+    (boundary !== nothing || !outer) || throw(ArgumentError(
+        "the case has an outer face — not periodic ($per) and not reflecting " *
+        "($refl) — but no boundary hook: the ghost regions facing outside the " *
+        "domain there would hold whatever the allocation left. Pass " *
+        "`boundary`, or make every non-periodic face reflecting."))
     return HydroCase{T,D,typeof(initial),typeof(eos),typeof(floors),
                      typeof(boundary),typeof(reference)}(
-        initial, eos, floors, boundary, per, ext, rs, T(speed_headroom),
+        initial, eos, floors, boundary, per, refl, ext, rs, T(speed_headroom),
         reference, Val(D))
 end
 
@@ -162,6 +187,7 @@ conserved_initial(case::HydroCase) =
 # that is still small, against an evolution of hundreds of steps.
 function scratch_primitives(U::FieldSet{T,D}, eos, floors) where {T,D}
     P = FieldSet{T}(U.forest, D + 4; G=U.G, centering=U.centering,
+                    parity=state_parity(U.forest, D + 4),
                     backend=get_backend(U.work))
     map_blocks!(con2prim_kernel!, P, P.work, U.work, eos, floors, Val(D);
                 stored=true)
@@ -638,7 +664,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     # binding that is never reassigned — `regrid!` changes the forest in
     # place, and the closure sees that.
     forest = ck === nothing ?
-             Forest{T}(roots; N=N, periodic=case.periodic, extents=case.extents) :
+             Forest{T}(roots; N=N, periodic=case.periodic,
+                       reflecting=case.reflecting, extents=case.extents) :
              ck.forest
 
     # The whole flag vector at once rather than a mark per block, which is
@@ -667,7 +694,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     acc = ResetAccounting{R}(D + 2; measure=accounting)
 
     if ck === nothing
-        U = FieldSet{T}(forest, D + 2; G=G, backend=backend)
+        U = FieldSet{T}(forest, D + 2; G=G, parity=state_parity(forest, D + 2),
+                        backend=backend)
         initial_U = conserved_initial(case)
 
         # The margin the initial adaptation travels with, from the initial

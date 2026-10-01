@@ -252,11 +252,11 @@ plain_field(x) = throw(ArgumentError(
 
 Every parameter of an [`evolve!`](@ref) call that decides the numbers, as
 plain data: the working type by name, the mesh (`D`, `N`, `G`, the roots, the
-periodicity, the extents), the case's equation of state, floors and speed
-headroom, the cadence and the step (`chunk`, `cfl`), the scheme (`limiter`,
-`riemann`, `fixup`, `reset`, `accounting`), the refinement criterion
-(`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g`, `buffer`) and the
-operators. `t_end` is not in it, because a restart may move it; nor are
+periodicity, the reflecting faces, the extents), the case's equation of
+state, floors and speed headroom, the cadence and the step (`chunk`, `cfl`),
+the scheme (`limiter`, `riemann`, `fixup`, `reset`, `accounting`), the
+refinement criterion (`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`,
+`ε_g`, `buffer`) and the operators. `t_end` is not in it, because a restart may move it; nor are
 `backend`, `maxpasses` or the observer, which do not change a number of the
 run once its initial-data cycle is over.
 
@@ -278,6 +278,7 @@ function run_recipe(::Type{T}, case::HydroCase, ::Val{D}; N, G, roots, ops, chun
     tupleD(x) = x isa Integer ? ntuple(_ -> Int(x), D) : ntuple(d -> Int(x[d]), D)
     return (; float_type=type_name(T), D=Int(D), N=Int(N), G=tupleD(G),
             roots=tupleD(roots), periodic=case.periodic,
+            reflecting=case.reflecting,
             extents=plain_reals([x for ext in case.extents for x in ext]),
             eos=plain_struct(case.eos), floors=plain_struct(case.floors),
             speed_headroom=r(case.speed_headroom), chunk=r(chunk), cfl=r(cfl),
@@ -400,7 +401,15 @@ function load_run(path::AbstractString, ::Type{T}; backend=CPU()) where {T}
         "was not written by `evolve!`. $written"))
     U = ck.fieldsets["U"].fieldset
     u = ck.fieldsets["U"].state
-    return (; forest=ck.forest, U=U, u=u, recipe=ck.data.recipe, run=ck.data.run)
+    # A file written before the recipe recorded the reflecting faces had
+    # none — this package could not build a forest with one — so its recipe
+    # is read as saying so, rather than refused as damaged (added
+    # 2026-09-29).
+    recipe = ck.data.recipe
+    haskey(recipe, :reflecting) ||
+        (recipe = merge(recipe, (; reflecting=map(_ -> (false, false),
+                                                  ck.forest.reflecting))))
+    return (; forest=ck.forest, U=U, u=u, recipe=recipe, run=ck.data.run)
 end
 
 # --- the keywords ------------------------------------------------------------------------

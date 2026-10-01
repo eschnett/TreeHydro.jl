@@ -1,0 +1,44 @@
+# Option 2 of README.md's "Measured": the production run, cut back to where
+# the flow's detail ends and aimed at a secondary billow. The uncut run (job
+# 565872, `production.toml`) found that the criterion creates nothing finer
+# than level 9 — the finest mesh reached it at zoom ×32 — so the zoom stops at
+# level 10, ×64, where the view still holds 512 cells of level 9. Its automatic
+# braid target had drifted onto the smooth edge of a blob; this one is the
+# rolled-up tip of a secondary Kelvin–Helmholtz billow ("the hook"), picked in
+# that run's frame 780 at t = 2.5947 — the last time before level 7 appears,
+# up to which the mesh covers the whole box whatever the camera does, so a
+# point picked there is the same point in this run. Before that time the
+# anchor moves at the uncut run's mean anchor velocity, which brings it onto
+# the hook; after it, the anchor is carried with the gas.
+
+[physics]
+L = "1/160"
+
+[mesh]
+N = 32
+roots = 2
+n_min = 512
+max_level = 10
+
+[movie]
+width = 1920
+height = 1080
+supersample = 2
+fps = 30
+V0 = 0.15
+intro = 10.0
+T_level = 5.0
+ease = 2.0
+hold = 5.0
+T_out = 0.75
+ease_out = 1.5
+final = 4.0
+minimap = 384
+
+[camera]
+target = [0.2109, 0.2905]
+target_time = 2.594733999255545
+drift = [-0.359, 0.064]
+
+[run]
+walltime_hours = 23.0

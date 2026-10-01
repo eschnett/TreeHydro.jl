@@ -1,0 +1,47 @@
+# Option 1's coarse pilot: the strain-matched zoom. The clock no longer slows
+# with the zoom (clock_exponent = 0); instead each doubling of the zoom takes
+# ln 2 / σ of simulated time, the time the braid's strain σ ≈ 4 (measured on
+# the first pilot's checkpoints, t = 1.5 to 2.7) takes to halve a sheet's
+# thickness: V_zoom = ln 2 / (σ T_level) = 0.035 at five seconds a doubling. The
+# camera sits on the braid's stagnation point, re-found near the anchor every
+# frame, because a tracer leaves a hyperbolic point exponentially — as fast as
+# the zoom closes in. The steps per frame now grow with the zoom, so the regrid
+# margin covers the gas speed and not the sound speed. Coarse: 128 to 256
+# cells across a 960×540 view, nine doublings; for one H200 job on the debug
+# queue, continued from its checkpoint if it runs out of hour.
+
+[physics]
+L = "1/160"
+
+[scheme]
+buffer_speed = 0.75
+
+[mesh]
+N = 32
+roots = 2
+n_min = 128
+max_level = 11
+
+[movie]
+width = 960
+height = 540
+supersample = 1
+fps = 30
+V0 = 0.15
+clock_exponent = 0.0
+V_zoom = 0.035
+intro = 10.0
+T_level = 5.0
+ease = 2.0
+hold = 4.0
+T_out = 0.75
+ease_out = 1.5
+final = 4.0
+
+[camera]
+target = [0.5605, 0.2363]
+target_mode = "braid"
+track = "stagnation"
+
+[run]
+walltime_hours = 0.85

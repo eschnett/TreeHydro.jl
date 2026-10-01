@@ -1,0 +1,26 @@
+# A minute or two on a laptop: three zoom doublings on a tiny mesh, a small
+# frame, ten frames a second. It exercises every phase, the window, the frame
+# files, a checkpoint per level and the renderer; it is not meant to be looked
+# at.
+
+[mesh]
+N = 8
+roots = 2
+n_min = 32
+max_level = 5
+
+[movie]
+width = 320
+height = 180
+fps = 10
+intro = 2.0
+T_level = 1.5
+ease = 0.5
+hold = 1.0
+T_out = 0.3
+ease_out = 0.3
+final = 1.0
+minimap = 64
+
+[camera]
+target_mode = "braid"

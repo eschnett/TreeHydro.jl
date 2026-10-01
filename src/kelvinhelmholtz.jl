@@ -64,12 +64,23 @@
 """
     KelvinHelmholtz(T, Val(D); ρ₁ = 1, ρ₂ = 2, v₁ = 1//2, v₂ = -1//2,
                     p₀ = 5//2, L = 1//40, a = 1//100, γ = 5//3, Lbox = 1,
-                    floors = …)
+                    seed = :mcnally, floors = …)
 
 The parameters of McNally, Lyra & Passy's shear layer at working type `T`: the
 two densities and the two velocities, the uniform pressure, the ramp width,
 the amplitude of the seeded `v_y` mode, the box side, the equation of state
 and the floors.
+
+`seed` chooses the seeded mode (added 2026-09-29). `:mcnally` is the paper's
+`v_y = a sin(4πx)`, the same at both interfaces. `:mirrored` is
+`v_y = a sin(4πx) sin(2πy)`: the paper's mode at the lower interface `y = ¼`,
+its mirror image at the upper one, and **zero on the two mirror lines** `y =
+0` and `y = ½` — so the whole setup is its own mirror image in `y = ½`, which
+is what lets [`HydroCase`](@ref)`(w; half = true)` run the lower half alone
+between two reflecting walls. McNally's seed is *not* mirror-symmetric (its
+`v_y` is even in `y = ½` where a velocity normal to the mirror must be odd),
+so a half box under it would be a different problem, and it is refused
+there. The profiles of `ρ` and `v_x` are the paper's under either seed.
 
 **`D = 2` only.** The setup is two-dimensional by definition — a shear layer
 in `y` with a single seeded mode in `x`, and the diagnostics of Section 3 of
@@ -114,13 +125,17 @@ struct KelvinHelmholtz{T,E<:EquationOfState}
     L::T
     a::T
     Lbox::T
+    mirrored::Bool               # seed = :mirrored, v_y odd in y = ½
     eos::E
     floors::Floors{T}
 end
 
+# The two seeded modes, in the order the docstring gives them.
+const KH_SEEDS = (:mcnally, :mirrored)
+
 function KelvinHelmholtz(::Type{T}, ::Val{D}; ρ₁=1, ρ₂=2, v₁=1 // 2,
                          v₂=-1 // 2, p₀=5 // 2, L=1 // 40, a=1 // 100,
-                         γ=5 // 3, Lbox=1,
+                         γ=5 // 3, Lbox=1, seed::Symbol=:mcnally,
                          floors::Floors{T}=Floors{T}(; ρ_atm=T(1 // 10^8),
                                                      p_atm=T(1 // 10^8),
                                                      p_floor=T(1 // 10^8))) where {T,D}
@@ -131,6 +146,10 @@ function KelvinHelmholtz(::Type{T}, ::Val{D}; ρ₁=1, ρ₂=2, v₁=1 // 2,
         "y-kinetic energy — are defined on the (x, y) plane. In one dimension " *
         "there is no shear and in three the setup would need a third profile " *
         "this package has no reference for."))
+    seed in KH_SEEDS || throw(ArgumentError(
+        "seed must be one of $(KH_SEEDS), got :$seed: :mcnally is the paper's " *
+        "v_y = a sin(4πx), and :mirrored multiplies it by sin(2πy) so that the " *
+        "setup is its own mirror image in y = ½."))
     ρ₁, ρ₂, v₁, v₂ = T(ρ₁), T(ρ₂), T(v₁), T(v₂)
     p₀, L, a, Lbox = T(p₀), T(L), T(a), T(Lbox)
     (ρ₁ > 0 && ρ₂ > 0 && p₀ > 0) || throw(ArgumentError(
@@ -157,7 +176,8 @@ function KelvinHelmholtz(::Type{T}, ::Val{D}; ρ₁=1, ρ₂=2, v₁=1 // 2,
         "counts this case asserts to be zero would count the initial data."))
     return KelvinHelmholtz{T,IdealGas{T}}(ρ₁, ρ₂, v₁, v₂, (ρ₁ - ρ₂) / 2,
                                           (v₁ - v₂) / 2, p₀, L, a, Lbox,
-                                          IdealGas(T(γ)), floors)
+                                          seed === :mirrored, IdealGas(T(γ)),
+                                          floors)
 end
 
 """
@@ -205,6 +225,16 @@ and `exp` are taken at `T`.
         vx = w.v₁ - w.v_m * e
     end
     vy = w.a * sin(4 * T(π) * ξ)
+    # The mirrored seed's envelope `sin(2πη)`, written so that it is odd in
+    # `η = ½` **exactly**: the upper half evaluates it at its mirror point
+    # `1 − η`, which is exact there, and negates. `sin(2π(1 − η))` is not
+    # `−sin(2πη)` in floating point, and the difference is a roundoff-level
+    # asymmetry the instability then amplifies. `w.mirrored` is a case
+    # constant, not data: every cell of a run takes the same branch, and
+    # `:mcnally` computes exactly what it did before the option existed.
+    if w.mirrored
+        vy *= η < half ? sin(2 * T(π) * η) : -sin(2 * T(π) * (1 - η))
+    end
     return (ρ, vx, vy, w.p₀)
 end
 
@@ -228,11 +258,20 @@ kh_conserved(w::KelvinHelmholtz) =
     AllVariables(x -> prim2con(w.eos, kh_state(w, x)))
 
 """
-    HydroCase(w::KelvinHelmholtz; roots = 4, speed_headroom = 1)
+    HydroCase(w::KelvinHelmholtz; roots = 4, speed_headroom = 1, half = false)
 
 The shear layer as a case the driver can run: **periodic in both directions**,
 no boundary hook, and **no reference**, since the case has no closed form and
 the quantitative reference is a uniform fine run of this code.
+
+**`half = true` runs the lower half alone** (added 2026-09-29): the box
+`[0, Lbox] × [0, Lbox/2]`, periodic in `x` and **reflecting** at `y = 0` and
+`y = ½` — TreeAMR's mirrored faces, not a hook — with the same root blocks
+as the full box, `(roots, roots ÷ 2)`, so that its cells are the full box's
+lower half cell for cell. It needs the `:mirrored` seed, under which the
+full setup is its own mirror image in both lines, and refuses McNally's,
+under which it is not. Half the cells for the same flow; the upper half is
+the lower one mirrored, which a viewer reconstructs.
 
 Periodicity here is intrinsic and not an economy (`CODE.md`, "Boundaries"):
 the shear flow and its `sin(4πx)` seed are periodic in `x` by construction, and
@@ -250,7 +289,8 @@ reason and the end-of-chunk recheck in [`evolve!`](@ref) is what makes either
 a measurement rather than a hope; the worst growth this case actually shows is
 recorded in `CODE.md` under "Step 10".
 """
-function HydroCase(w::KelvinHelmholtz{T}; roots=4, speed_headroom=1) where {T}
+function HydroCase(w::KelvinHelmholtz{T}; roots=4, speed_headroom=1,
+                   half::Bool=false) where {T}
     rs = roots isa Tuple ? ntuple(d -> Int(roots[d]), 2) : ntuple(_ -> Int(roots), 2)
     allequal(rs) || throw(ArgumentError(
         "the Kelvin–Helmholtz box is the square [0, Lbox]² and TreeAMR's " *
@@ -258,10 +298,28 @@ function HydroCase(w::KelvinHelmholtz{T}; roots=4, speed_headroom=1) where {T}
         "dimensions, got $rs. The two directions are not interchangeable — " *
         "the shear is along x and the ramps are across y — but the box is " *
         "square in the paper and the diagnostics are stated on a square."))
+    half || return HydroCase(T, Val(2); initial=x -> kh_state(w, x), eos=w.eos,
+                             floors=w.floors, boundary=nothing,
+                             periodic=(true, true),
+                             extents=((zero(T), w.Lbox), (zero(T), w.Lbox)),
+                             roots=rs, speed_headroom=speed_headroom,
+                             reference=nothing)
+    w.mirrored || throw(ArgumentError(
+        "half = true needs KelvinHelmholtz(…; seed = :mirrored): the half box " *
+        "stands for the full one only if the full one is its own mirror image " *
+        "in y = ½, and McNally's seed v_y = a sin(4πx) is even there where a " *
+        "velocity normal to the mirror must be odd. Under it the reflecting " *
+        "wall would force v_y = 0 on a line where the paper's flow has none, " *
+        "which is a different problem that looks like this one."))
+    iseven(rs[1]) || throw(ArgumentError(
+        "half = true keeps the full box's root blocks and drops the upper half " *
+        "of them, so the root count per side must be even, got $(rs[1])."))
     return HydroCase(T, Val(2); initial=x -> kh_state(w, x), eos=w.eos,
-                     floors=w.floors, boundary=nothing, periodic=(true, true),
-                     extents=((zero(T), w.Lbox), (zero(T), w.Lbox)), roots=rs,
-                     speed_headroom=speed_headroom, reference=nothing)
+                     floors=w.floors, boundary=nothing, periodic=(true, false),
+                     reflecting=((false, false), (true, true)),
+                     extents=((zero(T), w.Lbox), (zero(T), w.Lbox / 2)),
+                     roots=(rs[1], rs[1] ÷ 2), speed_headroom=speed_headroom,
+                     reference=nothing)
 end
 
 """
@@ -281,6 +339,13 @@ with `e_i = e^{−4π|y_i − ¼|}` for `y_i < ½` and `e^{−4π|(1−y_i) − 
 corrected there (step 10). The two interfaces of a periodic two-slab setup
 carry the same mode with opposite sign of `∂_y v_x`, and the mirrored weight is
 what lets them add rather than cancel.
+
+**Under the `:mirrored` seed the upper half is read with `v_y` reversed**
+(added 2026-09-29): there it is the lower half's mirror image, `v_y` is the
+velocity normal to the mirror and changes sign in it, and reading it
+unreversed would cancel the two interfaces exactly. So the full box and the
+half box of [`HydroCase`](@ref)`(w; half = true)` — which has no upper half —
+give the same `M`, and McNally's seed reads exactly as it did.
 
 **The area-weighted form and not the uniform-grid one** (equations (6)–(9)),
 because an adaptive mesh has cells of two sizes by construction: on a mesh
@@ -317,6 +382,9 @@ function mode_amplitude(P::FieldSet{T,2}, w::KelvinHelmholtz{T}) where {T}
             mirrored = η < 0.5 ? η : 1 - η
             e = exp(-four_π * abs(mirrored - 0.25))
             vy = tofloat64(T(work[Tuple(idx)..., 3, b]))
+            # The mirrored seed's upper half is the lower half's image, with
+            # the normal velocity reversed.
+            w.mirrored && η ≥ 0.5 && (vy = -vy)
             Σs += vy * area * sin(four_π * ξ) * e
             Σc += vy * area * cos(four_π * ξ) * e
             Σd += area * e
@@ -412,7 +480,8 @@ end
 
 """
     kh_run([T = Float64], Val(2); N, ops, chunk, maxlevel_cap, refine_tol,
-           coarsen_tol, t_end = 3//2, roots = 4, scale = 1, riemann = :hllc, …)
+           coarsen_tol, t_end = 3//2, roots = 4, scale = 1, riemann = :hllc,
+           half = false, …)
 
 Run the shear layer through [`evolve!`](@ref) and record **both** of McNally's
 diagnostics once per chunk through the observer, returning the driver's own
@@ -450,6 +519,10 @@ installed its own there would be taking `M` and `K` somewhere other than here,
 which is exactly what the paragraph above says must not happen. Passing
 nothing leaves the run bit-identical to one that never had the keyword.
 
+`half = true` runs the reflecting half box of
+[`HydroCase`](@ref)`(w; half = true)`, which needs `seed = :mirrored` (added
+2026-09-29).
+
 `refine_tol`, `coarsen_tol`, `chunk`, `maxlevel_cap`, `N` and `ops` have no
 defaults, for the reason [`evolve!`](@ref) gives; anything not listed goes to
 [`KelvinHelmholtz`](@ref).
@@ -460,9 +533,9 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
                 coarsen_tol, t_end=3 // 2, roots=4, scale=1, limiter=:minmod,
                 riemann=:hllc, fixup=true, reset=:stage, cfl=2 // 5,
                 speed_headroom=1, accounting::Bool=true, backend=CPU(),
-                observer=nothing, params...) where {T,D}
+                observer=nothing, half::Bool=false, params...) where {T,D}
     w = KelvinHelmholtz(T, Val(D); params...)
-    case = HydroCase(w; roots=roots, speed_headroom=speed_headroom)
+    case = HydroCase(w; roots=roots, speed_headroom=speed_headroom, half=half)
     ts, Ms, Ks, nbs = Float64[], Float64[], Float64[], Int[]
     function watch(pr, t, u)
         push!(ts, tofloat64(T(t)))

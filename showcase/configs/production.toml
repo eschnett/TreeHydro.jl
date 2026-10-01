@@ -1,0 +1,41 @@
+# The movie: 1080p at 30 frames a second, 2×2 samples per pixel, and 512 to
+# 1024 finest cells across the view at every moment, from refinement level 4
+# upward. `max_level = 16` — twelve doublings, 4096 — is deliberately past
+# where the pilot found the detail to end: the levels the criterion never
+# creates cost nothing, and the movie is cut back afterwards by restarting
+# from the checkpoint one level before the cut with a lower `max_level`,
+# which re-simulates one doubling, the hold and the zoom-out (README.md,
+# "Cutting the zoom"). One H200, `symmetry_showcase.sh`.
+
+[physics]
+L = "1/160"
+
+[mesh]
+N = 32
+roots = 2
+n_min = 512
+max_level = 16
+
+[movie]
+width = 1920
+height = 1080
+supersample = 2
+fps = 30
+V0 = 0.15
+intro = 10.0
+T_level = 5.0
+ease = 2.0
+hold = 5.0
+T_out = 0.75
+ease_out = 1.5
+final = 4.0
+minimap = 384
+
+[camera]
+# The braid's stagnation point nearest the pilot's, found in this run's own
+# state when the zoom starts.
+target = [0.5605, 0.2363]
+target_mode = "braid"
+
+[run]
+walltime_hours = 23.0
