@@ -397,6 +397,24 @@ Symmetry, one H200 per job, all in
 - **Result.** No floor hit and exactly zero injection. The render took 279 s,
   and the movie is 2071 frames and 71 MB.
 
+**The calmer camera, 2026-10-01** (`configs/production_strain_d.toml`, job
+566805, `h200q`, `/mnt/beegfs/eschnetter/claude/treehydro-showcase-tertiary-view`):
+
+- **Setup.** The tertiary-spiral zoom, restarted from its ×64 checkpoint.
+  Past the target time the camera moves with the mean gas velocity within
+  0.3 view heights of the anchor (`camera.track = "view"`), not with one
+  tracer, and the hold at ×256 is 2 s instead of 5 s.
+- **The swing.** Over the frames from the target time to the deepest zoom,
+  the frame-to-frame change of the camera's motion — its swing — fell
+  **3.6×**: 0.00036 view heights per frame against 0.00128 on average, and
+  0.00067 against 0.0027 at most. The motion itself is the same in both
+  runs, about 0.11 view heights a frame: the drift of the pattern, which the
+  camera follows and the viewer does not see.
+- **Cost.** 6 h 55 min (1125755 steps), against 10 h 23 min for the 5 s hold.
+- **Result.** No floor hit and exactly zero injection. The render took
+  440 s, and the movie is 1981 frames and 69 MB, rendered in `plasma` with
+  outlined overlays.
+
 On the core, the diffused centre is smooth, and the criterion's hysteresis
 band (0.08 against 0.02, a factor of 4) equals the `h²` scaling of `τ` at a
 smooth extremum. So level-8 blocks there refine and coarsen on alternate
