@@ -13,15 +13,19 @@
 #
 # What is left for this file is what only the application knows:
 #
-#   * **when** to write — at a chunk boundary, *after* the regrid, where a
-#     fixed-step integrator holds nothing but `(t, u)`, so a restart begins
-#     the next chunk with exactly what the uninterrupted run began it with;
+#   * **when** to write — at a chunk boundary, where a fixed-step integrator
+#     holds nothing but `(t, u)`, and *before* the regrid (amended
+#     2026-10-01, after TreeGeneralizedHarmonic): a restart regrids first,
+#     with the criterion it is given, through the loop's own code, and so
+#     begins the next chunk with exactly what the uninterrupted run began it
+#     with when the criterion is unchanged;
 #   * **its own run state** — the accumulators behind `evolve!`'s return
 #     value, which is what makes a restarted run's *answer* the same and
 #     not only its state;
 #   * **the recipe** — every parameter that decides the numbers, so that a
 #     restart with a different one is refused by name rather than run into
-#     a different experiment that looks like the old one;
+#     a different experiment that looks like the old one — and beside it
+#     **the criterion**, the regridding parameters a restart may change;
 #   * **the names** of the files, and their rotation.
 #
 # See "Checkpoint and restart" in `CODE.md`.
@@ -29,8 +33,14 @@
 # The application's group in the file and the format version of what this
 # package stores there. TreeAMR stores the version and never reads it; the
 # check is `load_run`'s. The name mirrors TreeAMR's own group, "TreeAMR.jl".
+#
+# Version 2 since 2026-10-01: the checkpoint moved from after the regrid to
+# before it, and the criterion left the recipe. A version-1 file holds a
+# state that has already been regridded, which a restart of this version
+# would regrid a second time — a different run, with the same layout — so it
+# is refused rather than read.
 const CHECKPOINT_APPLICATION = "TreeHydro.jl"
-const CHECKPOINT_VERSION = 1
+const CHECKPOINT_VERSION = 2
 
 """
     checkpointing_available()
@@ -247,18 +257,17 @@ plain_field(x) = throw(ArgumentError(
 
 """
     run_recipe(T, case, D; N, G, roots, ops, chunk, cfl, limiter, riemann,
-               fixup, reset, accounting, refine_tol, coarsen_tol,
-               maxlevel_cap, ε, ε_g, buffer)
+               fixup, reset, accounting)
 
 Every parameter of an [`evolve!`](@ref) call that decides the numbers, as
-plain data: the working type by name, the mesh (`D`, `N`, `G`, the roots, the
-periodicity, the reflecting faces, the extents), the case's equation of
-state, floors and speed headroom, the cadence and the step (`chunk`, `cfl`),
-the scheme (`limiter`, `riemann`, `fixup`, `reset`, `accounting`), the
-refinement criterion (`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`,
-`ε_g`, `buffer`) and the operators. `t_end` is not in it, because a restart may move it; nor are
-`backend`, `maxpasses` or the observer, which do not change a number of the
-run once its initial-data cycle is over.
+plain data, **except the regridding criterion** ([`run_criterion`](@ref)),
+which a restart may change: the working type by name, the mesh (`D`, `N`,
+`G`, the roots, the periodicity, the reflecting faces, the extents), the
+case's equation of state, floors and speed headroom, the cadence and the
+step (`chunk`, `cfl`), the scheme (`limiter`, `riemann`, `fixup`, `reset`,
+`accounting`) and the operators. `t_end` is not in it, because a restart may
+move it; nor are `backend`, `maxpasses` or the observer, which do not change
+a number of the run once its initial-data cycle is over.
 
 Every real goes through `T` first and then [`plain_reals`](@ref), so a
 `2//25` given to one call and a `T(2//25)` given to the next compare equal,
@@ -272,8 +281,7 @@ restarted run at all, but the boundary hook does: the caller is trusted to
 pass the same case.
 """
 function run_recipe(::Type{T}, case::HydroCase, ::Val{D}; N, G, roots, ops, chunk,
-                    cfl, limiter, riemann, fixup, reset, accounting, refine_tol,
-                    coarsen_tol, maxlevel_cap, ε, ε_g, buffer) where {T,D}
+                    cfl, limiter, riemann, fixup, reset, accounting) where {T,D}
     r(x) = plain_reals(T(x))
     tupleD(x) = x isa Integer ? ntuple(_ -> Int(x), D) : ntuple(d -> Int(x[d]), D)
     return (; float_type=type_name(T), D=Int(D), N=Int(N), G=tupleD(G),
@@ -283,18 +291,51 @@ function run_recipe(::Type{T}, case::HydroCase, ::Val{D}; N, G, roots, ops, chun
             eos=plain_struct(case.eos), floors=plain_struct(case.floors),
             speed_headroom=r(case.speed_headroom), chunk=r(chunk), cfl=r(cfl),
             limiter=limiter, riemann=riemann, fixup=Bool(fixup), reset=reset,
-            accounting=Bool(accounting), refine_tol=r(refine_tol),
-            coarsen_tol=r(coarsen_tol), maxlevel_cap=Int(maxlevel_cap),
-            epsilon=r(ε), epsilon_g=r(ε_g),
-            buffer=buffer === nothing ? nothing : Int(buffer),
+            accounting=Bool(accounting),
             ops=(; family=Symbol(ops.family), prolongation=Int(ops.prolongation),
                  restriction=Int(ops.restriction)))
 end
 
-# A recipe value as the refusal prints it: a one-element vector — how a
-# scalar real is stored — as its element.
+"""
+    run_criterion(T; refine_tol, coarsen_tol, maxlevel_cap, ε, ε_g, buffer)
+
+The parameters a restart **may** change (decided 2026-10-01, after
+TreeGeneralizedHarmonic): the regridding criterion — the two thresholds, the
+cap, the indicator's two `ε`s and the travelling margin `buffer` — as plain
+data, each real through `T` and then [`plain_reals`](@ref) as in
+[`run_recipe`](@ref). The checkpoint is written before the regrid, so a
+restart with a changed criterion regrids with it first, before its next
+step; the change is reported field by field and returned as
+`criterion_changed`. The keys are the recipe's (`epsilon`, `epsilon_g`).
+"""
+function run_criterion(::Type{T}; refine_tol, coarsen_tol, maxlevel_cap, ε, ε_g,
+                       buffer) where {T}
+    r(x) = plain_reals(T(x))
+    return (; refine_tol=r(refine_tol), coarsen_tol=r(coarsen_tol),
+            maxlevel_cap=Int(maxlevel_cap), epsilon=r(ε), epsilon_g=r(ε_g),
+            buffer=buffer === nothing ? nothing : Int(buffer))
+end
+
+# A plain value as a message prints it: a one-element vector — how a scalar
+# real is stored — as its element.
 describe_plain(x::AbstractVector) = length(x) == 1 ? repr(only(x)) : repr(x)
 describe_plain(x) = repr(x)
+
+# The fields of two plain named tuples that differ, each with a sentence
+# naming both values: the refusal of a recipe and the report of a criterion
+# are the same comparison.
+function plain_differences(saved, current)
+    diffs = Tuple{Symbol,String}[]
+    for k in unique((keys(saved)..., keys(current)...))
+        a = haskey(saved, k) ? saved[k] : missing
+        b = haskey(current, k) ? current[k] : missing
+        isequal(a, b) && continue
+        was = a === missing ? "absent" : describe_plain(a)
+        is = b === missing ? "absent" : describe_plain(b)
+        push!(diffs, (k, "`$k` is $was in the checkpoint and $is in this call"))
+    end
+    return diffs
+end
 
 """
     check_recipe(saved, current, path)
@@ -306,32 +347,43 @@ and not two. Equality is `isequal` on the plain forms, which for reals is
 equality of the bits in the run's type.
 """
 function check_recipe(saved, current, path)
-    diffs = String[]
-    for k in unique((keys(saved)..., keys(current)...))
-        a = haskey(saved, k) ? saved[k] : missing
-        b = haskey(current, k) ? current[k] : missing
-        isequal(a, b) && continue
-        was = a === missing ? "absent" : describe_plain(a)
-        is = b === missing ? "absent" : describe_plain(b)
-        push!(diffs, "`$k` is $was in the checkpoint and $is in this call")
-    end
+    diffs = plain_differences(saved, current)
     isempty(diffs) || throw(ArgumentError(
         "restart_file $(repr(path)) was written by a run with other parameters: " *
-        join(diffs, "; ") * ". A restart continues the saved run, and a run " *
-        "continued with another parameter would be a different experiment that " *
-        "looks like the old one, so it must be called with the same case and the " *
-        "same keywords — only t_end may change (and backend, maxpasses and the " *
-        "observer, which decide no number of the run). The case's closures, its " *
-        "initial data, boundary hook and reference, cannot be compared and are " *
-        "trusted to be the same."))
+        join(last.(diffs), "; ") * ". A restart continues the saved run, and a " *
+        "run continued with another parameter would be a different experiment " *
+        "that looks like the old one, so it must be called with the same case " *
+        "and the same keywords — only t_end and the regridding criterion " *
+        "(refine_tol, coarsen_tol, maxlevel_cap, ε, ε_g, buffer) may change (and " *
+        "backend, maxpasses and the observer, which decide no number of the " *
+        "run). The case's closures, its initial data, boundary hook and " *
+        "reference, cannot be compared and are trusted to be the same."))
     return nothing
+end
+
+"""
+    check_criterion(saved, current, path) -> Vector{Symbol}
+
+The fields of the regridding criterion that a restart changes, in the
+criterion's order — empty when it changes none — each reported with both of
+its values in one `@info`. A change is allowed (see [`run_criterion`](@ref)),
+and said, so that a log shows where a run stopped being the one it began as.
+"""
+function check_criterion(saved, current, path)
+    changes = plain_differences(saved, current)
+    isempty(changes) || @info "restarting $(repr(path)) with a changed regridding " *
+                              "criterion, which the first regrid, before the next " *
+                              "step, uses: " * join(last.(changes), "; ")
+    return first.(changes)
 end
 
 # --- the run state -----------------------------------------------------------------
 
 # The accumulators behind `evolve!`'s return value at the end of chunk `c`,
-# after its regrid: everything a restart needs for its answer, and not only
-# its state, to be the uninterrupted run's. Every real through `plain_reals`.
+# before its regrid: everything a restart needs for its answer, and not only
+# its state, to be the uninterrupted run's — and, in `λ_end_history[end]`,
+# the speed its first regrid derives the margin from. Every real through
+# `plain_reals`.
 function run_state(; chunk, t, nsteps, nregrids, floor_hits, ghost_hits, passes,
                    converged, acc, λ_initial, tracking, drift, scales, totals0,
                    nblocks_history, buffer_history, λ_history, λ_end_history)
@@ -350,25 +402,27 @@ end
 # --- writing and reading -------------------------------------------------------------
 
 """
-    save_run(path, forest, U, u; recipe, run, filters = (), sync = true)
+    save_run(path, forest, U, u; recipe, criterion, run, filters = (), sync = true)
 
 One checkpoint: the forest, the conserved state `U` with its state vector
-`u`, and this package's plain data `(; recipe, run)`, through TreeAMR's
-`save_checkpoint` — atomically, so a failed write leaves the previous file
-alone. Only `U` is saved: the primitive set and the fluxes are scratch that
-[`update_primitives!`](@ref) and the right-hand side rebuild from `u` at the
-start of the next chunk, ghosts included. `u` and not `U.work`, because after
-the post-regrid reset the state vector is the authoritative copy.
+`u`, and this package's plain data `(; recipe, criterion, run)`, through
+TreeAMR's `save_checkpoint` — atomically, so a failed write leaves the
+previous file alone. Only `U` is saved: the primitive set and the fluxes are
+scratch that [`update_primitives!`](@ref) rebuilds from `u`, ghosts
+included — on a restart before its first regrid, as at the start of every
+chunk. `u` and not `U.work`: the state vector is the integrator's, and the
+authoritative copy.
 """
-function save_run(path, forest, U, u; recipe, run, filters=(), sync::Bool=true)
+function save_run(path, forest, U, u; recipe, criterion, run, filters=(),
+                  sync::Bool=true)
     return save_checkpoint(path, forest; fieldsets=("U" => (U, u),),
                            application=CHECKPOINT_APPLICATION => CHECKPOINT_VERSION,
-                           data=(; recipe=recipe, run=run), filters=filters,
-                           sync=sync)
+                           data=(; recipe=recipe, criterion=criterion, run=run),
+                           filters=filters, sync=sync)
 end
 
 """
-    load_run(path, T; backend = CPU()) -> (; forest, U, u, recipe, run)
+    load_run(path, T; backend = CPU()) -> (; forest, U, u, recipe, criterion, run)
 
 Read a checkpoint written by [`save_run`](@ref), refusing one that is not
 this package's — another application's, or a format version other than
@@ -391,25 +445,26 @@ function load_run(path::AbstractString, ::Type{T}; backend=CPU()) where {T}
     version == CHECKPOINT_VERSION || throw(ArgumentError(
         "$(repr(path)) stores TreeHydro's run state in format version $version, " *
         "and this version of TreeHydro reads version $(CHECKPOINT_VERSION) only. " *
-        "A file from a newer TreeHydro is read by that version — TreeAMR's " *
+        (version == 1 ?
+         "Version 1 was written after the regrid at its chunk boundary and " *
+         "version 2 before it, so a restart of this version would regrid a " *
+         "state that has already been regridded — another run. " : "") *
+        "A file from another TreeHydro is read by that version — TreeAMR's " *
         "`checkpoint_environment(path, dir)` writes the environment that wrote " *
         "it. $written"))
-    (ck.data isa NamedTuple && haskey(ck.data, :recipe) && haskey(ck.data, :run) &&
+    (ck.data isa NamedTuple && haskey(ck.data, :recipe) &&
+     haskey(ck.data, :criterion) && haskey(ck.data, :run) &&
      haskey(ck.fieldsets, "U")) || throw(ArgumentError(
         "$(repr(path)) names $(CHECKPOINT_APPLICATION) version $version but holds " *
-        "no recipe, no run state or no field set \"U\": the file is damaged, or " *
-        "was not written by `evolve!`. $written"))
+        "no recipe, no criterion, no run state or no field set \"U\": the file " *
+        "is damaged, or was not written by `evolve!`. $written"))
     U = ck.fieldsets["U"].fieldset
     u = ck.fieldsets["U"].state
-    # A file written before the recipe recorded the reflecting faces had
-    # none — this package could not build a forest with one — so its recipe
-    # is read as saying so, rather than refused as damaged (added
-    # 2026-09-29).
-    recipe = ck.data.recipe
-    haskey(recipe, :reflecting) ||
-        (recipe = merge(recipe, (; reflecting=map(_ -> (false, false),
-                                                  ck.forest.reflecting))))
-    return (; forest=ck.forest, U=U, u=u, recipe=recipe, run=ck.data.run)
+    # Every version-2 recipe records the reflecting faces: a file from before
+    # they existed is version 1 and refused above, so the reading of a recipe
+    # without them as "none" (added 2026-09-29) has nothing left to read.
+    return (; forest=ck.forest, U=U, u=u, recipe=ck.data.recipe,
+            criterion=ck.data.criterion, run=ck.data.run)
 end
 
 # --- the keywords ------------------------------------------------------------------------

@@ -43,9 +43,13 @@ corrects, and under "Possible extensions" what was measured and deliberately
 not built and what was never measured at all.
 
 **Added since, on 2026-09-29: checkpoint and restart**, on TreeAMR 0.1.4's
-M9a — `evolve!` writes checkpoints at chunk boundaries after the regrid and
-restarts from them, bit-identically; see "Checkpoint and restart" in
-`CODE.md`, and the entries below for the files.
+M9a — `evolve!` writes checkpoints at chunk boundaries and restarts from
+them, bit-identically; see "Checkpoint and restart" in `CODE.md`, and the
+entries below for the files. **Amended 2026-10-01**, to keep the Tree*
+applications' checkpointing alike (Erik's decision; TreeGeneralizedHarmonic
+did the same that day): the checkpoint is written *before* the regrid, a
+restart regrids first through the loop's own `regrid_chunk!`, and so may
+change the regridding criterion, which it reports.
 
 **Added since, also on 2026-09-29: reflecting walls and the zoom
 showcase.** TreeAMR's reflecting faces (M10, first-class, on every backend —
@@ -120,15 +124,19 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `checkpoint_every_chunks`, `checkpoint_interval_seconds`,
   `max_walltime_seconds`, `num_checkpoints_keep`,
   `checkpoint_hdf5_filters`, `checkpoint_sync_to_disk`, `restart_file`;
-  it returns `finished`, `t`, `chunk`, `checkpoints_written` and
-  `restart_file` beside the rest) — `uniform_run`, `check_cfl`,
+  it returns `finished`, `t`, `chunk`, `checkpoints_written`,
+  `restart_file` and `criterion_changed` beside the rest), `regrid_chunk!`
+  (the end-of-chunk regrid, which the loop and a restart both call, since
+  2026-10-01) — `uniform_run`, `check_cfl`,
   `chunk_count`, `tracked_share`, `reduce_to_grid` and `l1_difference`.
 - `src/checkpoint.jl` (added 2026-09-29): `CHECKPOINT_APPLICATION` and
   `CHECKPOINT_VERSION`, `checkpointing_available`, `checkpoint_filename`,
   `checkpoint_files`, `latest_checkpoint` (the one export),
   `rotate_checkpoints!`, `plain_reals` / `from_plain_reals` (reals as
   limbs where they are not native), `run_recipe` / `check_recipe`,
-  `run_state`, `save_run` / `load_run`, and `check_checkpoint_keywords`.
+  `run_criterion` / `check_criterion` and `plain_differences` (since
+  2026-10-01), `run_state`, `save_run` / `load_run`, and
+  `check_checkpoint_keywords`.
   Included *after* `driver.jl`, because `run_recipe`'s signature names a
   `HydroCase`; `evolve!` reaches it only at run time.
 - `src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
@@ -171,7 +179,8 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   and the half box against the full box — to roundoff, not bit for bit,
   and why), `type_tests.jl` (every case at `Float64`,
   `Float32` and `Float32x2`), `checkpoint_tests.jl` (restart chains
-  against the uninterrupted run, the rotation, the refusals; the first file
+  against the uninterrupted run, a restart with a changed criterion, a
+  finished run continued, the rotation, the refusals; the first file
   to load HDF5, and it tests the refusal without it before it does, and
   reruns the standalone `test/restart_workload.jl` in a subprocess at the
   other thread count), `device_tests.jl` (every driver against the
@@ -240,7 +249,9 @@ results" comes from a test that runs here, so this is what to run before
 recording a number. The last recorded timings, after checkpoint and
 restart was added on 2026-09-29, on this machine: **12030 tests in 4 m 28
 at one thread and 12064 in 3 m 47 at four** (after reflecting walls, the same day and under load: 12396 in 4 m 46 and 12430 in 4 m 10, 6 m 36 checked, 7 m 47 at 1.11; after step 12: 11856 in
-4 m 26 and 11890 in 3 m 44) — the four-thread count is higher because the
+4 m 26 and 11890 in 3 m 44; on 2026-10-01, with the walls and the checkpoint
+moved before the regrid: 12447 in 5 m 01 and 12481 in 4 m 28) — the
+four-thread count is higher because the
 ownership check has one assertion per block per thread, and about 50 s of
 either is `test/type_tests.jl`, mostly compiling the `Float32x2` paths.
 `test/checkpoint_tests.jl` alone, in a fresh process, is 51 s with its
@@ -276,7 +287,8 @@ Because it overrides `@inbounds` package-wide it never runs the code the
 package actually ships — so it does not replace a plain run, which is the
 only one that can catch a wrong answer. Run both before recording a
 number. After step 12 the checked run took **5 m 56** with the command as
-written, against 4 m 26 plain; on 2026-09-29, **6 m 12** against 4 m 28.
+written, against 4 m 26 plain; on 2026-09-29, **6 m 12** against 4 m 28;
+on 2026-10-01, **6 m 33** against 5 m 01.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--check-bounds=yes"])'
@@ -308,7 +320,8 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
 
 After step 12 the clean tree took **7 m 32** at 1.11 with the command as
 written, against the release's 4 m 26 (on 2026-09-29, **7 m 27** against
-4 m 28, with TreeAMR 0.1.4 and HDF5 0.17.4 resolved from the registry) — so budget for nearly twice the run
+4 m 28, with TreeAMR 0.1.4 and HDF5 0.17.4 resolved from the registry;
+on 2026-10-01, **7 m 45** against 5 m 01) — so budget for nearly twice the run
 you have just done. 1.11 is also the *cheap* version under coverage, which
 is the opposite way round and is why the instrumented cell is the floor
 cell; see "Things that will bite".
@@ -1006,15 +1019,24 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   times — once at `t = 0` and once per chunk — so zipping the two is a
   frame-shifted plot. Take `t` and the block count from your own observer,
   as `kh_run` does with `ts` and `nbs` and as both viewers do.
-- **A checkpoint is written after the regrid, and never before** (added
-  2026-09-29). There the integrator holds nothing but `(t, u)` and the next
-  chunk begins from `u` alone, so a restart is the uninterrupted run bit for
-  bit. A write moved before the regrid — to "save the state the observer
-  saw", say — would make a restart replay the regrid *and* the post-regrid
-  reset, and the chain test in `test/checkpoint_tests.jl` is what would
-  notice. `u` is what is saved, not `U.work`: the post-regrid reset acts on
-  `u`. The last chunk writes nothing — it has no regrid and is not a restart
-  point.
+- **A checkpoint is written before the regrid, and a restart regrids
+  first, through the same function** (amended 2026-10-01; it was "after the
+  regrid, and never before" from 2026-09-29). The write sits after the
+  observer and before `regrid_chunk!`; a restart calls
+  `update_primitives!(p, u)` and then `regrid_chunk!` — flags with the
+  *current* criterion, the margin from `λ_end_history[end]`, the
+  `buffer_history` push, `regrid!`, the rebuilt problem, the gather and the
+  post-regrid reset — before its first step. That the loop and the restart
+  share one function is what keeps the replay bit for bit; **do not inline
+  it back into the loop**, or give the restart a regrid of its own, and do
+  not add anything to the loop's regrid outside it. Replaying is the price
+  of what the move buys: a restart may change `refine_tol`, `coarsen_tol`,
+  `maxlevel_cap`, `ε`, `ε_g` or `buffer`, and the first regrid uses the new
+  value. The last chunk writes too where `t_end` is a whole number of
+  chunks in `T` (`stop == c * chunk`), so a finished run can be continued;
+  elsewhere it writes nothing. `u` is what is saved, not `U.work`. The
+  format version went from 1 to 2 with the move, and a version-1 file is
+  refused: its state has been regridded already.
 - **HDF5 is the caller's to load, and `evolve!` checks it before the
   cycle** (added 2026-09-29). TreeAMR's `save_checkpoint` and
   `load_checkpoint` have methods only once `using HDF5` has loaded
@@ -1032,13 +1054,17 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   returned accumulator not added to `run_state` comes back from a restart
   counted from the checkpoint rather than from `t = 0`. The chain test
   compares the fields listed in `CKPT_FIELDS`, so a new returned field goes
-  there too. Only `t_end` may change on a restart, and the case's closures
-  (`initial`, `boundary`, `reference`) cannot be compared at all — they are
-  trusted.
+  there too. Only `t_end` and the **criterion** may change on a restart
+  (amended 2026-10-01): a new keyword of the regridding criterion goes in
+  `run_criterion` instead, and is reported when it changes rather than
+  refused; moving a parameter from one to the other is a design change,
+  and goes in `CODE.md` with its reason. The case's closures (`initial`,
+  `boundary`, `reference`) cannot be compared at all — they are trusted.
 - **A wall-time stop returns the checkpointed state, not an answer** (added
   2026-09-29). `finished = false`, `l1 = linf = nothing`, and `U`, `u` and
-  `forest` are the state *after* the last chunk's regrid — which is what was
-  saved — with `U` scattered and its ghosts filled. A caller reading `r.l1`
+  `forest` are the state *before* the last chunk's regrid (amended
+  2026-10-01; it was after) — which is what was saved, on the mesh that
+  chunk ran on — with `U` scattered and its ghosts filled. A caller reading `r.l1`
   must look at `r.finished` first. The limit is timed from the call and
   estimates the next chunk as the longest so far plus the longest write, so
   startup and compilation are the caller's margin below the queue's limit.

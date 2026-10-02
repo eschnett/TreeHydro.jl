@@ -2,16 +2,23 @@
 #
 # The claim is one sentence: **a restarted run, or a chain of restarts, is
 # the uninterrupted run, bit for bit, at any thread count** — its state, its
-# mesh, and every number `evolve!` returns about it. Everything below is
-# either that claim on another configuration or a refusal that keeps a
+# mesh, and every number `evolve!` returns about it — **unless it changes
+# the regridding criterion, which its first regrid then uses** (amended
+# 2026-10-01, when the checkpoint moved before the regrid). Everything below
+# is either that claim on another configuration or a refusal that keeps a
 # restart from silently becoming a different run.
 #
 # The failure modes, one per testset:
 #
-#   * a checkpoint taken anywhere but after the regrid, or an accumulator
-#     left out of the run state — the state would continue and the *answer*
-#     (a drift, a floor count, a history) would not, and only a comparison of
-#     every returned field notices;
+#   * a checkpoint taken anywhere but before the regrid, a restart whose
+#     replayed regrid is not the loop's, or an accumulator left out of the
+#     run state — the state would continue and the *answer* (a drift, a
+#     floor count, a history) would not, and only a comparison of every
+#     returned field notices;
+#   * a restart with a changed criterion that does not regrid with it before
+#     its next step, or does not say so;
+#   * a finished run on a chunk boundary that cannot be continued, or is
+#     continued into another run than the longer one;
 #   * rotation deleting the wrong file, or a name that sorts wrongly;
 #   * a real that does not round-trip at `Float32x2`, whose scalars TreeAMR's
 #     plain data refuse;
@@ -71,7 +78,8 @@ ckpt_sod(; kwargs...) = evolve!(ckpt_sod_case(), Val(1); CKPT_SOD..., kwargs...)
 
 # Every field `evolve!` returns that is a claim about the run — everything
 # but the three that say how this *call* went (`checkpoints_written`,
-# `restart_file`) and the `U` whose working array is compared through `u`.
+# `restart_file`, `criterion_changed`) and the `U` whose working array is
+# compared through `u`.
 const CKPT_FIELDS = (:u, :drift, :scales, :totals0, :totals, :floor_hits, :reset_hits,
                      :ghost_hits, :injection, :nsteps, :nchunks, :nregrids, :passes,
                      :converged, :nblocks, :nblocks_history, :buffer_history,
@@ -126,11 +134,12 @@ const CKPT_REFERENCE_TS = Float64[]
 const CKPT_REFERENCE = ckpt_sod(; observer=(p, t, u) -> push!(CKPT_REFERENCE_TS, t))
 
 @testset "A chain of restarts is the uninterrupted run, bit for bit" begin
-    # Guards the whole design: a checkpoint written anywhere but after the
-    # regrid and its reset, a run-state field left out, or a restart that
-    # rebuilds something the uninterrupted run carries over. Each of those
-    # continues the state and changes an answer, and only a comparison of
-    # every returned field says so.
+    # Guards the whole design: a checkpoint written anywhere but before the
+    # regrid, a restart whose first regrid is not the one the loop would have
+    # made there, a run-state field left out, or a restart that rebuilds
+    # something the uninterrupted run carries over. Each of those continues
+    # the state and changes an answer, and only a comparison of every
+    # returned field says so.
     dir = mktempdir()
     prefix = joinpath(dir, "sod")
     ts = Float64[]
@@ -150,6 +159,11 @@ const CKPT_REFERENCE = ckpt_sod(; observer=(p, t, u) -> push!(CKPT_REFERENCE_TS,
         @test r.u == files[i].fieldsets["U"].state
         @test r.forest.leaves == files[i].forest.leaves
         @test files[i].data.run.chunk == i
+        # Stopped before the chunk's regrid: on the mesh the chunk ran on,
+        # with that regrid's margin not yet recorded.
+        @test r.nblocks == ref.nblocks_history[i]
+        @test r.buffer_history == ref.buffer_history[1:(i - 1)]
+        @test r.criterion_changed == (i == 1 ? nothing : Symbol[])
         @test r.restart_file == (i == 1 ? nothing : only(calls[i - 1].checkpoints_written))
     end
     # The observer is not called at `t = 0` by a restart, so the chain's
@@ -157,7 +171,8 @@ const CKPT_REFERENCE = ckpt_sod(; observer=(p, t, u) -> push!(CKPT_REFERENCE_TS,
     @test ts == CKPT_REFERENCE_TS
     @test first(ts) == 0 && count(iszero, ts) == 1
     # And the directory holds the default two files, the latest the ninth
-    # chunk's: the last chunk is not a restart point and writes nothing.
+    # chunk's: the wall-time limit never stops the last chunk, and nothing
+    # else here would write there.
     @test length(TreeHydro.checkpoint_files(prefix)) == 2
     @test isempty(last(calls).checkpoints_written)
 end
@@ -177,8 +192,10 @@ end
     r = ckpt_sod(; checkpoint_path_prefix=prefix, checkpoint_interval_seconds=0,
                  num_checkpoints_keep=3, checkpoint_sync_to_disk=false)
     @test ckpt_same(r, CKPT_REFERENCE)
-    # A file at every chunk boundary but the last.
-    @test length(r.checkpoints_written) == r.nchunks - 1 == 9
+    # A file at every chunk boundary, the last included: `t_end = 1/20` is ten
+    # chunks of `1/200` exactly in `Float64`, so a longer run would have
+    # regridded there.
+    @test length(r.checkpoints_written) == r.nchunks == 10
     kept = TreeHydro.checkpoint_files(prefix)
     @test [path for (_, path) in kept] == r.checkpoints_written[(end - 2):end]
     @test !isfile(stale) && all(isfile, strangers)
@@ -188,7 +205,7 @@ end
         # The name is the step count, and the file is the chunk boundary's.
         @test saved.nsteps == iteration
         @test path == TreeHydro.checkpoint_filename(prefix, iteration)
-        @test saved.chunk in 7:9
+        @test saved.chunk in 8:10
     end
     @test issorted(first.(kept)) && allunique(first.(kept))
 
@@ -197,7 +214,7 @@ end
     r2 = ckpt_sod(; checkpoint_path_prefix=prefix2, checkpoint_every_chunks=2,
                   num_checkpoints_keep=10, checkpoint_sync_to_disk=false)
     @test [load_checkpoint(f).data.run.chunk for f in r2.checkpoints_written] ==
-          [2, 4, 6, 8]
+          [2, 4, 6, 8, 10]
     @test all(isfile, r2.checkpoints_written)
     @test latest_checkpoint(joinpath(dir, "none")) === nothing
 
@@ -209,7 +226,7 @@ end
     r3 = ckpt_sod(; t_end=1 // 50, checkpoint_path_prefix=prefix3,
                   checkpoint_interval_seconds=0, num_checkpoints_keep=1,
                   checkpoint_sync_to_disk=false)
-    @test length(r3.checkpoints_written) == 3
+    @test length(r3.checkpoints_written) == 4
     @test isfile(last(r3.checkpoints_written))
     @test length(TreeHydro.checkpoint_files(prefix3)) == 1
 end
@@ -258,7 +275,10 @@ end
                     checkpoint_sync_to_disk=false)
     # Writing a checkpoint changes nothing about the run that writes it.
     @test restart_lines(r) == restart_lines(ref)
-    file = only(r.checkpoints_written)
+    # Chunks 4 and 8, the last on a chunk boundary; the subprocess continues
+    # from the first.
+    @test length(r.checkpoints_written) == 2
+    file = first(r.checkpoints_written)
     other = Threads.nthreads() == 1 ? max(2, min(4, Sys.CPU_THREADS)) : 1
     script = joinpath(@__DIR__, "restart_workload.jl")
     project = Base.active_project()
@@ -272,20 +292,23 @@ end
 end
 
 # One checkpoint of the tube, at chunk 2 of 10 (`t = 1/100`), for the
-# refusals below: the first of the four a run writes every two chunks.
+# refusals below: the first of the five a run writes every two chunks, the
+# last chunk's included — all kept, or the rotation would delete it.
 const CKPT_FILE = first(ckpt_sod(; checkpoint_path_prefix=joinpath(mktempdir(), "sod"),
-                                 checkpoint_every_chunks=2, num_checkpoints_keep=4,
+                                 checkpoint_every_chunks=2, num_checkpoints_keep=5,
                                  checkpoint_sync_to_disk=false).checkpoints_written)
 
 @testset "A restart with another parameter is refused, naming it" begin
     # Guards the recipe: a restart with another chunk, limiter, block size or
-    # cap would run — and be a different experiment that looks like the old
-    # one. Each is refused with the parameter's name, and only its name.
-    for (k, v) in ((:chunk, 1 // 100), (:limiter, :mc), (:N, 16), (:maxlevel_cap, 1))
+    # Riemann solver would run — and be a different experiment that looks
+    # like the old one. Each is refused with the parameter's name, and only
+    # its name. (`maxlevel_cap` was the fourth until 2026-10-01; it is the
+    # criterion's now, which a restart may change.)
+    for (k, v) in ((:chunk, 1 // 100), (:limiter, :mc), (:N, 16), (:riemann, :hllc))
         err = ckpt_refusal(() -> ckpt_sod(; restart_file=CKPT_FILE, (k => v,)...))
         @test err isa ArgumentError
         @test occursin("`$k`", err.msg)
-        others = filter(!=(k), (:chunk, :limiter, :N, :maxlevel_cap))
+        others = filter(!=(k), (:chunk, :limiter, :N, :riemann))
         @test !any(o -> occursin("`$o`", err.msg), others)
     end
     # Two at once are named at once, so a job script is fixed in one round.
@@ -302,21 +325,81 @@ const CKPT_FILE = first(ckpt_sod(; checkpoint_path_prefix=joinpath(mktempdir(), 
         err = ckpt_refusal(() -> ckpt_sod(; restart_file=CKPT_FILE, t_end=t_end))
         @test err isa ArgumentError && occursin("lies at or before", err.msg)
     end
-    # The same parameters spelled differently are the same run.
+    # The same parameters spelled differently are the same run, and the
+    # same criterion: nothing is reported as changed.
     r = ckpt_sod(; restart_file=CKPT_FILE, refine_tol=0.08, chunk=0.005)
     @test ckpt_same(r, CKPT_REFERENCE)
+    @test r.criterion_changed == Symbol[]
 end
 
-@testset "A larger t_end continues the run" begin
-    # Guards the one parameter a restart may change: a run to `t_end₁`,
-    # continued from its last checkpoint to `t_end₂`, is the run to `t_end₂`.
+@testset "A restart with another criterion regrids with it first" begin
+    # Guards the one thing the checkpoint's place before the regrid is for: a
+    # restart that changes the regridding criterion must regrid with the new
+    # one *before its next step*, where the uninterrupted run regridded with
+    # the old, and say so. A checkpoint after the regrid, or a restart that
+    # stepped before regridding, would run the next chunk on the old mesh.
+    # Chunk 3 is where the tube's mesh first moves, from 12 blocks to 16.
+    ref = CKPT_REFERENCE
+    @test ref.nblocks_history[3:4] == [12, 16]
+    prefix = joinpath(mktempdir(), "crit")
+    file = first(ckpt_sod(; checkpoint_path_prefix=prefix, checkpoint_every_chunks=3,
+                          num_checkpoints_keep=4,
+                          checkpoint_sync_to_disk=false).checkpoints_written)
+    @test load_checkpoint(file).data.run.chunk == 3
+    r = @test_logs (:info, r"`coarsen_tol` is 0\.02 in the checkpoint and 0\.05") ckpt_sod(;
+        restart_file=file, coarsen_tol=1 // 20)
+    @test r.criterion_changed == [:coarsen_tol]
+    # Everything up to the checkpoint is the uninterrupted run's ...
+    @test r.nblocks_history[1:3] == ref.nblocks_history[1:3]
+    @test r.buffer_history[1:2] == ref.buffer_history[1:2]
+    @test r.λ_history[1:3] == ref.λ_history[1:3]
+    # ... and chunk 3's regrid, made by the restart before its first step, is
+    # another: the wider coarsening band leaves 14 blocks where the old
+    # criterion made 16, and the run goes on from there to another answer.
+    @test r.nblocks_history[4] == 14
+    @test r.nregrids == ref.nregrids + 1
+    @test r.finished && r.nsteps == ref.nsteps && r.l1 != ref.l1
+    # The margin too: `buffer = 0` from the same file records the restart's
+    # own width at chunk 3's regrid, which then refines nothing.
+    r0 = ckpt_sod(; restart_file=file, buffer=0)
+    @test r0.criterion_changed == [:buffer]
+    @test r0.buffer_history[1:3] == [ref.buffer_history[1:2]; 0]
+    @test r0.nblocks_history[4] == 12
+    # A run from the initial data has no criterion to change.
+    @test ref.criterion_changed === nothing
+end
+
+@testset "A larger t_end continues the run, a finished one too" begin
+    # Guards the other parameter a restart may change: a run to `t_end₁`,
+    # continued from a checkpoint to `t_end₂`, is the run to `t_end₂` — from
+    # one inside it, and (since 2026-10-01) from the one its *last* chunk
+    # wrote, `t_end₁ = 1/50` being four chunks of `1/200` exactly: the
+    # finished run never regridded there, and its continuation regrids first.
     prefix = joinpath(mktempdir(), "short")
     short = ckpt_sod(; t_end=1 // 50, checkpoint_path_prefix=prefix,
                      checkpoint_interval_seconds=0, checkpoint_sync_to_disk=false)
     @test short.finished && short.nchunks == 4
-    @test load_checkpoint(latest_checkpoint(prefix)).data.run.chunk == 3
-    r = ckpt_sod(; restart_file=latest_checkpoint(prefix))
-    @test ckpt_same(r, CKPT_REFERENCE)
+    @test length(short.checkpoints_written) == 4
+    inner, last_file = short.checkpoints_written[3:4]
+    @test load_checkpoint(inner).data.run.chunk == 3
+    saved = load_checkpoint(last_file)
+    @test latest_checkpoint(prefix) == last_file && saved.data.run.chunk == 4
+    # The last chunk's file is the finished run's own answer, unregridded.
+    @test saved.fieldsets["U"].state == short.u
+    @test saved.forest.leaves == short.forest.leaves
+    for file in (inner, last_file)
+        r = ckpt_sod(; restart_file=file)
+        @test ckpt_same(r, CKPT_REFERENCE)
+    end
+    # Where `t_end` is not a whole number of chunks the last chunk is no
+    # restart point: a continuation's chunks would not line up with it.
+    prefix2 = joinpath(mktempdir(), "ragged")
+    ragged = ckpt_sod(; t_end=7 // 400, checkpoint_path_prefix=prefix2,
+                      checkpoint_interval_seconds=0, num_checkpoints_keep=4,
+                      checkpoint_sync_to_disk=false)
+    @test ragged.nchunks == 4
+    @test [load_checkpoint(f).data.run.chunk for f in ragged.checkpoints_written] ==
+          [1, 2, 3]
 end
 
 # The reflecting half box of the shear layer, cut to four chunks: the one
@@ -341,18 +424,20 @@ ckpt_half_kh(; kwargs...) =
     @test first(files).data.recipe.reflecting == ((false, false), (true, true))
     @test first(files).forest.reflecting == ((false, false), (true, true))
 
-    # A recipe written before the field existed had no reflecting face, and
-    # reads as saying so: the tube's file with the field taken out restarts
-    # as the uninterrupted tube.
+    # A recipe written before the field existed is a version-1 file — the
+    # format went to 2 on 2026-10-01, after the walls — and is refused for
+    # its version, which names the reason, before its missing field could
+    # be read as anything (amended 2026-10-01; it used to read as "none").
     ck = load_checkpoint(CKPT_FILE)
     old = Base.structdiff(ck.data.recipe, NamedTuple{(:reflecting,)})
     @test !haskey(old, :reflecting)
     path = joinpath(mktempdir(), "old.h5")
     U, u = ck.fieldsets["U"].fieldset, ck.fieldsets["U"].state
     save_checkpoint(path, ck.forest; fieldsets=("U" => (U, u),),
-                    application=ck.application, data=(; recipe=old, run=ck.data.run),
-                    sync=false)
-    @test ckpt_same(ckpt_sod(; restart_file=path), CKPT_REFERENCE)
+                    application="TreeHydro.jl" => 1,
+                    data=(; recipe=old, run=ck.data.run), sync=false)
+    err = ckpt_refusal(() -> ckpt_sod(; restart_file=path))
+    @test err isa ArgumentError && occursin("after the regrid", err.msg)
 end
 
 @testset "Another application's file, or a future version's, is refused" begin
@@ -361,7 +446,10 @@ end
     # file from a newer TreeHydro would be read with this version's meaning.
     r = CKPT_REFERENCE
     dir = mktempdir()
+    # Version 1, before 2026-10-01, was written after the regrid, and is
+    # refused with the reason: read as version 2 it would be regridded twice.
     for (application, needle) in (("TreeHydro.jl" => 99, "format version 99"),
+                                  ("TreeHydro.jl" => 1, "after the regrid"),
                                   ("SomethingElse" => 1, "\"SomethingElse\""))
         path = joinpath(dir, "foreign.h5")
         save_checkpoint(path, r.forest; fieldsets=("U" => (r.U, r.u),),

@@ -164,10 +164,13 @@ julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
 
 **And a run can outlast a job.** `evolve!` writes checkpoints at chunk
-boundaries, after the regrid, and restarts from them through TreeAMR's
-`save_checkpoint` and `load_checkpoint`; a restarted run, or a chain of
-them, is the uninterrupted run bit for bit at any thread count, and a
-restart with any parameter but `t_end` changed is refused by name. HDF5 is
+boundaries, before the regrid, and restarts from them through TreeAMR's
+`save_checkpoint` and `load_checkpoint`, regridding first; a restarted run,
+or a chain of them, is the uninterrupted run bit for bit at any thread
+count. A restart may move `t_end` and change the regridding criterion
+(`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g`, `buffer`), which
+its first regrid then uses and which it reports; with any other parameter
+changed it is refused by name. HDF5 is
 TreeAMR's optional dependency and not this package's, so the job script
 loads it. One script serves every job of a chain — the first finds no
 checkpoint and starts from the initial data, and each later one continues
