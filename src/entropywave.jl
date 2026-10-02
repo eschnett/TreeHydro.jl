@@ -169,13 +169,15 @@ HydroCase(w::EntropyWave{T,D}; roots=4, speed_headroom=1) where {T,D} =
               reference=(U, t) -> entropywave_reference(U, w, t))
 
 """
-    hydro_forest(Val(D), N; roots = 4, L = 1, refined = true, T = Float64)
+    hydro_forest(Val(D), N; roots = 4, L = 1, refined = true, T = Float64,
+                 comm = nothing)
 
 TreeAMR's M3 two-level hierarchy, as `burgers_forest` and `wave_forest`
 build it and for the same reason: a `roots^D` periodic box of side `L`
 with the middle sub-box refined once and the result 2:1 balanced, held
 fixed in physical space as `N` varies, so that a convergence study really
-does just shrink `h`.
+does just shrink `h`. `comm` distributes it over a communicator (TreeAMR's
+M7), the refinement then being collective.
 
 `refined = false` leaves the box uniform. That is the **control**, and it
 is what steps 3 and 4 run on: on a single-level mesh every face is a
@@ -188,10 +190,10 @@ ten orders of magnitude without it, and the prolongation order decides the
 L∞ rate (see "Measured results" in `CODE.md`).
 """
 function hydro_forest(::Val{D}, N; roots=4, L=1, refined=true,
-                      T::Type=Float64) where {D}
+                      T::Type=Float64, comm=nothing) where {D}
     L = T(L)
     forest = Forest(ntuple(_ -> roots, D); N=N, periodic=ntuple(_ -> true, D),
-                    extents=ntuple(_ -> (zero(T), L), D))
+                    extents=ntuple(_ -> (zero(T), L), D), comm=comm)
     refined || return forest
     quarter, threequarters = L / 4, 3 * L / 4
     targets = filter(forest.leaves) do k
@@ -280,7 +282,8 @@ actually occupies.
 
 Keywords: `N` cells per block and `ops` the operator family are required;
 `G = 2`, `roots = 4`, `limiter = :none`, `riemann = :hlle`, `fixup = true`,
-`refined = false`, `cfl = 2//5`, `t_end = 1//4`, `backend = CPU()`, and
+`refined = false`, `cfl = 2//5`, `t_end = 1//4`, `backend = CPU()`,
+`comm = nothing` (the forest's communicator, as in [`evolve!`](@ref)), and
 anything else is passed to [`EntropyWave`](@ref).
 
 `limiter = :none` is the default *here* and nowhere else: this is the
@@ -302,9 +305,10 @@ entropywave_errors(valD::Val; kwargs...) =
 function entropywave_errors(::Type{T}, ::Val{D}; N, ops, G=2, roots=4,
                             limiter=:none, riemann=:hlle, fixup=true,
                             refined=false, cfl=2 // 5, t_end=1 // 4,
-                            backend=CPU(), params...) where {T,D}
+                            backend=CPU(), comm=nothing, params...) where {T,D}
     w = EntropyWave(T, Val(D); params...)
-    forest = hydro_forest(Val(D), N; roots=roots, L=w.L, refined=refined, T=T)
+    forest = hydro_forest(Val(D), N; roots=roots, L=w.L, refined=refined, T=T,
+                          comm=comm)
     U = FieldSet{T}(forest, D + 2; G=G, backend=backend)
     p = HydroProblem(U, ops; eos=w.eos, floors=w.floors, limiter=limiter,
                      riemann=riemann, fixup=fixup)

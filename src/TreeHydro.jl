@@ -143,6 +143,11 @@ export benchmark_phases, benchmark_driver
 
 include("precision.jl")
 include("device.jl")
+# What a run over MPI must make global itself, beside what TreeAMR does:
+# the cross-rank step of the numbers this package combines on the host, and
+# the agreement of decisions a rank's own clock or file system would take
+# alone. Before everything that reduces.
+include("distributed.jl")
 # `floors.jl` before `eos.jl`: `con2prim` takes a `Floors` and says so in
 # its signature, and a signature is evaluated where the method is defined.
 # The reverse dependency — `apply_floors` reading a state through the

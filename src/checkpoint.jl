@@ -75,8 +75,14 @@ The checkpoint files of `prefix`, as `(iteration, path)` pairs sorted by
 iteration: the files in `prefix`'s directory whose names are exactly
 `"<basename>.it<digits>.h5"`. Nothing else matches — in particular not
 TreeAMR's `"….h5.partial"`, the file a write in progress or a failed one
-leaves, and not another prefix that merely starts with this one. A
-directory that does not exist holds no checkpoints.
+leaves, not the part files `"….h5.<save id>.<j>.h5"` it writes beside a
+distributed checkpoint (whose index is the file listed), and not another
+prefix that merely starts with this one. A directory that does not exist
+holds no checkpoints.
+
+It reads the directory on the rank that calls it, so over MPI the
+checkpoint directory is one every rank sees the same, as TreeAMR's own
+checkpoints need it to be.
 """
 function checkpoint_files(prefix::AbstractString)
     dir, base = splitdir(prefix)
@@ -133,12 +139,29 @@ end
 # file listed is in `prefix`'s directory by construction, and a path string
 # is not a file's identity — `run//sedov` lists as `run/sedov`, and with
 # `num_keep = 1` a comparison of paths deleted the checkpoint just written.
+#
+# A distributed checkpoint is an index and its part files (TreeAMR's M7):
+# `"<index>.<save id>.<j>.h5"` beside the index, one per I/O group, the save
+# id 32 lowercase hex digits. Removing an index removes its parts with it,
+# and any orphan of that index's name — a part left by a save that failed
+# before its index was renamed into place — since nothing will ever read
+# them once the index is gone. A serial checkpoint has no part files. Over
+# MPI rank 0 alone calls this (amended 2026-10-02).
 function rotate_checkpoints!(prefix::AbstractString, num_keep::Integer;
                              keep::AbstractString)
     others = [path for (_, path) in checkpoint_files(prefix)
               if basename(path) != basename(keep)]
     removed = others[1:max(0, length(others) - (num_keep - 1))]
-    foreach(path -> rm(path; force=true), removed)
+    for path in removed
+        dir, name = splitdir(path)
+        listed = isempty(dir) ? "." : dir
+        part = Regex("^" * regex_quote(name) * raw"\.[0-9a-f]{32}\.[0-9]+\.h5$")
+        rm(path; force=true)
+        for other in readdir(listed)
+            occursin(part, other) || continue
+            rm(isempty(dir) ? other : joinpath(dir, other); force=true)
+        end
+    end
     return removed
 end
 
@@ -384,13 +407,19 @@ end
 # its state, to be the uninterrupted run's — and, in `λ_end_history[end]`,
 # the speed its first regrid derives the margin from. Every real through
 # `plain_reals`.
+#
+# Every value must be the same on every rank, which TreeAMR's plain data
+# require of a distributed checkpoint and refuse otherwise: `reset_hits` is
+# the total over the ranks, which the caller sums (the reset counts per
+# rank; see `ResetAccounting`), and everything else is global already.
 function run_state(; chunk, t, nsteps, nregrids, floor_hits, ghost_hits, passes,
-                   converged, acc, λ_initial, tracking, drift, scales, totals0,
-                   nblocks_history, buffer_history, λ_history, λ_end_history)
+                   converged, reset_hits, injection, λ_initial, tracking, drift,
+                   scales, totals0, nblocks_history, buffer_history, λ_history,
+                   λ_end_history)
     return (; chunk=Int(chunk), t=plain_reals(t), nsteps=Int(nsteps),
             nregrids=Int(nregrids), floor_hits=Int(floor_hits),
             ghost_hits=Int(ghost_hits), passes=Int(passes), converged=Bool(converged),
-            reset_hits=Int(acc.hits), injection=plain_reals(acc.injection),
+            reset_hits=Int(reset_hits), injection=plain_reals(injection),
             lambda_initial=plain_reals(λ_initial), tracking=plain_reals(tracking),
             drift=plain_reals(drift), scales=plain_reals(scales),
             totals0=plain_reals(totals0), nblocks_history=Vector{Int}(nblocks_history),
@@ -402,7 +431,8 @@ end
 # --- writing and reading -------------------------------------------------------------
 
 """
-    save_run(path, forest, U, u; recipe, criterion, run, filters = (), sync = true)
+    save_run(path, forest, U, u; recipe, criterion, run, filters = (), sync = true,
+             io = :node)
 
 One checkpoint: the forest, the conserved state `U` with its state vector
 `u`, and this package's plain data `(; recipe, criterion, run)`, through
@@ -412,17 +442,22 @@ scratch that [`update_primitives!`](@ref) rebuilds from `u`, ghosts
 included — on a restart before its first regrid, as at the start of every
 chunk. `u` and not `U.work`: the state vector is the integrator's, and the
 authoritative copy.
+
+Over a distributed forest it is collective, and `io` is TreeAMR's grouping
+of the ranks into I/O processes, each writing a part file beside the index
+at `path` (TreeAMR's M7); serially it is one file whatever `io` says.
 """
 function save_run(path, forest, U, u; recipe, criterion, run, filters=(),
-                  sync::Bool=true)
+                  sync::Bool=true, io=:node)
     return save_checkpoint(path, forest; fieldsets=("U" => (U, u),),
                            application=CHECKPOINT_APPLICATION => CHECKPOINT_VERSION,
                            data=(; recipe=recipe, criterion=criterion, run=run),
-                           filters=filters, sync=sync)
+                           filters=filters, sync=sync, io=io)
 end
 
 """
-    load_run(path, T; backend = CPU()) -> (; forest, U, u, recipe, criterion, run)
+    load_run(path, T; backend = CPU(), comm = nothing)
+        -> (; forest, U, u, recipe, criterion, run)
 
 Read a checkpoint written by [`save_run`](@ref), refusing one that is not
 this package's — another application's, or a format version other than
@@ -431,9 +466,15 @@ it was saved in; whether that is `T` is the recipe's to say, so that the
 refusal names it with the rest (see [`check_recipe`](@ref)). `T` is passed to
 TreeAMR as the one type it may have to name, which is harmless for a native
 float.
+
+`comm` distributes the forest it reads over a communicator, as
+[`evolve!`](@ref)'s keyword does: collective then, and a checkpoint written at
+any rank count loads at any other, or serially (TreeAMR's M7). Every refusal
+below is taken from what every rank read alike, so it is every rank's.
 """
-function load_run(path::AbstractString, ::Type{T}; backend=CPU()) where {T}
-    ck = load_checkpoint(path; backend=backend, types=(T,))
+function load_run(path::AbstractString, ::Type{T}; backend=CPU(),
+                  comm=nothing) where {T}
+    ck = load_checkpoint(path; backend=backend, types=(T,), comm=comm)
     name, version = ck.application
     written = "It was written by TreeAMR " *
               "$(something(ck.provenance.treeamr_version, "(unknown version)")) " *

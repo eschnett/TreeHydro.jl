@@ -306,7 +306,8 @@ function HydroCase(w::SedovBlast{T,D}; roots=4, speed_headroom=2) where {T,D}
 end
 
 """
-    sedov_forest(Val(D), N; roots = 4, L = 1, refined = false, T = Float64)
+    sedov_forest(Val(D), N; roots = 4, L = 1, refined = false, T = Float64,
+                 comm = nothing)
 
 The blast's mesh: **non-periodic in every direction**, the cube
 `[−L/2, L/2]^D` on a `roots^D` brick of `N`-cell blocks.
@@ -345,9 +346,12 @@ region that one face alone does not fill. The blast stays at the centre and
 never reaches them within the few steps these meshes are run for, which is what
 makes "the corner block's interior is bit-identical to the ambient afterwards"
 a claim about the exchange and not about the physics.
+
+`comm` distributes the forest over a communicator (TreeAMR's M7); the
+refinement is then collective, the same call on every rank.
 """
 function sedov_forest(::Val{D}, N; roots=4, L=1, refined=false,
-                      T::Type=Float64) where {D}
+                      T::Type=Float64, comm=nothing) where {D}
     rs = roots isa Tuple ? ntuple(d -> Int(roots[d]), D) : ntuple(_ -> Int(roots), D)
     allequal(rs) || throw(ArgumentError(
         "sedov_forest needs the same root count in every dimension, got $rs: " *
@@ -355,7 +359,8 @@ function sedov_forest(::Val{D}, N; roots=4, L=1, refined=false,
     L = T(L)
     half = L / 2
     extents = ntuple(_ -> (-half, half), D)
-    forest = Forest(rs; N=N, periodic=ntuple(_ -> false, D), extents=extents)
+    forest = Forest(rs; N=N, periodic=ntuple(_ -> false, D), extents=extents,
+                    comm=comm)
 
     (refined === false || refined === :none) && return forest
     selector = if refined === :center
@@ -464,7 +469,9 @@ bias that shrinks as the shock grows lands directly on the *slope* being
 measured — it cost about `0.13` of the exponent in `D = 2`. So this is an
 oracle in the spirit of [`reduce_to_grid`](@ref): it reads positions and
 values on the host, in block order, and knows nothing about how the data got
-there. It runs once per chunk, against hundreds of steps.
+there. It runs once per chunk, against hundreds of steps. Over a distributed
+forest each rank reads its own blocks and the squared radii are combined by
+`max` across the ranks, which is exact (added 2026-10-02, for MPI).
 
 **`P` must be current**, as the refinement criterion needs it to be:
 [`update_primitives!`](@ref) is what leaves it so, and [`evolve!`](@ref) calls
@@ -488,7 +495,7 @@ function shock_radius(P::FieldSet{T,D}, w::SedovBlast{T,D};
             best = max(best, sum(ntuple(d -> R(x[d]) * R(x[d]), Val(D))))
         end
     end
-    return sqrt(best)
+    return sqrt(rank_reduce(max, P, best))
 end
 
 """
@@ -504,12 +511,14 @@ sits in, so the measured value approaches `6` from below as `h` falls and
 *exceeding* it by more than a little would mean an overshoot the limiter was
 supposed to prevent. Both directions are asserted in `test/sedov_tests.jl`.
 
-One `block_mapreduce` over the density slot of the primitive set, combined in
-block order, so the answer does not move with the thread count.
+One `mesh_mapreduce` over the density slot of the primitive set, combined in
+block order and across ranks in rank order, so the answer moves with neither
+the thread count nor the rank count (a `block_mapreduce` and a host `maximum`
+until 2026-10-02, the same bits serially).
 """
 function peak_compression(P::FieldSet{T,D}, w::SedovBlast{T,D}) where {T,D}
     R = float(real(T))
-    return maximum(block_mapreduce(identity, max, zero(R), P; vars=1)) / R(w.ρ₀)
+    return mesh_mapreduce(identity, max, zero(R), P; vars=1) / R(w.ρ₀)
 end
 
 """
@@ -539,7 +548,8 @@ Keywords: `N` cells per block and `ops` the operator family are required;
 `roots = 4`, `r₀`, `t_end`, `refined = false` ([`sedov_forest`](@ref)'s), `G = 2`,
 `limiter = :minmod`, `riemann = :hlle`, `fixup = true`, `reset = :stage`,
 `cfl = 2//5`, `nsteps = nothing`, `speed_headroom = 2`, `accounting = true`,
-`backend = CPU()`, and anything else goes to [`SedovBlast`](@ref).
+`backend = CPU()`, `comm = nothing` (the forest's communicator, as in
+[`evolve!`](@ref)), and anything else goes to [`SedovBlast`](@ref).
 
 **The step count is sized with a headroom and rechecked, exactly as the driver
 does it.** `λ_max` from the initial data is the hot spot's sound speed, and it is
@@ -561,9 +571,10 @@ function sedov_static(::Type{T}, ::Val{D}; N, ops, roots=4, r₀=1 // 16,
                       t_end=1 // 8, refined=false, G=2, limiter=:minmod,
                       riemann=:hlle, fixup=true, reset=:stage, cfl=2 // 5,
                       nsteps=nothing, speed_headroom=2, accounting::Bool=true,
-                      backend=CPU(), params...) where {T,D}
+                      backend=CPU(), comm=nothing, params...) where {T,D}
     w = SedovBlast(T, Val(D); r₀=r₀, params...)
-    forest = sedov_forest(Val(D), N; roots=roots, L=w.L, refined=refined, T=T)
+    forest = sedov_forest(Val(D), N; roots=roots, L=w.L, refined=refined, T=T,
+                          comm=comm)
     U = FieldSet{T}(forest, D + 2; G=G, backend=backend)
     acc = ResetAccounting{float(real(T))}(D + 2; measure=accounting)
     p = HydroProblem(U, ops; eos=w.eos, floors=w.floors, limiter=limiter,
@@ -603,7 +614,7 @@ function sedov_static(::Type{T}, ::Val{D}; N, ops, roots=4, r₀=1 // 16,
     scales = ntuple(v -> max(scales[v], endscales[v]), Val(D + 2))
     return (drift=ntuple(v -> abs(totals1[v] - totals0[v]), Val(D + 2)),
             scales=scales, totals0=totals0, totals=totals1,
-            floor_hits=floor_hits(p), reset_hits=acc.hits,
+            floor_hits=floor_hits(p), reset_hits=rank_reduce(+, forest, acc.hits),
             ghost_hits=ghost_floor_hits(p),
             injection=accounting ?
                       ntuple(v -> acc.injection[v], Val(D + 2)) : nothing,

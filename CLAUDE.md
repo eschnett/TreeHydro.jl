@@ -61,6 +61,20 @@ through the refinement levels — to ×256 and level 12 at best, with the
 strain-matched clock; see "Reflecting faces" under "Boundaries"
 and "The zoom showcase" in `CODE.md`, and `showcase/README.md`.
 
+**Added since, on 2026-10-02: runs distributed over MPI**, on **TreeAMR
+0.1.6** from the registry (M7, plus the empty-rank guard this work found
+upstream). `evolve!` and every driver that
+builds a forest take `comm` (default `nothing`, serial); every number this
+package combined on the host from per-block values is global now
+(`mesh_mapreduce`, or `rank_reduce` in `src/distributed.jl`), the
+wall-clock checkpoint triggers and the file-system checks are agreed over
+the ranks, rank 0 rotates checkpoints and their part files, and
+`test/mpi_tests.jl` compares one `mpiexec -n 3` launch's three, two and one
+ranks with its serial run. See "Running distributed" in `CODE.md`.
+Measured against 0.1.6: **12682 tests in 6 m 10 at one thread, 12716 in
+5 m 08 at four**, and 12682 in 9 m 32 for the clean copy at 1.11 (machine
+shared with another session's suite).
+
 How the milestones map onto the steps, for reading `CODE.md`'s history: H0
 was step 0; H1 steps 1–4; H2 step 5; H3 steps 6 and 7; H4 steps 8 and 9; H5
 steps 10 and 11; and H6 steps 13, 14 and 12, in that order, taken together
@@ -73,20 +87,29 @@ and not the runner.
 What exists, file by file (the names are the ones to grep for; `CODE.md`'s
 "File layout" has the one-line table):
 
-- `Project.toml`: `TreeAMR = "0.1.4"` from the General registry (0.1.4
-  since 2026-09-29, for its checkpoint and restart; 0.1.3 before, for the
+- `Project.toml`: `TreeAMR = "0.1.6"` from the General registry (0.1.6
+  since 2026-10-02, for MPI and the empty-rank guard; 0.1.4 since
+  2026-09-29, for its checkpoint and restart; 0.1.3 before, for the
   owner-based threading),
   `KernelAbstractions`, and `IMEXRungeKutta = "1.3"` (the first release
   that runs `Float32x2`) through the one `[sources]` entry left, since it
   is unregistered; `julia = "1.11"`, the floor of all the Tree* packages
   since 2026-09-25. **No HDF5**: TreeAMR's checkpoint functions live in its
   HDF5 extension and the caller loads it. `test/Project.toml` adds
-  `MultiFloats`, `Random` and, since 2026-09-29, `HDF5 = "0.17"`, which is
-  what loads that extension in the suite.
+  `MultiFloats`, `Random`, since 2026-09-29 `HDF5 = "0.17"`, which is
+  what loads that extension in the suite, and since 2026-10-02
+  `MPI = "0.20"`, which loads TreeAMR's MPI extension — **no MPI in
+  `[deps]` either**, for the same reason.
 - `src/TreeHydro.jl`, the module shell and its exports.
 - `src/precision.jl` (`wrap`, `ceilint`, `floorint`, `roundint`,
   `tofloat64`) and `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`),
   both ported from TreeWave.
+- `src/distributed.jl` (added 2026-10-02): `rank_reduce` (a per-rank
+  partial folded over the ranks in rank order, TreeAMR's `combine_blocks`
+  rule), `rank_sum!` (an array summed over the ranks), `agree_any`,
+  `agree_refusal` and `isroot`, over TreeAMR's unexported `commrank`,
+  `commsize`, `allgather` and `allgatherv` reached through `forest.comm`.
+  Every one returns its argument untouched at one rank.
 - `src/floors.jl`: `Floors`, `apply_floors`, `in_atmosphere`,
   `atmosphere_state`, and the reset — `ResetAccounting`,
   `reset_atmosphere!(u, integrator, p, t)` (the step limiter, and the call
@@ -104,8 +127,11 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
 - `src/evolution.jl`: `HydroProblem`, the three kernels
   `con2prim_kernel!`, `flux_kernel!` and `divergence_kernel!` (the three
   that carry `@inbounds`), `hydro_rhs!`, `update_primitives!`,
-  `max_signal_speed`, `floor_hits`, `ghost_floor_hits` (the package's one
-  launch of its own, through `TreeAMR.launch_by_owner!`), `hydro_dt`,
+  `max_signal_speed`, `floor_hits` (both `mesh_mapreduce` since
+  2026-10-02), `local_floor_hits` (the reset's per-rank count),
+  `ghost_floor_hits` (the package's one
+  launch of its own, through `TreeAMR.launch_by_owner!`, then
+  `rank_reduce`), `hydro_dt`,
   `conserved_totals` (field-set and state-vector forms),
   `conserved_scales`, `check_reset`, `forest_levels`,
   `convergence_rate`, and the parity tables `reflects`, `state_parity` and
@@ -123,7 +149,8 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `observer` hook and the checkpoint keywords (`checkpoint_path_prefix`,
   `checkpoint_every_chunks`, `checkpoint_interval_seconds`,
   `max_walltime_seconds`, `num_checkpoints_keep`,
-  `checkpoint_hdf5_filters`, `checkpoint_sync_to_disk`, `restart_file`;
+  `checkpoint_hdf5_filters`, `checkpoint_sync_to_disk`, `checkpoint_io`
+  (2026-10-02), `restart_file`; and `comm` (2026-10-02);
   it returns `finished`, `t`, `chunk`, `checkpoints_written`,
   `restart_file` and `criterion_changed` beside the rest), `regrid_chunk!`
   (the end-of-chunk regrid, which the loop and a restart both call, since
@@ -184,9 +211,14 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   to load HDF5, and it tests the refusal without it before it does, and
   reruns the standalone `test/restart_workload.jl` in a subprocess at the
   other thread count), `device_tests.jl` (every driver against the
-  host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device)
-  and `threading_tests.jl`, which reruns the standalone
-  `test/thread_workload.jl` in a subprocess at the other thread count.
+  host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device),
+  `threading_tests.jl`, which reruns the standalone
+  `test/thread_workload.jl` in a subprocess at the other thread count, and
+  `mpi_tests.jl` (2026-10-02), which collects the standalone
+  `test/mpi_workload.jl` run under `mpiexec -n 3` by `test/mpi_jobs.jl` —
+  started at the top of `runtests.jl` where the machine has 8+ threads and
+  24+ GB, so that it compiles beside the suite, and run at the end
+  otherwise (`TREEHYDRO_TEST_MPI_CONCURRENT=0/1` decides by hand).
   Before any of them, a testset refuses two files defining the same
   top-level `const` (see "Things that will bite").
 - `bin/`: `Project.toml` (CairoMakie, SixelTerm and KernelAbstractions in
@@ -325,6 +357,19 @@ on 2026-10-01, **7 m 45** against 5 m 01) — so budget for nearly twice the run
 you have just done. 1.11 is also the *cheap* version under coverage, which
 is the opposite way round and is why the instrumented cell is the floor
 cell; see "Things that will bite".
+
+The MPI test by hand (added 2026-10-02): the workload under `mpiexec -n 3`
+writes `n3.txt`, `n2.txt`, `n1.txt` (a one-rank communicator) and `n0.txt`
+(serial) to the directory it is given, and every line not starting with `~`
+or `#` must agree across the four. It needs an environment with this
+package, TreeAMR, MPI and HDF5 — the test environment, or a scratch one
+that `develop`s this checkout; launch through `MPI.mpiexec()` with its
+environment set on the command, since interpolating it into a larger
+command drops its library paths (TreeAMR's finding). About 1 m 20:
+
+```bash
+julia --project=<env> -e 'using MPI; m = MPI.mpiexec(); run(setenv(`$m -n 3 $(Base.julia_cmd()) --threads=1 --project=<env> test/mpi_workload.jl /tmp/mpi`, m.env))'
+```
 
 The viewers, in their own environment so that CairoMakie never becomes a
 dependency of the package. The first call instantiates it; the
@@ -467,9 +512,13 @@ Carried over from TreeAMR and TreeWave where they apply here, plus what is
 specific to a hydro code. Each is in `CODE.md` with its reason.
 
 - **TreeAMR comes from the registry, not from the local checkout**
-  (amended when TreeAMR 0.1.1 was released, again at 0.1.3, and at 0.1.4).
+  (amended when TreeAMR 0.1.1 was released, again at 0.1.3, at 0.1.4 and
+  at 0.1.6).
   `Project.toml` has no `[sources]` entry for it: the compat bound is
-  `TreeAMR = "0.1.4"` and a clean checkout resolves it from General. (A
+  `TreeAMR = "0.1.6"` and a clean checkout resolves it from General. (For
+  a few hours on 2026-10-02 `main` was pinned again, to build the MPI port
+  before 0.1.6; **0.1.5 is excluded on purpose** — it is M7 without the
+  empty-rank guard, and the MPI test fails on it.) (A
   pin on its `main` came back on 2026-09-23 to see the owner-based
   threading before its release, and went again once 0.1.3 carried it.
   0.1.4, for checkpoint and restart, was used from the registry the day it
@@ -837,6 +886,44 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   ghost floor count is this package's one launch of its own and follows
   it). Both are unexported, and `test/prerequisite_tests.jl` checks by name
   that they and `threadchunks` still exist.
+- **A number combined on the host from `block_mapreduce` or a host loop
+  over `nblocks` is one rank's** (2026-10-02). Over a distributed forest
+  every block index, `nblocks(fs)`, `block_mapreduce`'s vector and
+  `firing_boxes`' are this rank's, while `nleaves`, `forest.leaves` and
+  `mesh_mapreduce` are the mesh's. A new reduction goes through
+  `mesh_mapreduce` where it can and through `rank_reduce` where it cannot
+  (a host loop, a launch of this package's own) — never `maximum` or `sum`
+  of a per-block vector, which is what TreeAMR's audit found in five
+  places here, the CFL speed first: the ranks would have taken different
+  numbers of steps and hung. A count of the mesh's blocks is `nleaves`,
+  never `nblocks`. A check that throws must throw on every rank: decide it
+  from global data (`reduce_to_grid` checks `forest.leaves`, not its own
+  blocks) or agree it (`agree_refusal`), since a throw on one rank leaves the
+  others waiting in their next collective. Serial tests see none of this —
+  `test/mpi_tests.jl` is the only thing that will.
+- **A rank may hold no blocks**, whenever ranks outnumber leaves, and every
+  function must survive it: no launch on an empty `ndrange`, no
+  `maximum` of an empty vector, no read of block 1. `rank_reduce`'s
+  `present = false` leaves such a rank out. The workload's two-block tube
+  runs a whole run with rank 2 empty, and **it found an upstream bug**:
+  TreeAMR's `cell_boundary!` for an `AllVariables` hook checked the callback
+  at block 1 with no `nblocks(fs) == 0` guard (its `fill_by_coordinates!` had
+  one), and this package is that form's only caller. Fixed in TreeAMR 0.1.6,
+  which is why the bound is 0.1.6 and not 0.1.5; do not lower it.
+- **The reset's hit count is per rank while it accumulates**
+  (2026-10-02). `ResetAccounting.hits` is summed over the ranks with
+  `rank_reduce` where `evolve!` reports or checkpoints it, and a restart
+  credits the saved total to rank 0. A collective in the reset itself would
+  be one per stage; do not make `local_floor_hits` global to tidy it.
+- **Anything decided from a clock or the file system is agreed**
+  (2026-10-02): the two wall-clock checkpoint flags go through `agree_any`
+  (any rank's `true`), the checkpoint keyword checks through
+  `agree_refusal`, and only rank 0 deletes (`isroot`). A new trigger or a
+  new file-system check that skipped this would send one rank into the
+  collective `save_checkpoint` alone.
+- **An observer runs on every rank and sees that rank's blocks.** It may
+  take only the collective diagnostics; and `evolve!`'s returned `U` and
+  `u` are this rank's too, while everything else it returns is global.
 - **The Kelvin–Helmholtz formulas were transcribed from memory and the
   check found exactly one error** (step 10, closing the note that used to
   say "check every one before recording a number"). The *profiles* — the
@@ -1176,10 +1263,10 @@ Match TreeAMR's, since the three packages are read together:
   and step 7c removed, were the one exception and are gone. `bin/output/`
   is gitignored and the viewers write PNGs there.
 - **There is no TreeAMR pin now and still two Manifests** (amended when
-  TreeAMR 0.1.1 was released, at 0.1.3, and at 0.1.4). Both environments
-  resolve TreeAMR from the registry — the root at `0.1.4`, `bin/` at a
-  `0.1.3` bound that admits it, left alone because nothing in `bin/`
-  checkpoints — so the `rev = "main"` entries are
+  TreeAMR 0.1.1 was released, at 0.1.3, at 0.1.4 and at 0.1.6). Both
+  environments resolve TreeAMR from the registry — the root at `0.1.6`,
+  `bin/` at a `0.1.3` bound that admits it, left alone because nothing in
+  `bin/` checkpoints or runs distributed — so the `rev = "main"` entries are
   gone; what is left is a compat bound in each `Project.toml`, and
   `bin/` still has its own `Manifest.toml` (gitignored, like the root's),
   so `Pkg.update("TreeAMR")` at the root does not touch it. The viewers

@@ -253,7 +253,7 @@ exact_riemann(w::SodTube) =
 
 """
     sod_forest(Val(D), N; direction = 1, roots = …, L = 1, refined = false,
-               x₀ = L/2, T = Float64)
+               x₀ = L/2, T = Float64, comm = nothing)
 
 The tube's mesh: **non-periodic along `direction`, periodic across it**, a
 box of side `L` along the tube and one root block thick in every other
@@ -308,7 +308,8 @@ nothing or everything depending on the box's thickness.
 """
 function sod_forest(::Val{D}, N; direction=1,
                     roots=ntuple(d -> d == direction ? 4 : 1, D), L=1,
-                    refined=false, x₀=nothing, T::Type=Float64) where {D}
+                    refined=false, x₀=nothing, T::Type=Float64,
+                    comm=nothing) where {D}
     dir = Int(direction)
     1 ≤ dir ≤ D || throw(ArgumentError(
         "the tube's direction must be one of the $D axes, got $dir."))
@@ -321,7 +322,8 @@ function sod_forest(::Val{D}, N; direction=1,
     # Blocks are cubes, so every dimension shares the tube's root spacing.
     h = L / rs[dir]
     extents = ntuple(d -> d == dir ? (zero(T), L) : (zero(T), h * rs[d]), D)
-    forest = Forest(rs; N=N, periodic=ntuple(d -> d != dir, D), extents=extents)
+    forest = Forest(rs; N=N, periodic=ntuple(d -> d != dir, D), extents=extents,
+                    comm=comm)
 
     (refined === false || refined === :none) && return forest
     xd = x₀ === nothing ? L / 2 : T(x₀)
@@ -460,7 +462,8 @@ Keywords: `N` cells per block and `ops` the operator family are required;
 across, as [`sod_forest`](@ref) has it), `G = 2`, `limiter = :minmod`,
 `riemann = :hlle`, `fixup = true`, `refined = false`, `cfl = 2//5`,
 `t_end = 1//5`, `nsteps = nothing`, `λ_headroom = 1//50`,
-`backend = CPU()`, and anything else goes to [`SodTube`](@ref).
+`backend = CPU()`, `comm = nothing` (the forest's communicator, as in
+[`evolve!`](@ref)), and anything else goes to [`SodTube`](@ref).
 
 `refined` is [`sod_forest`](@ref)'s, and it is what step 5 measures: the
 uniform mesh is the control, `:middle` puts a coarse-fine face where the
@@ -511,10 +514,11 @@ function sod_errors(::Type{T}, ::Val{D}; N, ops, direction=1,
                     roots=ntuple(d -> d == direction ? 4 : 1, D), G=2,
                     limiter=:minmod, riemann=:hlle, fixup=true, refined=false,
                     cfl=2 // 5, t_end=1 // 5, nsteps=nothing,
-                    λ_headroom=1 // 50, backend=CPU(), params...) where {T,D}
+                    λ_headroom=1 // 50, backend=CPU(), comm=nothing,
+                    params...) where {T,D}
     w = SodTube(T, Val(D); direction=direction, params...)
     forest = sod_forest(Val(D), N; direction=direction, roots=roots, L=w.L,
-                        refined=refined, x₀=w.x₀, T=T)
+                        refined=refined, x₀=w.x₀, T=T, comm=comm)
     U = FieldSet{T}(forest, D + 2; G=G, backend=backend)
     p = HydroProblem(U, ops; eos=w.eos, floors=w.floors, limiter=limiter,
                      riemann=riemann, fixup=fixup, boundary=sod_boundary(w))

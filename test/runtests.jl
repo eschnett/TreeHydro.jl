@@ -15,6 +15,13 @@ using TreeHydro
 # `CODE.md` for the measurement.
 @info "Running the tests on $(Threads.nthreads()) thread(s)"
 
+# The MPI test's `mpiexec` job, started now where the machine has room for
+# it beside the suite, so that its compilation overlaps the files below
+# rather than following them; `mpi_tests.jl` collects it, or runs it then
+# where it was not started. See `mpi_jobs.jl`.
+include("mpi_jobs.jl")
+start_mpi_job!()
+
 @testset "TreeHydro.jl" begin
     # Every test file below is `include`d into this one module, so a top-level
     # name defined in two of them is one name. Julia before 1.12 refuses to
@@ -85,4 +92,9 @@ using TreeHydro
     # asserted above it, and a digest mismatch then means the threads and
     # nothing else.
     include("threading_tests.jl")
+    # Rank-count independence after it, for the same reason and one more:
+    # its job runs every case at three rank counts and serially, so every
+    # part of them, and their thread independence, has been asserted above
+    # it, and a mismatch then means the distribution and nothing else.
+    include("mpi_tests.jl")
 end
