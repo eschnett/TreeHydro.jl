@@ -293,10 +293,12 @@ one regrid and the next, and the remedy is a wider buffer or a shorter
 chunk.
 
 One `firing_boxes` sweep on the field set's own backend, with the per-block
-counts combined in **block order**, so the answer does not move with the
-thread count. A block with no firing cell contributes nothing to either
-side, and a mesh where nothing fires at all scores `1` — there is no
-feature to fail to track.
+counts combined in **block order**, and across ranks in rank order, so the
+answer moves with neither the thread count nor the rank count — the counts
+are integers, and exact in any order (the cross-rank step added 2026-10-02,
+for MPI). A block with no firing cell contributes nothing to either side,
+and a mesh where nothing fires at all scores `1` — there is no feature to
+fail to track.
 
 **`P` must be current, ghosts included**, as [`hydro_flags`](@ref) needs it
 to be: the indicator's stencil reaches one cell past each block face.
@@ -319,6 +321,7 @@ function tracked_share(P::FieldSet{T,D}; refine_tol, maxlevel_cap,
         total += n
         level(blockkey(P, b)) ≥ maxlevel_cap && (inside += n)
     end
+    total, inside = rank_reduce((a, b) -> a .+ b, P, (total, inside))
     return total == 0 ? one(R) : R(inside) / total
 end
 
@@ -342,6 +345,13 @@ about its density alone. [`l1_difference`](@ref) is the norm it is read in.
 
 An oracle in the spirit of TreeAMR's `reduce_to_grid`, which it follows: it
 knows positions and spacings and nothing about how the data got there.
+
+**Collective over a distributed forest, and the same array on every rank**
+(added 2026-10-02, for MPI): each rank reduces its own blocks onto the grid,
+and the grids are summed over the ranks in rank order. A target cell whose
+contributions come from blocks on two ranks is then summed in another order
+than serially, so the result agrees with a serial run to roundoff — exactly,
+at one rank.
 """
 function reduce_to_grid(U::FieldSet{T,D}, M, extents=U.forest.extents) where {T,D}
     Ms = M isa Tuple ? ntuple(d -> Int(M[d]), D) : ntuple(_ -> Int(M), D)
@@ -352,14 +362,20 @@ function reduce_to_grid(U::FieldSet{T,D}, M, extents=U.forest.extents) where {T,
     forest = U.forest
     R = float(real(T))
     out = zeros(R, Ms..., U.nvars)
+    # The check is on the forest, which every rank holds whole, and not on
+    # this rank's blocks: a refusal taken from local blocks would be one
+    # rank's, and the others would wait for it in the sum below.
+    for k in forest.leaves
+        h = spacing(T, forest, k)
+        all(d -> h ≤ H[d] * (1 + 4096 * eps(R)), 1:D) || throw(ArgumentError(
+            "reduce_to_grid needs cells no coarser than the target grid: " *
+            "the leaf $k has h = $h and the target cell is $H. Every cell of " *
+            "every mesh compared has to be a whole subdivision of one target " *
+            "cell, or the reduction is not a volume average."))
+    end
     work = Array(U.work)
     for b in 1:nblocks(U)
         h = spacing(T, forest, blockkey(U, b))
-        all(d -> h ≤ H[d] * (1 + 4096 * eps(R)), 1:D) || throw(ArgumentError(
-            "reduce_to_grid needs cells no coarser than the target grid: " *
-            "block $b has h = $h and the target cell is $H. Every cell of " *
-            "every mesh compared has to be a whole subdivision of one target " *
-            "cell, or the reduction is not a volume average."))
         w = prod(ntuple(d -> R(h) / R(H[d]), D))
         for idx in CartesianIndices(ntuple(d -> (U.G[d] + 1):(U.G[d] + forest.N), D))
             x = coordinates(T, U, b, Tuple(idx))
@@ -369,6 +385,7 @@ function reduce_to_grid(U::FieldSet{T,D}, M, extents=U.forest.extents) where {T,
             end
         end
     end
+    rank_sum!(vec(out), U)
     return out
 end
 
@@ -386,12 +403,12 @@ l1_difference(a, b) = sum(abs, a .- b) / length(a)
             roots = case.roots, buffer = nothing, riemann = :hlle,
             fixup = true, reset = :stage, accounting = false,
             ε = T(1//100), ε_g = T(1//1000),
-            maxpasses = 8, backend = CPU(), observer = nothing,
+            maxpasses = 8, backend = CPU(), comm = nothing, observer = nothing,
             checkpoint_path_prefix = nothing, checkpoint_every_chunks = nothing,
             checkpoint_interval_seconds = nothing,
             max_walltime_seconds = nothing, num_checkpoints_keep = 2,
             checkpoint_hdf5_filters = (), checkpoint_sync_to_disk = true,
-            restart_file = nothing)
+            checkpoint_io = :node, restart_file = nothing)
 
 **The** time-stepping loop: adapt the mesh to the initial data, then evolve
 in chunks of `chunk`, regridding between them so the refined region follows
@@ -510,6 +527,28 @@ observer that keeps anything must copy it — `copy(u)`, or the numbers it
 reads from `U` and `P` — for the same reason a viewer snapshot must
 materialize what it keeps.
 
+## Running distributed
+
+*(Added 2026-10-02, on TreeAMR's M7.)* `comm` is the communicator the run is
+distributed over — `MPI.COMM_WORLD` with `using MPI` and `MPI.Init()` done,
+or anything TreeAMR's `communicator` accepts — and `nothing`, the default,
+runs serially. The forest is then held whole on every rank and its blocks
+are split between them, and **every rank calls `evolve!` with the same
+arguments**: it is collective from start to finish. The state, the mesh,
+the step and chunk counts, every floor count, the speeds and the tracking
+measure come out bit for bit the serial run's at any rank count; the
+conserved totals, the drift, the scales and the errors are sums, and agree
+with it to roundoff (exactly, at one rank). What comes back is the same on
+every rank except `U` and `u`, which are this rank's blocks. This package
+never loads MPI: the caller does, as it does HDF5. See "Running
+distributed" in `CODE.md`.
+
+An `observer` is called on every rank, with each rank's own `U` and `u`; a
+diagnostic it takes must be one of the collective ones here
+([`mode_amplitude`](@ref), [`reduce_to_grid`](@ref), …), or it reads one
+rank's blocks. A checkpoint written at one rank count restarts at any other,
+or serially.
+
 ## Checkpoint and restart
 
 *(Added 2026-09-29, on TreeAMR 0.1.4.)* A run writes checkpoints and
@@ -536,6 +575,8 @@ since a longer run would have regridded there; elsewhere it writes nothing.
 - `checkpoint_every_chunks` — write every this many chunks.
 - `checkpoint_interval_seconds` — write when this much wall-clock time has
   passed since the last write (or the call); `0` writes at every boundary.
+  Over MPI the ranks agree: a checkpoint is written when the clock of any
+  rank says so, and so is the stop below.
 - `max_walltime_seconds` — the job's limit, timed from the call. When the
   elapsed time plus the longest chunk so far, regrid included, plus the
   longest write so far would pass it, the run writes a checkpoint and
@@ -544,7 +585,9 @@ since a longer run would have regridded there; elsewhere it writes nothing.
   below the queue's limit.
 - `num_checkpoints_keep` — after each successful write, every file of the
   prefix but the one just written and the newest `num_checkpoints_keep − 1`
-  others is deleted, **including files an earlier job left behind**.
+  others is deleted, **including files an earlier job left behind**, together
+  with the part files TreeAMR writes beside a distributed checkpoint; rank 0
+  alone deletes.
 - `checkpoint_hdf5_filters` — passed to TreeAMR; none is its recommendation,
   and `(HDF5.Filters.Shuffle(), ZstdFilter(1))` (from H5Zzstd) the one
   filter it names when size matters: 6× on TreeAMR's atmosphere-dominated
@@ -552,6 +595,12 @@ since a longer run would have regridded there; elsewhere it writes nothing.
   time (measured in `CODE.md`, "Checkpoint and restart, measured").
 - `checkpoint_sync_to_disk` — TreeAMR's `sync`: flush the file to stable
   storage before it replaces the previous one. The tests turn it off.
+- `checkpoint_io` — TreeAMR's `io`, how a distributed checkpoint's ranks are
+  grouped into I/O processes, each writing one part file beside the index:
+  `:node`, the default, one per node; `:all`, one per rank, which TreeAMR
+  measured faster on the cluster; or a number. Serially it means nothing.
+  It decides where the bytes go and no number of the run, so a restart may
+  change it (added 2026-10-02).
 - `restart_file` — continue from this checkpoint rather than from the
   initial data. [`latest_checkpoint`](@ref)`(prefix)` is the idiom, being
   `nothing` for the first job of a chain.
@@ -624,15 +673,19 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
                  cfl=2 // 5, roots=case.roots, buffer=nothing, riemann=:hlle,
                  fixup=true, reset=:stage, accounting::Bool=false,
                  ε=T(1 // 100), ε_g=T(1 // 1000),
-                 maxpasses=8, backend=CPU(), observer=nothing,
+                 maxpasses=8, backend=CPU(), comm=nothing, observer=nothing,
                  checkpoint_path_prefix=nothing, checkpoint_every_chunks=nothing,
                  checkpoint_interval_seconds=nothing, max_walltime_seconds=nothing,
                  num_checkpoints_keep=2, checkpoint_hdf5_filters=(),
-                 checkpoint_sync_to_disk::Bool=true,
+                 checkpoint_sync_to_disk::Bool=true, checkpoint_io=:node,
                  restart_file=nothing) where {T,D}
     # The job's wall clock starts here: whatever ran before the call —
     # startup, compilation, the queue — is the caller's margin to leave.
     t0 = time()
+    # TreeAMR's view of the communicator, once: what the forest is built
+    # over and what every agreement below goes through. Collective for an
+    # `MPI.Comm`, whose duplicate TreeAMR makes and caches.
+    comm = communicator(comm)
     # Refused here rather than at the first chunk, so that a typo does not
     # cost an initial-data cycle before it is named.
     check_reset(reset)
@@ -645,9 +698,13 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         "maxlevel_cap must be non-negative, got $maxlevel_cap."))
     # The checkpoint keywords too, HDF5 included: a missing `using HDF5`
     # fails in a second rather than at the first write, hours in.
-    check_checkpoint_keywords(; checkpoint_path_prefix, checkpoint_every_chunks,
-                              checkpoint_interval_seconds, max_walltime_seconds,
-                              num_checkpoints_keep, restart_file)
+    # Agreed over the ranks, since whether a directory or a file exists is
+    # each rank's own view of the file system.
+    agree_refusal(comm) do
+        check_checkpoint_keywords(; checkpoint_path_prefix, checkpoint_every_chunks,
+                                  checkpoint_interval_seconds, max_walltime_seconds,
+                                  num_checkpoints_keep, restart_file)
+    end
     # Built only where a file is written or read, so that a run that never
     # checkpoints never asks its case for a plain form. The criterion apart
     # from the rest: a restart may change it (amended 2026-10-01).
@@ -664,7 +721,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     # built: the forest is the file's, and every parameter that decides a
     # number must be the one it was written with — but the criterion, which
     # is reported where it changed.
-    ck = restart_file === nothing ? nothing : load_run(restart_file, T; backend=backend)
+    ck = restart_file === nothing ? nothing :
+         load_run(restart_file, T; backend=backend, comm=comm)
     criterion_changed = nothing
     if ck !== nothing
         check_recipe(ck.recipe, recipe, restart_file)
@@ -681,7 +739,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     # place, and the closure sees that.
     forest = ck === nothing ?
              Forest{T}(roots; N=N, periodic=case.periodic,
-                       reflecting=case.reflecting, extents=case.extents) :
+                       reflecting=case.reflecting, extents=case.extents,
+                       comm=comm) :
              ck.forest
 
     # The whole flag vector at once rather than a mark per block, which is
@@ -771,7 +830,9 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         # *not* called at `t = 0`: the run is not at `t = 0`.
         U, u, saved = ck.U, ck.u, ck.run
         acc.injection .= from_plain_reals(R, saved.injection)
-        acc.hits = saved.reset_hits
+        # The reset counts per rank and the file holds the total, so the
+        # total is credited to one rank: the sum over ranks is the run's.
+        acc.hits = isroot(forest) ? saved.reset_hits : 0
         p = HydroProblem(U, ops; eos=case.eos, floors=case.floors,
                          limiter=limiter, riemann=riemann, fixup=fixup,
                          boundary=case.boundary, accounting=acc)
@@ -908,26 +969,38 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         if checkpointing && (c < nchunks || stop == c * chunk)
             now = time()
             chunk_cost = max(chunk_max, now - chunk_start)
-            due = (checkpoint_every_chunks !== nothing &&
-                   c % checkpoint_every_chunks == 0) ||
-                  (checkpoint_interval_seconds !== nothing &&
-                   now - last_write ≥ checkpoint_interval_seconds)
+            due_count = checkpoint_every_chunks !== nothing &&
+                        c % checkpoint_every_chunks == 0
+            due_clock = checkpoint_interval_seconds !== nothing &&
+                        now - last_write ≥ checkpoint_interval_seconds
             stopping = c < nchunks && max_walltime_seconds !== nothing &&
                        (now - t0) + chunk_cost + write_max > max_walltime_seconds
-            if due || stopping
+            # The clock is each rank's own, and `save_checkpoint` is
+            # collective: a rank that went on to its regrid while another
+            # entered the write would wait there forever. So a decision taken
+            # from the clock is agreed — any rank's `true` is every rank's —
+            # and the count, which is the same everywhere, is not.
+            if checkpoint_interval_seconds !== nothing || max_walltime_seconds !== nothing
+                due_clock, stopping = agree_any(forest, (due_clock, stopping))
+            end
+            if due_count || due_clock || stopping
                 path = checkpoint_filename(checkpoint_path_prefix, nsteps)
                 state = run_state(; chunk=c, t=stop, nsteps, nregrids,
                                   floor_hits=hits, ghost_hits=ghosts, passes,
-                                  converged, acc, λ_initial, tracking, drift,
+                                  converged, reset_hits=rank_reduce(+, forest, acc.hits),
+                                  injection=acc.injection, λ_initial, tracking, drift,
                                   scales, totals0, nblocks_history, buffer_history,
                                   λ_history, λ_end_history)
                 save_run(path, forest, U, u; recipe=recipe,
                          criterion=regrid_criterion, run=state,
                          filters=checkpoint_hdf5_filters,
-                         sync=checkpoint_sync_to_disk)
+                         sync=checkpoint_sync_to_disk, io=checkpoint_io)
                 push!(written, path)
-                rotate_checkpoints!(checkpoint_path_prefix, num_checkpoints_keep;
-                                    keep=path)
+                # One rank removes files, after the collective write has put
+                # the new one in place on every rank's view of it.
+                isroot(forest) &&
+                    rotate_checkpoints!(checkpoint_path_prefix, num_checkpoints_keep;
+                                        keep=path)
                 last_write = time()
                 write_max = max(write_max, last_write - now)
             end
@@ -971,7 +1044,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
     injection = accounting ? ntuple(v -> acc.injection[v], Val(D + 2)) : nothing
     return (drift=drift, scales=scales, totals0=totals0,
             totals=conserved_totals(U), floor_hits=hits,
-            reset_hits=acc.hits, ghost_hits=ghosts, injection=injection,
+            reset_hits=rank_reduce(+, forest, acc.hits), ghost_hits=ghosts,
+            injection=injection,
             nsteps=nsteps,
             nchunks=nchunks, nregrids=nregrids, passes=passes,
             converged=converged, nblocks=nleaves(forest),

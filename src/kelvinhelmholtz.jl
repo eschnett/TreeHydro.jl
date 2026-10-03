@@ -361,6 +361,11 @@ runs once per chunk against tens of steps. `block_mapreduce` could not form it
 in any case — the summand needs the cell's `v_y`, its position and its size at
 once, and a reduction over one variable's values has none of the last two.
 
+**Collective over a distributed forest** (added 2026-10-02, for MPI): each rank
+sums its own blocks in block order and the three sums are added across the
+ranks in rank order, so every rank gets the same `M`, and it agrees with the
+serial one to roundoff — exactly, at one rank.
+
 **`P` must be current**: [`update_primitives!`](@ref) is what leaves it so, and
 [`evolve!`](@ref) calls the observer with it already done.
 """
@@ -390,9 +395,14 @@ function mode_amplitude(P::FieldSet{T,2}, w::KelvinHelmholtz{T}) where {T}
             Σd += area * e
         end
     end
+    # A rank with no blocks is left out rather than adding three zeros, so
+    # that it changes nothing; the check below then sees the mesh's sums on
+    # every rank and refuses, if it does, everywhere.
+    Σs, Σc, Σd = rank_reduce((a, b) -> a .+ b, P, (Σs, Σc, Σd);
+                             present=nblocks(P) > 0)
     Σd > 0 || throw(ArgumentError(
         "mode_amplitude found no cell at all: the weight Σ w_i e_i came out " *
-        "$Σd on a field set with $(nblocks(P)) blocks."))
+        "$Σd on a mesh of $(nleaves(P.forest)) blocks."))
     return 2 * sqrt((Σs / Σd)^2 + (Σc / Σd)^2)
 end
 
@@ -416,7 +426,8 @@ A host loop in block order for the reason [`mode_amplitude`](@ref) gives — the
 summand needs two variables of the same cell, and `block_mapreduce` maps a
 scalar function over one variable's values. It takes no case parameters: `ρ`
 and `v_y` are slots 1 and 3 of the primitive set in `D = 2` and nothing else
-about the problem enters.
+about the problem enters. Collective over a distributed forest, the maxima
+combined across the ranks, which is exact (added 2026-10-02, for MPI).
 """
 function max_y_kinetic_energy(P::FieldSet{T,2}) where {T}
     work = Array(P.work)
@@ -429,7 +440,7 @@ function max_y_kinetic_energy(P::FieldSet{T,2}) where {T}
             best = max(best, ρ * vy * vy / 2)
         end
     end
-    return best
+    return rank_reduce(max, P, best)
 end
 
 """
@@ -519,6 +530,9 @@ installed its own there would be taking `M` and `K` somewhere other than here,
 which is exactly what the paragraph above says must not happen. Passing
 nothing leaves the run bit-identical to one that never had the keyword.
 
+`comm` is [`evolve!`](@ref)'s, and both diagnostics are collective, so the
+curves are the same on every rank (added 2026-10-02).
+
 `half = true` runs the reflecting half box of
 [`HydroCase`](@ref)`(w; half = true)`, which needs `seed = :mirrored` (added
 2026-09-29).
@@ -533,7 +547,8 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
                 coarsen_tol, t_end=3 // 2, roots=4, scale=1, limiter=:minmod,
                 riemann=:hllc, fixup=true, reset=:stage, cfl=2 // 5,
                 speed_headroom=1, accounting::Bool=true, backend=CPU(),
-                observer=nothing, half::Bool=false, params...) where {T,D}
+                comm=nothing, observer=nothing, half::Bool=false,
+                params...) where {T,D}
     w = KelvinHelmholtz(T, Val(D); params...)
     case = HydroCase(w; roots=roots, speed_headroom=speed_headroom, half=half)
     ts, Ms, Ks, nbs = Float64[], Float64[], Float64[], Int[]
@@ -541,7 +556,9 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
         push!(ts, tofloat64(T(t)))
         push!(Ms, mode_amplitude(pr.P, w))
         push!(Ks, max_y_kinetic_energy(pr.P))
-        push!(nbs, nblocks(pr.P))
+        # The mesh's block count, which is the leaf count: `nblocks` is this
+        # rank's share of it over a distributed forest.
+        push!(nbs, nleaves(pr.P.forest))
         # After the diagnostics, so that a viewer's frame is pushed beside
         # the `M` and `K` that belong to it rather than one sample ahead.
         observer === nothing || observer(pr, t, u)
@@ -551,7 +568,7 @@ function kh_run(::Type{T}, ::Val{D}; N, ops, chunk, maxlevel_cap, refine_tol,
                 coarsen_tol=coarsen_tol, maxlevel_cap=maxlevel_cap,
                 roots=case.roots .* scale, cfl=cfl, riemann=riemann,
                 fixup=fixup, reset=reset, accounting=accounting,
-                backend=backend, observer=watch)
+                backend=backend, comm=comm, observer=watch)
     return (; r, w, ts, Ms, Ks, nbs)
 end
 

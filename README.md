@@ -33,7 +33,8 @@ better here.
 **Status: complete. All four cases run and all four are drawn, at any
 thread count, on a GPU and at three float types — milestones H0 through H6
 are done, and the design document has been read against the code a last
-time.** What exists is
+time.** Since then: checkpoint and restart, reflecting walls, and runs
+distributed over MPI. What exists is
 the module shell, the `Base` bridges for software floating-point types,
 the host-copy helpers, the tests that say the TreeAMR release still
 provides what the scheme is written against, the ideal-gas equation of
@@ -195,6 +196,21 @@ r.finished || exit(3)                 # the job script resubmits on 3
 The last two files are kept (`num_checkpoints_keep`), whichever job wrote
 them. The wall-time limit is timed from the call, so leave room for Julia's
 startup and compilation below the queue's own.
+
+**And a run can span many processes.** Pass a communicator and launch under
+`mpiexec`; every rank makes the same call. The blocks are distributed by
+TreeAMR, and the answer is the serial one — the state, the mesh, every step
+and floor count bit for bit at any rank count, the conserved totals to
+roundoff. MPI, like HDF5, is the caller's to load. A checkpoint written at
+one rank count restarts at any other, or serially:
+
+```julia
+using MPI, HDF5, TreeAMR, TreeHydro
+MPI.Init()
+r = evolve!(case, Val(3); …, comm = MPI.COMM_WORLD)
+```
+
+This needs TreeAMR 0.1.6, which is the package's compat bound.
 
 **And there are pictures.** `bin/` holds the viewers, in an environment of
 their own so that CairoMakie is never a dependency of the package. They

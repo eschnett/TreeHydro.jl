@@ -177,3 +177,31 @@ end
         @test isdefined(TreeAMR, name)
     end
 end
+
+@testset "The resolved TreeAMR has the distributed surface this package calls" begin
+    # Guards the MPI support of TreeAMR's M7 (added 2026-10-02): the exported
+    # `communicator`, which `evolve!` converts its `comm` keyword through,
+    # and the four unexported communicator verbs `src/distributed.jl` builds
+    # its cross-rank combinations and agreements from. The verbs are
+    # documented on TreeAMR's distributed API page and not exported, like
+    # the threading helpers above; a rename would otherwise surface only
+    # under `mpiexec`, which is the one place nobody is watching a stack
+    # trace. And a serial forest's communicator is rank 0 of 1, which is what
+    # every one-rank branch of this package returns its argument on.
+    @test :communicator in names(TreeAMR)
+    @test :blockrange in names(TreeAMR)
+    for name in (:commrank, :commsize, :allgather, :allgatherv)
+        @test isdefined(TreeAMR, name)
+    end
+    forest = Forest((2,); N=8)
+    @test TreeAMR.commsize(forest.comm) == 1
+    @test TreeAMR.commrank(forest.comm) == 0
+    @test TreeHydro.rank_reduce(+, forest, 3) === 3
+    @test TreeHydro.rank_reduce(+, forest, 3; present=false) === 3
+    @test TreeHydro.agree_any(forest, (true, false)) === (true, false)
+    @test TreeHydro.isroot(forest)
+    v = [1.0, -0.0]
+    @test TreeHydro.rank_sum!(v, forest) === v && isequal(v, [1.0, -0.0])
+    @test_throws "nope" TreeHydro.agree_refusal(() -> throw(ArgumentError("nope")),
+                                                forest.comm)
+end

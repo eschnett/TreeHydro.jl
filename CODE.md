@@ -14,7 +14,10 @@ the scheme conserve across refinement boundaries.
 
 *Status: complete — milestones H0 to H6 are done (see
 [Milestones](#milestones)), and step 15 read this document against the code
-once more.* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
+once more. Since then, on TreeAMR's releases: checkpoint and restart
+(2026-09-29), reflecting walls (2026-09-29), and runs distributed over MPI
+(2026-10-02, on TreeAMR 0.1.6; see [Running
+distributed](#running-distributed)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
 equation of state and floors, the reconstruction, the three Riemann fluxes,
 the six-step right-hand side, the entropy wave, the exact Riemann solver and
 Sod's tube); H2 the coarse-fine faces on a static mesh; H3 the refinement
@@ -2520,6 +2523,13 @@ a block's pages are written by one core. Nothing about the answer changes:
 ownership decides *where* a block is computed, never in what order a sum is
 taken, and the digests at one and at four threads are identical.
 
+*(Amended 2026-10-02, for MPI: what this paragraph calls host loops in
+block order, and the per-block maxima and counts combined on the host, are
+now combined across ranks as well — through `mesh_mapreduce` where the
+reduction is TreeAMR's, and through this package's `rank_reduce` where the
+loop is its own; see [Running distributed](#running-distributed). Serially
+nothing moved: every one-rank branch returns its argument.)*
+
 **What is inherited is narrower than the paragraph above says** (amended
 after step 11, when TreeAMR narrowed its M5 guarantee; the statement is
 "Floating-point sums are promised to roundoff only" under its
@@ -2632,12 +2642,184 @@ alone differing, through Metal's `sin`. On Symmetry an H200 runs a step at
 million cell updates per second at `Float64` with `N ≥ 32`; see [Step 14 —
 the benchmark and the device](#step-14--the-benchmark-and-the-device).
 
+## Running distributed
+
+*(Added 2026-10-02, on TreeAMR's M7: written against its `main`, which
+`Project.toml` pinned for the day, and taken from the registry at
+`TreeAMR = "0.1.6"` once that release carried the guard below — see [File
+layout](#file-layout).)* A run goes over MPI by passing a
+communicator: `evolve!(case; …, comm = MPI.COMM_WORLD)` after `using MPI`
+and `MPI.Init()`, launched under `mpiexec` with every rank making the same
+call. `comm = nothing`, the default everywhere, is a serial run, and a run
+with one rank takes exactly the serial code path. **This package never
+loads MPI** — the caller does, as for HDF5, and `src/` names no MPI type —
+so MPI is in `test/Project.toml` only.
+
+**What TreeAMR does, and what is left here.** TreeAMR keeps the forest on
+every rank and distributes the blocks in contiguous runs of the curve; it
+makes the ghost exchange, the interface restriction, the regrid with its
+repartitioning, `mesh_mapreduce` and the checkpoints collective and
+bit-identical to serial but for floating-point sums. Two things it cannot
+do, and says so under "What an application must make global itself" in
+its `CODE.md`, and both were this package's:
+
+- **A number combined on the host from per-block values is a rank's own.**
+  TreeAMR's audit found five here — `max_signal_speed`, `floor_hits`,
+  `ghost_floor_hits`, `indicator_scales` and `peak_compression` — and the
+  first is the CFL speed: each rank would have sized its own step, taken
+  its own number of them, and hung in the next exchange. The rest of the
+  audit's list was the diagnostics (`tracked_share`, `reduce_to_grid`,
+  `mode_amplitude`, `max_y_kinetic_energy`, `shock_radius`) and the block
+  count `kh_run` recorded with `nblocks` where it meant the mesh's.
+- **A decision taken from a rank's own clock or file system.** The
+  wall-clock checkpoint triggers sent each rank into the collective
+  `save_checkpoint`, or past it, by its own reading; the checkpoint
+  keyword checks asked each rank's view of the file system whether a
+  directory or a restart file exists.
+
+**The decisions** (made in implementing it, 2026-10-02):
+
+- *`comm` is a keyword of `evolve!` and of every driver that builds a
+  forest — `sod_errors`, `sedov_static`, `entropywave_errors`, `kh_run` and
+  the three forest builders — beside `backend`, and not a field of
+  `HydroCase`.* A case is the physics (see [Regridding: one driver,
+  restart per chunk](#regridding-one-driver-restart-per-chunk)), and how
+  many processes run it is not. Nor is it in the checkpoint's recipe: it
+  decides no number the claim covers, and TreeAMR's checkpoints load at any
+  rank count, so a restart may change it.
+- *A per-block reduction becomes `mesh_mapreduce` wherever it can*, which
+  is all four `max`-and-sum reductions above: one call, TreeAMR's
+  combination across ranks in rank order, and the same bits as the
+  `maximum(block_mapreduce(…))` it replaces serially — Base's `maximum` and
+  `sum` are the same pairwise `mapreduce` that `mesh_mapreduce` closes with.
+- *What cannot be one — a host loop, a launch of this package's own —
+  combines its per-rank partial with `rank_reduce`* (`src/distributed.jl`),
+  written as TreeAMR's `combine_blocks` is: one `allgather` of a
+  `(present, value)` pair, folded in rank order, a rank with no blocks left
+  out rather than folded in as a zero, and at one rank the value itself
+  with nothing gathered. `reduce_to_grid`, whose result is an array, sums
+  each rank's grid over the ranks with `rank_sum!` instead, each rank
+  having filled only the cells its blocks cover. The verbs are TreeAMR's
+  unexported `commrank`, `commsize`, `allgather` and `allgatherv`, which
+  `test/prerequisite_tests.jl` checks by name as it checks
+  `launch_by_owner!`.
+- *The reset's hit count stays rank-local while it accumulates.* The reset
+  runs at every stage, and a collective there would hold every rank at every
+  stage for a number read once per chunk. So `ResetAccounting.hits` is this
+  rank's count, `evolve!` sums it over the ranks where it reports it and
+  where it checkpoints it, and a restart credits the saved total to rank 0.
+  The injection needs nothing: it is a difference of two `conserved_totals`,
+  which are global already.
+- *A decision from the clock is agreed: any rank's `true` is every rank's.*
+  `agree_any` gathers the two flags — write now, stop now — once per chunk,
+  and only where a clock-based trigger was asked for; the every-`k`-chunks
+  trigger is the same on every rank and is not gathered. `any` rather than
+  rank 0's reading, so that the slowest rank's clock is the one that stops
+  the run before the queue does.
+- *A check of the file system is agreed too*: `agree_refusal` runs the
+  checkpoint keyword checks on every rank, and an `ArgumentError` on any rank
+  is thrown on every rank — its own error on the rank that refused, and on
+  the others one that names it. A node-local path is the ordinary way for
+  two ranks to disagree.
+- *One rank removes files.* The rotation runs on rank 0 after the
+  collective write, and removes with each old index its part files —
+  TreeAMR writes `"<index>.<save id>.<j>.h5"` beside the index, one per I/O
+  process, for a distributed checkpoint — and any orphan of that index's
+  name. `checkpoint_files` and `latest_checkpoint` still list indexes only.
+  A new keyword, `checkpoint_io` (TreeAMR's `io`: `:node`, the default, one
+  part per node; `:all`, one per rank, which TreeAMR measured faster on the
+  cluster; or a number), says how the ranks are grouped; it decides where
+  the bytes go and no number of the run.
+- *An observer is called on every rank with that rank's `U` and `u`.* The
+  diagnostics it may take are the collective ones; a host loop of its own
+  over `nblocks(U)` reads one rank's blocks. `kh_run`'s two diagnostics are
+  collective, so its curves are the same on every rank.
+- *What stays serial*: the viewers in `bin/`, the zoom showcase and
+  `bin/benchmark.jl`, none of which passes a communicator. A viewer reads
+  blocks with `interiorview` and would draw one rank's; the showcase runs
+  on one H200. Neither is a reason to distribute, and both say so.
+
+**The claim** is the thread claim one level up: **a distributed run is the
+serial run — its state, its mesh, its step and chunk counts, every floor
+count, every speed, every maximum and the tracking measure, bit for bit at
+any rank count — and its sums (the conserved totals, the drift, the
+scales, the injection, an L1 error, `M(t)`) agree to roundoff, exactly at
+one rank.** Nothing in the scheme is a sum that feeds a decision: the step
+comes from a `max`, the flags from a `max`-scaled indicator on cells whose
+ghosts TreeAMR fills bit for bit, so the sums' reassociation never reaches
+the state.
+
+**How it is tested.** `test/mpi_workload.jl` runs every case once under
+`mpiexec -n 3` and three times in that one launch, so that one compilation
+serves four rank counts: over all three ranks; over ranks 0 and 1 while
+rank 2 runs the same cases over a communicator of itself alone; and then
+with no communicator at all on rank 2. Each group writes its lines, and
+`test/mpi_tests.jl` compares the three distributed groups' with the serial
+group's — every line that is not a sum with `==`, every line of sums number
+by number to `rtol = 1e-12, atol = 1e-14` with its text exact, and at one
+rank every line with `==`. The cases are chosen for what can break: the
+tracked tube (the initial-data cycle, the Dirichlet hook, a regrid that
+moves the partition every chunk); the tube on **two blocks**, so that at
+three ranks one rank holds no block for the whole run; the tracked shear
+layer and its reflecting half box (mirrored transfers between ranks, where
+a pack applying the parity factor would lose a `−0`); the static `:center`
+blast (both floor populations, the injection); the entropy wave on its
+two-level mesh (the interface restriction); the tracked blast written to
+part-file checkpoints at every chunk and **restarted from the three-rank
+group's checkpoint by every group**, the serial one included, which must
+reproduce the uninterrupted run's lines; a wall-time stop; the rotation
+with part files; and a restart file that exists on rank 0 only, which must
+be refused on every rank. Digests are a fold of `hash` over every element
+of the state gathered in curve order (the ranks' state vectors concatenated
+in rank order *are* the serial one), not `hash` of the vector, which samples
+a long one.
+
+**An upstream bug, found by the empty rank** (2026-10-02). TreeAMR's
+`AllVariables` boundary hook checks its callback's tuple length at "the first
+owned point of block 1, which every field set has" — and over a distributed
+forest a rank may have none, so the check reads a block that is not there and
+throws on that rank alone, which the others then wait for. Its
+`fill_by_coordinates!` has the guard (`nblocks(fs) == 0 && return fs`) and its
+`cell_boundary!` does not; this package is the only caller of that form (its
+boundary hook is `boundary_by_coordinates` over an `AllVariables`). The fix is
+the same one line, verified here first against a scratch copy of TreeAMR's
+`main` with it added; it went upstream the same day (TreeAMR's
+`afb148d`, with its own MPI workload now running a rank without blocks
+through every operation) and was released as **TreeAMR 0.1.6**, which is
+this package's bound. 0.1.5, registered hours before, is M7 without it, and
+is excluded by the bound for that reason.
+
+**Measured** (2026-10-02, this machine, MPICH_jll 5.0.2 through MPI.jl
+0.20.27, one thread a rank, against TreeAMR's `main` with the guard above,
+and the suite again against the registered 0.1.6):
+the workload writes 68 lines per group, 41 of them exact and 26 of sums;
+**every exact line is identical at one, two and three ranks and serially**,
+the restarts from the three-rank checkpoint included, and at one rank so is
+every sum. At two and three ranks 83 and 76 of the 194 numbers on the sum
+lines move, by at most **1.3e-15** absolutely — six ulp of a total of order
+one — and the relative difference reaches 2 only on drifts of order `1e-16`,
+which are differences of two such totals and have no relative accuracy (the
+trap under [Testing](#testing)). The launch takes **1 m 20** of wall clock
+for the four groups. `test/mpi_tests.jl` asserts 221
+claims on it, and a negative control — one digit changed in an exact line and
+one in a sum line of the two-rank file — fails both. Before the fix,
+`Pkg.test()` against TreeAMR's `main` passed 12461 and errored in the one
+place the bug predicts, the workload's two-block tube. Against the
+registered **0.1.6**, resolved fresh, `Pkg.test()` passes **12682 tests in
+6 m 10 at one thread and 12716 in 5 m 08 at four**, and a manifest-free
+copy on **Julia 1.11.9**, the floor, 12682 in 9 m 32 — against 12447 in
+5 m 01 and 12481 in 4 m 28 on 2026-10-01, the difference being the MPI test
+and its launch, on a machine shared with another session's suite. Every
+serial number elsewhere in this document is unchanged: the suite's
+assertions on them are the same and pass.
+
 ## File layout
 
 | file | contents |
 |---|---|
 | `src/TreeHydro.jl` | module shell: `using`s, exports, includes |
 | `src/precision.jl`, `src/device.jl` | copied from TreeWave (not a dependency on it): `Base` bridges for software floats; `to_backend`, `hostcopy` |
+| `src/distributed.jl` | what a run over MPI must make global itself (added 2026-10-02): `rank_reduce`, `rank_sum!`, `agree_any`, `agree_refusal`, `isroot`, over TreeAMR's communicator verbs; see [Running distributed](#running-distributed) |
 | `src/eos.jl` | `IdealGas`, `prim2con`, `con2prim`, `soundspeed` |
 | `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` step limiter, the `reset_stage!` stage limiter, and the injection accounting |
 | `src/reconstruction.jl` | the three slopes, face states |
@@ -2651,7 +2833,7 @@ the benchmark and the device](#step-14--the-benchmark-and-the-device).
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29); `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box (added 2026-09-29) |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29); `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box (added 2026-09-29); `mpi_tests.jl`, the standalone `mpi_workload.jl` it runs under `mpiexec -n 3` and its launcher `mpi_jobs.jl`, for rank-count independence (added 2026-10-02) |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
@@ -2674,7 +2856,13 @@ are `TreeAMR = "0.1.3"`, `KernelAbstractions = "0.9.42, 1"`,
 [Step 12](#step-12--precision) — and `julia = "1.11"`.)*
 TreeAMR is resolved from the General
 registry at `TreeAMR = "0.1.3"`, the release with the owner-based
-threading. IMEXRungeKutta is not registered and is located by a
+threading. *(Amended 2026-10-02: the bound is `TreeAMR = "0.1.6"`, the
+release with MPI support (M7) and the empty-rank guard the distributed runs
+need; for the hours between M7's merge and that release `Project.toml`
+pinned TreeAMR's `main` again, and the entry went with the release. The
+tests add `MPI = "0.20"`, which loads TreeAMR's MPI extension; the package
+itself does not depend on MPI. See [Running
+distributed](#running-distributed).)* IMEXRungeKutta is not registered and is located by a
 `[sources]` entry pinning its `main` — the one pin left in the package
 environment, and a path-tracked dependency's `[sources]` is honoured, so
 `bin/` and the scratch environments of the device and Symmetry runs find it

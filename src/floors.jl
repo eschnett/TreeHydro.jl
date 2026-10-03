@@ -258,6 +258,15 @@ taken**: it is one reduction over one diagnostic slot, and the counts by
 population are a measurement the design depends on rather than a
 diagnostic.
 
+**Over a distributed forest `hits` is this rank's count** (added 2026-10-02,
+for MPI): the reset runs at every stage, and a collective there would hold
+every rank at every stage for a number read once per chunk, so each rank
+counts its own cells and [`evolve!`](@ref) sums the ranks where it reports
+the total and where it checkpoints it — a restart credits the saved total to
+rank 0, so the sum stays the run's. `injection` needs no such care: it is
+the difference of two [`conserved_totals`](@ref), which are already global
+and the same on every rank. Serially `hits` is the total, as it always was.
+
 It is mutable and host-side, and it is held by the [`HydroProblem`](@ref)
 rather than returned by each call, because a run rebuilds its problem after
 every regrid and the totals have to survive that. No kernel ever receives
@@ -369,7 +378,7 @@ function reset_atmosphere!(u, integrator, p, t)
     else
         apply_reset!(p, u)
     end
-    acc.hits += floor_hits(p)
+    acc.hits += local_floor_hits(p)
     return nothing
 end
 
@@ -393,7 +402,7 @@ atmosphere" in `CODE.md`.
 """
 function reset_stage!(u, integrator, p, t)
     apply_reset!(p, u)
-    p.accounting.hits += floor_hits(p)
+    p.accounting.hits += local_floor_hits(p)
     return nothing
 end
 

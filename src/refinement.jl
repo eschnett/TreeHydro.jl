@@ -165,10 +165,14 @@ variables are positive by construction — the floors hold them above
 `ρ_atm` and `p_atm`, and a negative one would be a bug the criterion is
 the wrong place to hide.
 
-Two `block_mapreduce` reductions, one per variable, because a device
+Two `mesh_mapreduce` reductions, one per variable, because a device
 reduction is a kernel launch and a launch takes a single variable range.
-The per-block maxima are combined in block order, so the answer is
-bit-identical whatever the thread count.
+The per-block maxima are combined in block order and across ranks in rank
+order, so the answer is bit-identical whatever the thread count and the
+rank count (amended 2026-10-02, for MPI: it was `maximum` of a
+`block_mapreduce`, the same bits serially and a rank's own scale over a
+distributed forest — which would have made the mesh depend on how many
+ranks built it, and thrown on a rank with no blocks).
 
 **Refreshed once per flagging pass.** This package's solutions change
 amplitude by orders of magnitude — Sedov's peak density, the pressure
@@ -178,7 +182,7 @@ at `t = 0` does to a blast: the criterion refines the whole domain.
 that wants to freeze it has to say so.
 
 !!! warning "Never from inside the predicate"
-    `block_mapreduce` is itself a threaded reduction, and `firing_boxes`
+    `mesh_mapreduce` is itself a threaded reduction, and a collective one, and `firing_boxes`
     evaluates its predicate concurrently over blocks. Computing the
     references inside the predicate would nest one over the other, once
     per cell. [`hydro_flags`](@ref) evaluates them at its own call site,
@@ -186,8 +190,8 @@ that wants to freeze it has to say so.
 """
 function indicator_scales(P::FieldSet{T,D}) where {T,D}
     R = float(real(T))
-    ρ_ref = maximum(block_mapreduce(identity, max, zero(R), P; vars=1))
-    p_ref = maximum(block_mapreduce(identity, max, zero(R), P; vars=D + 2))
+    ρ_ref = mesh_mapreduce(identity, max, zero(R), P; vars=1)
+    p_ref = mesh_mapreduce(identity, max, zero(R), P; vars=D + 2)
     return (ρ_ref, p_ref)
 end
 
@@ -196,8 +200,12 @@ end
                 ε = T(1//100), ε_g = T(1//1000), scales = indicator_scales(P))
     hydro_flags(p::HydroProblem; …)
 
-The flag vector [`regrid!`](@ref) takes, one entry per leaf, from the
-Löhner indicator on a set of current primitives.
+The flag vector [`regrid!`](@ref) takes, one entry per block, from the
+Löhner indicator on a set of current primitives. Over a distributed forest
+the blocks are this rank's and so are the flags — `regrid!` gathers them —
+while the two references are the whole mesh's, from
+[`indicator_scales`](@ref); the verdict of a block is then the same whichever
+rank holds it.
 
 **Two entry points, one implementation** (the split arrived in step 7).
 During an evolution the primitives are the ones a [`HydroProblem`](@ref)

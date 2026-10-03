@@ -463,8 +463,14 @@ scratch set instead.
 exists — a reduction cannot form `|v| + c_s` from three variables, so the
 kernel that held all three wrote the number down.
 
-The per-block maxima are combined in block order, so the answer does not
-depend on the thread count.
+**One number for the whole mesh**, through TreeAMR's `mesh_mapreduce`: the
+per-block maxima combined in block order on each rank and across ranks in
+rank order, so the answer moves neither with the thread count nor with the
+rank count (amended 2026-10-02, for MPI: it was `maximum` of TreeAMR's
+per-block `block_mapreduce`, which the same bits serially, and over a
+distributed forest a rank's own speed — so every rank would have sized its
+own step and taken its own number of them, and the exchange would have
+hung). A maximum is exact under any association.
 """
 max_signal_speed(p::HydroProblem) = max_signal_speed(p.P)
 
@@ -474,7 +480,7 @@ function max_signal_speed(P::FieldSet{T,D}) where {T,D}
         "the signal speed lives in diagnostic slot $(D + 3) of the primitive " *
         "set, which the con2prim kernel writes; got nvars=$(P.nvars) where " *
         "$(D + 4) was expected."))
-    return maximum(block_mapreduce(identity, max, zero(R), P; vars=D + 3))
+    return mesh_mapreduce(identity, max, zero(R), P; vars=D + 3)
 end
 
 """
@@ -499,10 +505,26 @@ counts the cells it changed. `P` is scratch and is rewritten in full by the
 next evaluation, so the two never mix within one measurement.
 
 Requires `P` to be current, as [`max_signal_speed`](@ref) does.
+
+**Over the whole mesh**, through `mesh_mapreduce`, and so collective over a
+distributed forest (amended 2026-10-02, for MPI); the reset's own count,
+which runs at every stage, takes this rank's share alone and is combined
+where it is reported (see [`ResetAccounting`](@ref)). The sum is of `0`s and
+`1`s and exact in any order.
 """
 function floor_hits(p::HydroProblem{T,D}) where {T,D}
     R = float(real(T))
-    return roundint(sum(block_mapreduce(identity, +, zero(R), p.P; vars=D + 4)))
+    return roundint(mesh_mapreduce(identity, +, zero(R), p.P; vars=D + 4))
+end
+
+# This rank's share of `floor_hits`, with no message: the count the reset
+# adds at every stage and every step, where a collective per call would put
+# a synchronization of every rank on the per-evaluation path for a number
+# that is read once per chunk.
+function local_floor_hits(p::HydroProblem{T,D}) where {T,D}
+    R = float(real(T))
+    values = block_mapreduce(identity, +, zero(R), p.P; vars=D + 4)
+    return isempty(values) ? 0 : roundint(sum(values))
 end
 
 # The ghost population's count. `block_mapreduce` reduces a block's
@@ -567,8 +589,11 @@ must be asked after a recovery and not after a reset.
 function ghost_floor_hits(p::HydroProblem{T,D}) where {T,D}
     R = float(real(T))
     P = p.P
-    backend = get_backend(P.work)
     n = nblocks(P)
+    # A rank with no blocks has no ghosts and launches nothing; it still
+    # takes part in the combination below, which is collective.
+    n == 0 && return rank_reduce(+, P, 0; present=false)
+    backend = get_backend(P.work)
     counts = allocate(backend, R, (n,))
     S = ntuple(d -> size(P.work, d), D)
     # By owner, as every block-shaped launch in TreeAMR is since 0.1.3: each
@@ -582,7 +607,9 @@ function ghost_floor_hits(p::HydroProblem{T,D}) where {T,D}
     for b in 1:n
         total += roundint(host[b])
     end
-    return total
+    # Across ranks in rank order (amended 2026-10-02, for MPI): an integer
+    # sum, so exact whatever the partition.
+    return rank_reduce(+, P, total)
 end
 
 """
