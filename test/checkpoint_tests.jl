@@ -33,34 +33,9 @@
 # Every comparison is `==` or `isequal`, never `≈`: roundoff-level agreement
 # is what a restart that replayed something differently would give.
 
-# Guards the one refusal that has to be tested *before* HDF5 is loaded: a
-# job script that forgot `using HDF5` must fail at the call, in a second,
-# and not at the first write hours in. Once HDF5 is loaded in a session it
-# cannot be unloaded, so this runs only where the suite reaches this file
-# without it — which is every ordinary run, since no file above loads it.
-if Base.get_extension(TreeAMR, :TreeAMRHDF5Ext) === nothing
-    @testset "Checkpointing without HDF5 is refused at the call" begin
-        case = HydroCase(SodTube(Float64, Val(1)); roots=(8,))
-        err = try
-            evolve!(case, Val(1); N=8,
-                    ops=Operators(family=Conservative, prolongation=3, restriction=2),
-                    t_end=1 // 50, chunk=1 // 200, limiter=:minmod,
-                    refine_tol=2 // 25, coarsen_tol=1 // 50, maxlevel_cap=2,
-                    checkpoint_path_prefix=joinpath(mktempdir(), "sod"),
-                    checkpoint_every_chunks=1)
-            nothing
-        catch e
-            e
-        end
-        @test err isa ArgumentError
-        @test occursin("using HDF5", err.msg)
-        @test !TreeHydro.checkpointing_available()
-    end
-end
-
-# Each top-level statement of an included file runs in the latest world, so
-# every testset below sees the methods the extension adds here.
-using HDF5
+# `save_checkpoint` and `load_checkpoint`, which some testsets below call
+# directly; `evolve!` reaches them through the package.
+using TreeIOHDF5
 using MultiFloats: Float32x2
 
 include("restart_workload.jl")

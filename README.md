@@ -165,20 +165,20 @@ julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
 
 **And a run can outlast a job.** `evolve!` writes checkpoints at chunk
-boundaries, before the regrid, and restarts from them through TreeAMR's
-`save_checkpoint` and `load_checkpoint`, regridding first; a restarted run,
+boundaries, before the regrid, and restarts from them through
+`save_checkpoint` and `load_checkpoint` from
+[TreeIOHDF5](https://github.com/eschnett/TreeIOHDF5.jl), TreeAMR's
+checkpoint package and a dependency of this one, regridding first; a restarted run,
 or a chain of them, is the uninterrupted run bit for bit at any thread
 count. A restart may move `t_end` and change the regridding criterion
 (`refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g`, `buffer`), which
 its first regrid then uses and which it reports; with any other parameter
-changed it is refused by name. HDF5 is
-TreeAMR's optional dependency and not this package's, so the job script
-loads it. One script serves every job of a chain — the first finds no
+changed it is refused by name. One script serves every job of a chain — the first finds no
 checkpoint and starts from the initial data, and each later one continues
 where the previous one stopped:
 
 ```julia
-using HDF5, TreeAMR, TreeHydro
+using TreeAMR, TreeHydro
 
 prefix = "run/sedov"                  # files run/sedov.it0000001234.h5
 case = HydroCase(SedovBlast(Float64, Val(3); r₀ = 1 // 8); roots = 4)
@@ -201,16 +201,16 @@ startup and compilation below the queue's own.
 `mpiexec`; every rank makes the same call. The blocks are distributed by
 TreeAMR, and the answer is the serial one — the state, the mesh, every step
 and floor count bit for bit at any rank count, the conserved totals to
-roundoff. MPI, like HDF5, is the caller's to load. A checkpoint written at
+roundoff. MPI is the caller's to load. A checkpoint written at
 one rank count restarts at any other, or serially:
 
 ```julia
-using MPI, HDF5, TreeAMR, TreeHydro
+using MPI, TreeAMR, TreeHydro
 MPI.Init()
 r = evolve!(case, Val(3); …, comm = MPI.COMM_WORLD)
 ```
 
-This needs TreeAMR 0.1.6, which is the package's compat bound.
+This needs TreeAMR 0.1.6 or later; the package's compat bound is 0.2.
 
 **And there are pictures.** `bin/` holds the viewers, in an environment of
 their own so that CairoMakie is never a dependency of the package. They

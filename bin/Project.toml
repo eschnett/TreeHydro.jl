@@ -22,7 +22,7 @@ TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
 TreeHydro = "18f621c7-d3c4-4697-8f68-54143cdddff7"
 
 [compat]
-TreeAMR = "0.1.3"
+TreeAMR = "0.2"
 julia = "1.11"
 
 [sources]

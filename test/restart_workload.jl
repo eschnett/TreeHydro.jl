@@ -3,7 +3,7 @@
 #
 # Run as a standalone script —
 #
-#     julia -t N --project=<an environment with HDF5> test/restart_workload.jl FILE
+#     julia -t N --project=<the test environment> test/restart_workload.jl FILE
 #
 # — it restarts the run below from the checkpoint `FILE` and prints a digest
 # of everything the restarted run returns: the state vector, the mesh, the
@@ -22,11 +22,10 @@
 # measured when this was written — and so every accumulator the file carries
 # is exercised, not only the state.
 #
-# Like `thread_workload.jl` it may use nothing outside `Base`, TreeAMR, HDF5
+# Like `thread_workload.jl` it may use nothing outside `Base`, TreeAMR
 # and the package, and it prints with `repr`, which round-trips a `Float64`
 # exactly, so that a difference in the last bit is a difference in the text.
 
-using HDF5
 using TreeAMR
 using TreeHydro
 

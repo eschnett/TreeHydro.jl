@@ -540,7 +540,7 @@ measure come out bit for bit the serial run's at any rank count; the
 conserved totals, the drift, the scales and the errors are sums, and agree
 with it to roundoff (exactly, at one rank). What comes back is the same on
 every rank except `U` and `u`, which are this rank's blocks. This package
-never loads MPI: the caller does, as it does HDF5. See "Running
+never loads MPI: the caller does. See "Running
 distributed" in `CODE.md`.
 
 An `observer` is called on every rank, with each rank's own `U` and `u`; a
@@ -552,11 +552,10 @@ or serially.
 ## Checkpoint and restart
 
 *(Added 2026-09-29, on TreeAMR 0.1.4.)* A run writes checkpoints and
-restarts from one through TreeAMR's `save_checkpoint` and
-`load_checkpoint`, which live in TreeAMR's HDF5 extension: **the caller runs
-`using HDF5`**, and a checkpoint keyword without it is refused at the call.
-This package does not depend on HDF5. See "Checkpoint and restart" in
-`CODE.md`.
+restarts from one through `save_checkpoint` and `load_checkpoint` from
+TreeIOHDF5, TreeAMR's checkpoint package and a dependency of this one (they
+were TreeAMR's HDF5 extension before TreeAMR 0.2). See "Checkpoint and
+restart" in `CODE.md`.
 
 A checkpoint is written at a chunk boundary, where the integrator holds
 nothing but `(t, u)`, after the observer and **before the regrid** (amended
@@ -588,14 +587,14 @@ since a longer run would have regridded there; elsewhere it writes nothing.
   others is deleted, **including files an earlier job left behind**, together
   with the part files TreeAMR writes beside a distributed checkpoint; rank 0
   alone deletes.
-- `checkpoint_hdf5_filters` — passed to TreeAMR; none is its recommendation,
+- `checkpoint_hdf5_filters` — passed to TreeIOHDF5; none is its recommendation,
   and `(HDF5.Filters.Shuffle(), ZstdFilter(1))` (from H5Zzstd) the one
   filter it names when size matters: 6× on TreeAMR's atmosphere-dominated
   blast, 1.58× on this package's `D = 3` blast at twenty times the save
   time (measured in `CODE.md`, "Checkpoint and restart, measured").
-- `checkpoint_sync_to_disk` — TreeAMR's `sync`: flush the file to stable
+- `checkpoint_sync_to_disk` — TreeIOHDF5's `sync`: flush the file to stable
   storage before it replaces the previous one. The tests turn it off.
-- `checkpoint_io` — TreeAMR's `io`, how a distributed checkpoint's ranks are
+- `checkpoint_io` — TreeIOHDF5's `io`, how a distributed checkpoint's ranks are
   grouped into I/O processes, each writing one part file beside the index:
   `:node`, the default, one per node; `:all`, one per rank, which TreeAMR
   measured faster on the cluster; or a number. Serially it means nothing.
@@ -696,8 +695,8 @@ function evolve!(::Type{T}, case::HydroCase{T,D}, ::Val{D}; N, ops, t_end, chunk
         "the number of chunks is counted as ⌈t_end / chunk⌉."))
     maxlevel_cap ≥ 0 || throw(ArgumentError(
         "maxlevel_cap must be non-negative, got $maxlevel_cap."))
-    # The checkpoint keywords too, HDF5 included: a missing `using HDF5`
-    # fails in a second rather than at the first write, hours in.
+    # The checkpoint keywords too: a mistake in them fails in a second
+    # rather than at the first write, hours in.
     # Agreed over the ranks, since whether a directory or a file exists is
     # each rank's own view of the file system.
     agree_refusal(comm) do

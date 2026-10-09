@@ -1,15 +1,15 @@
 # Checkpoint and restart for `evolve!` (added 2026-09-29, on TreeAMR 0.1.4's
 # M9a).
 #
-# Everything about the *file* is upstream: TreeAMR's `save_checkpoint` writes
+# Everything about the *file* is upstream: TreeIOHDF5's `save_checkpoint` writes
 # the forest, the evolved field sets and an application's plain data, and
 # writes them atomically, durably, with element types as limbs where they
 # are not HDF5 natives and with the provenance of the writer; its
 # `load_checkpoint` rebuilds a forest and a field set through their own
-# validating constructors. Both live in the package extension
-# `TreeAMRHDF5Ext`, which loads with `using HDF5` — the *caller's* `using`,
-# since this package never touches an HDF5 type and so does not depend on
-# HDF5 at all. That is the "no mesh machinery" rule applied to I/O.
+# validating constructors. Both live in TreeIOHDF5, TreeAMR's companion
+# checkpoint package (TreeAMR's own HDF5 extension until TreeAMR 0.2), a
+# dependency of this package; this package never touches an HDF5 type
+# itself. That is the "no mesh machinery" rule applied to I/O.
 #
 # What is left for this file is what only the application knows:
 #
@@ -42,17 +42,6 @@
 const CHECKPOINT_APPLICATION = "TreeHydro.jl"
 const CHECKPOINT_VERSION = 2
 
-"""
-    checkpointing_available()
-
-Whether TreeAMR's HDF5 extension is loaded, which is what `save_checkpoint`
-and `load_checkpoint` need to have methods at all. It is loaded by `using
-HDF5` beside TreeAMR, in the caller's session: HDF5 is a weak dependency of
-TreeAMR and no dependency of this package, so that a run that never
-checkpoints never loads HDF5 and its binary libraries.
-"""
-checkpointing_available() = Base.get_extension(TreeAMR, :TreeAMRHDF5Ext) !== nothing
-
 # --- names and rotation ------------------------------------------------------
 
 # The file for the checkpoint taken after `iteration` time steps since
@@ -74,14 +63,14 @@ regex_quote(s::AbstractString) = replace(s, r"[\\^$.|?*+()\[\]{}]" => s"\\\0")
 The checkpoint files of `prefix`, as `(iteration, path)` pairs sorted by
 iteration: the files in `prefix`'s directory whose names are exactly
 `"<basename>.it<digits>.h5"`. Nothing else matches — in particular not
-TreeAMR's `"….h5.partial"`, the file a write in progress or a failed one
+TreeIOHDF5's `"….h5.partial"`, the file a write in progress or a failed one
 leaves, not the part files `"….h5.<save id>.<j>.h5"` it writes beside a
 distributed checkpoint (whose index is the file listed), and not another
 prefix that merely starts with this one. A directory that does not exist
 holds no checkpoints.
 
 It reads the directory on the rank that calls it, so over MPI the
-checkpoint directory is one every rank sees the same, as TreeAMR's own
+checkpoint directory is one every rank sees the same, as TreeIOHDF5's own
 checkpoints need it to be.
 """
 function checkpoint_files(prefix::AbstractString)
@@ -110,7 +99,7 @@ there is none — which is what makes a job chain one command for every job,
 the first included:
 
 ```julia
-using HDF5, TreeHydro
+using TreeHydro
 r = evolve!(case; …, checkpoint_path_prefix = prefix,
             max_walltime_seconds = 23.5 * 3600,
             restart_file = latest_checkpoint(prefix))
@@ -171,9 +160,9 @@ const NativeFloat = Union{Float16,Float32,Float64}
 
 # The one native type an `isbits` type is made of throughout, with no
 # padding — `Float32` for MultiFloats' `Float32x2`, an `NTuple{2,Float32}` of
-# limbs — and `nothing` for anything else. TreeAMR's extension applies the
+# limbs — and `nothing` for anything else. TreeIOHDF5 applies the
 # same rule to a field set's element type; it is restated here because that
-# function is internal to the extension, and TreeAMR's `write_plain`, which
+# function is internal to TreeIOHDF5, and its `write_plain`, which
 # the run state goes through, refuses a MultiFloat scalar.
 function limb_type(::Type{T}) where {T}
     T <: Union{NativeFloat,Base.BitInteger} && return T
@@ -254,7 +243,7 @@ end
 # A type's name as a module importing nothing but Base prints it —
 # `Float64`, `MultiFloats.MultiFloat{Float32, 2}` — and not `string(T)`,
 # which qualifies a name or not according to what the writer happened to have
-# imported into `Main`. TreeAMR's extension names element types the same way,
+# imported into `Main`. TreeIOHDF5 names element types the same way,
 # for the same reason.
 module TypeNames end
 type_name(::Type{T}) where {T} = sprint(show, T; context=:module => TypeNames)
@@ -408,7 +397,7 @@ end
 # the speed its first regrid derives the margin from. Every real through
 # `plain_reals`.
 #
-# Every value must be the same on every rank, which TreeAMR's plain data
+# Every value must be the same on every rank, which TreeIOHDF5's plain data
 # require of a distributed checkpoint and refuse otherwise: `reset_hits` is
 # the total over the ranks, which the caller sums (the reset counts per
 # rank; see `ResetAccounting`), and everything else is global already.
@@ -436,14 +425,14 @@ end
 
 One checkpoint: the forest, the conserved state `U` with its state vector
 `u`, and this package's plain data `(; recipe, criterion, run)`, through
-TreeAMR's `save_checkpoint` — atomically, so a failed write leaves the
+TreeIOHDF5's `save_checkpoint` — atomically, so a failed write leaves the
 previous file alone. Only `U` is saved: the primitive set and the fluxes are
 scratch that [`update_primitives!`](@ref) rebuilds from `u`, ghosts
 included — on a restart before its first regrid, as at the start of every
 chunk. `u` and not `U.work`: the state vector is the integrator's, and the
 authoritative copy.
 
-Over a distributed forest it is collective, and `io` is TreeAMR's grouping
+Over a distributed forest it is collective, and `io` is TreeIOHDF5's grouping
 of the ranks into I/O processes, each writing a part file beside the index
 at `path` (TreeAMR's M7); serially it is one file whatever `io` says.
 """
@@ -464,7 +453,7 @@ this package's — another application's, or a format version other than
 $(CHECKPOINT_VERSION) — with the reason. The field set comes back in the type
 it was saved in; whether that is `T` is the recipe's to say, so that the
 refusal names it with the rest (see [`check_recipe`](@ref)). `T` is passed to
-TreeAMR as the one type it may have to name, which is harmless for a native
+TreeIOHDF5 as the one type it may have to name, which is harmless for a native
 float.
 
 `comm` distributes the forest it reads over a communicator, as
@@ -490,7 +479,7 @@ function load_run(path::AbstractString, ::Type{T}; backend=CPU(),
          "Version 1 was written after the regrid at its chunk boundary and " *
          "version 2 before it, so a restart of this version would regrid a " *
          "state that has already been regridded — another run. " : "") *
-        "A file from another TreeHydro is read by that version — TreeAMR's " *
+        "A file from another TreeHydro is read by that version — TreeIOHDF5's " *
         "`checkpoint_environment(path, dir)` writes the environment that wrote " *
         "it. $written"))
     (ck.data isa NamedTuple && haskey(ck.data, :recipe) &&
@@ -575,12 +564,5 @@ function check_checkpoint_keywords(; checkpoint_path_prefix, checkpoint_every_ch
             "initial data when there is no checkpoint yet, pass " *
             "`restart_file = latest_checkpoint(prefix)`, which is nothing then."))
     end
-    (prefix === nothing && restart_file === nothing) || checkpointing_available() ||
-        throw(ArgumentError(
-            "checkpointing needs TreeAMR's HDF5 extension, which is not loaded: " *
-            "run `using HDF5` (with HDF5 in the environment) before evolve!. HDF5 " *
-            "is optional — a weak dependency of TreeAMR and no dependency of " *
-            "TreeHydro — so that a run that never checkpoints does not load it and " *
-            "its binary libraries."))
     return nothing
 end

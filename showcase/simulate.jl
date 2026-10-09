@@ -17,7 +17,7 @@
 # times are the movie's frame times, which shrink as the zoom grows, and the
 # level cap is per block, a window about the camera. See README.md.
 
-using TreeAMR, TreeHydro, HDF5
+using TreeAMR, TreeHydro, TreeIOHDF5, HDF5
 using KernelAbstractions: KernelAbstractions, Backend, CPU, allocate, get_backend
 
 include(joinpath(@__DIR__, "kh_zoom.jl"))
