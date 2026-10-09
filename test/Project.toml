@@ -1,13 +1,17 @@
 [deps]
-HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
 MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
+TreeIOHDF5 = "49af10b2-b28a-4989-bafa-527ac30d3246"
 
 [compat]
-HDF5 = "0.17"
 MPI = "0.20"
 MultiFloats = "3"
+TreeIOHDF5 = "0.1.0"
+
+# Unregistered, as in the package's own `Project.toml`.
+[sources]
+TreeIOHDF5 = {rev = "main", url = "https://github.com/eschnett/TreeIOHDF5.jl"}

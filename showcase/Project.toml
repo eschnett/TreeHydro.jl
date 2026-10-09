@@ -4,8 +4,8 @@
 # cannot afford); the GPU job builds a scratch environment of its own that
 # `develop`s this checkout and adds CUDA — see `symmetry_showcase.sh`.
 #
-# HDF5 loads TreeAMR's checkpoint extension, which the simulation's
-# checkpoints go through, and writes the frame files.
+# HDF5 writes the frame files; TreeIOHDF5 holds the checkpoint functions the
+# simulation's checkpoints go through.
 
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
@@ -13,11 +13,14 @@ HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 TreeAMR = "91bc416d-811c-44c1-9bc4-b9c8bbdbbd08"
 TreeHydro = "18f621c7-d3c4-4697-8f68-54143cdddff7"
+TreeIOHDF5 = "49af10b2-b28a-4989-bafa-527ac30d3246"
 
 [compat]
 HDF5 = "0.17"
-TreeAMR = "0.1.4"
+TreeAMR = "0.2"
+TreeIOHDF5 = "0.1.0"
 julia = "1.11"
 
 [sources]
 TreeHydro = {path = ".."}
+TreeIOHDF5 = {rev = "main", url = "https://github.com/eschnett/TreeIOHDF5.jl"}

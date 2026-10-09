@@ -49,7 +49,12 @@ entries below for the files. **Amended 2026-10-01**, to keep the Tree*
 applications' checkpointing alike (Erik's decision; TreeGeneralizedHarmonic
 did the same that day): the checkpoint is written *before* the regrid, a
 restart regrids first through the loop's own `regrid_chunk!`, and so may
-change the regridding criterion, which it reports.
+change the regridding criterion, which it reports. **Amended 2026-10-09**,
+on **TreeAMR 0.2**, which moved its checkpoint functions and its HDF5
+extension into the companion package TreeIOHDF5: TreeIOHDF5 is a hard
+dependency of this package (Erik's decision, as for TreeGeneralizedHarmonic
+and TreeWaveGR), so the caller no longer loads HDF5 and `evolve!` no longer
+refuses a checkpoint without it.
 
 **Added since, also on 2026-09-29: reflecting walls and the zoom
 showcase.** TreeAMR's reflecting faces (M10, first-class, on every backend —
@@ -87,19 +92,22 @@ and not the runner.
 What exists, file by file (the names are the ones to grep for; `CODE.md`'s
 "File layout" has the one-line table):
 
-- `Project.toml`: `TreeAMR = "0.1.6"` from the General registry (0.1.6
+- `Project.toml`: `TreeAMR = "0.2"` from the General registry (0.2 since
+  2026-10-09, whose checkpoints are TreeIOHDF5's; 0.1.6
   since 2026-10-02, for MPI and the empty-rank guard; 0.1.4 since
   2026-09-29, for its checkpoint and restart; 0.1.3 before, for the
   owner-based threading),
-  `KernelAbstractions`, and `IMEXRungeKutta = "1.3"` (the first release
-  that runs `Float32x2`) through the one `[sources]` entry left, since it
-  is unregistered; `julia = "1.11"`, the floor of all the Tree* packages
-  since 2026-09-25. **No HDF5**: TreeAMR's checkpoint functions live in its
-  HDF5 extension and the caller loads it. `test/Project.toml` adds
-  `MultiFloats`, `Random`, since 2026-09-29 `HDF5 = "0.17"`, which is
-  what loads that extension in the suite, and since 2026-10-02
-  `MPI = "0.20"`, which loads TreeAMR's MPI extension — **no MPI in
-  `[deps]` either**, for the same reason.
+  `KernelAbstractions`, `IMEXRungeKutta = "1.3"` (the first release
+  that runs `Float32x2`) and `TreeIOHDF5 = "0.1.0"` (since 2026-10-09,
+  TreeAMR's checkpoint functions), both through `[sources]` entries pinning
+  `main`, since they are unregistered; `julia = "1.11"`, the floor of all
+  the Tree* packages since 2026-09-25. **No HDF5 of its own**: the package
+  names no HDF5 type. `test/Project.toml` adds `MultiFloats`, `Random`,
+  `TreeIOHDF5` (since 2026-10-09, with a `[sources]` entry of its own, for
+  the testsets that call `load_checkpoint` directly; `HDF5` before, which
+  loaded TreeAMR's extension), and since 2026-10-02 `MPI = "0.20"`, which
+  loads TreeAMR's MPI extension — **no MPI in `[deps]`**: the caller
+  loads it.
 - `src/TreeHydro.jl`, the module shell and its exports.
 - `src/precision.jl` (`wrap`, `ceilint`, `floorint`, `roundint`,
   `tofloat64`) and `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`),
@@ -207,8 +215,7 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   and why), `type_tests.jl` (every case at `Float64`,
   `Float32` and `Float32x2`), `checkpoint_tests.jl` (restart chains
   against the uninterrupted run, a restart with a changed criterion, a
-  finished run continued, the rotation, the refusals; the first file
-  to load HDF5, and it tests the refusal without it before it does, and
+  finished run continued, the rotation, the refusals; it
   reruns the standalone `test/restart_workload.jl` in a subprocess at the
   other thread count), `device_tests.jl` (every driver against the
   host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device),
@@ -234,7 +241,8 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `symmetry_cpu.sh` and `symmetry_gpu.sh`.
 - `showcase/` (added 2026-09-29): the Kelvin–Helmholtz zoom movie, in an
   environment of its own like `bin/`'s (`Project.toml` with CairoMakie and
-  HDF5 and a `[sources]` entry for TreeHydro). `kh_zoom.jl` (the
+  HDF5 for the frame files, TreeIOHDF5 for the checkpoints, and
+  `[sources]` entries for TreeHydro and TreeIOHDF5). `kh_zoom.jl` (the
   configuration, `Geometry`, `Schedule`, `camera_centre`, `fold`, the
   interval folds and `block_cap` — pure, shared by both scripts),
   `simulate.jl` (the zoom-window loop, `evolve!`'s order from TreeHydro's
@@ -362,7 +370,7 @@ The MPI test by hand (added 2026-10-02): the workload under `mpiexec -n 3`
 writes `n3.txt`, `n2.txt`, `n1.txt` (a one-rank communicator) and `n0.txt`
 (serial) to the directory it is given, and every line not starting with `~`
 or `#` must agree across the four. It needs an environment with this
-package, TreeAMR, MPI and HDF5 — the test environment, or a scratch one
+package, TreeAMR and MPI — the test environment, or a scratch one
 that `develop`s this checkout; launch through `MPI.mpiexec()` with its
 environment set on the command, since interpolating it into a larger
 command drops its library paths (TreeAMR's finding). About 1 m 20:
@@ -442,11 +450,12 @@ your own with the device package in it (neither this package nor TreeAMR
 depends on one), and so do the device tests, which are opt-in:
 
 ```bash
-julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats", "HDF5"])'
+julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats"]); Pkg.add(url="https://github.com/eschnett/TreeIOHDF5.jl", rev="main")'
 ```
 
-(`HDF5` since 2026-09-29, for `test/checkpoint_tests.jl`; the device file
-alone, as the Symmetry job runs it, does not need it.)
+(`TreeIOHDF5` since 2026-10-09, `HDF5` from 2026-09-29 before it, for
+`test/checkpoint_tests.jl`; the device file alone, as the Symmetry job runs
+it, does not need it.)
 
 ```bash
 TREEHYDRO_TEST_BACKEND=metal julia --project=/tmp/thgpu test/runtests.jl
@@ -1124,16 +1133,13 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   elsewhere it writes nothing. `u` is what is saved, not `U.work`. The
   format version went from 1 to 2 with the move, and a version-1 file is
   refused: its state has been regridded already.
-- **HDF5 is the caller's to load, and `evolve!` checks it before the
-  cycle** (added 2026-09-29). TreeAMR's `save_checkpoint` and
-  `load_checkpoint` have methods only once `using HDF5` has loaded
-  `TreeAMRHDF5Ext`; this package calls nothing but those and never names an
-  HDF5 type, so **do not add HDF5 to `[deps]`** or as a weak dependency —
-  it is in `test/Project.toml` only. A checkpoint keyword without it throws
-  at the call. The test of that refusal runs only while the extension is
-  *not* loaded, and a package cannot be unloaded, so `checkpoint_tests.jl`
-  must stay the first file to load HDF5: a file above it that loaded HDF5
-  would skip the test silently.
+- **The checkpoints are TreeIOHDF5's, a hard dependency** (since
+  2026-10-09, on TreeAMR 0.2; Erik's decision). This package calls nothing
+  but its exported `save_checkpoint` and `load_checkpoint` and never names
+  an HDF5 type, so **do not add HDF5 to `[deps]`**. Until 2026-10-09 HDF5
+  was the caller's to load and `evolve!` refused a checkpoint keyword
+  without it; that check and its test are gone. `evolve!` still checks the
+  other checkpoint keywords before the cycle.
 - **Every parameter that decides a number goes in the recipe, and every
   accumulator in the run state** (added 2026-09-29). A new `evolve!`
   keyword that changes the numbers and is not added to `run_recipe` lets a

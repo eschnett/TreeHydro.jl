@@ -24,11 +24,10 @@
 # depends on the rank count (the part files of a checkpoint) and is not
 # compared at all; the workload asserts what it must say itself.
 #
-# Like `thread_workload.jl` it may use nothing outside `Base`, TreeAMR, HDF5,
+# Like `thread_workload.jl` it may use nothing outside `Base`, TreeAMR,
 # MPI and the package. Its digests are a fold of `hash` over **every**
 # element, not `hash` of the vector, which samples a long one.
 
-using HDF5
 using MPI
 using TreeAMR
 using TreeHydro

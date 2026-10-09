@@ -52,7 +52,7 @@ those, rendered in CI on every push. Every run is bit-identical at any
 thread count, reproduces the host on Metal and CUDA, and builds the same
 mesh and floors the same cells at `Float32` and `Float32x2` as at
 `Float64`. And since 2026-09-29 a run writes checkpoints and restarts from
-them through TreeAMR's own, bit-identically — the caller loads HDF5.*
+them through TreeIOHDF5, TreeAMR's checkpoint package, bit-identically.*
 
 See `CODE.md` in the package root for the design document — what each
 piece is for, why it is that way, and every measured number.
@@ -60,6 +60,9 @@ piece is for, why it is that way, and every measured number.
 module TreeHydro
 
 using TreeAMR
+# TreeAMR's checkpoints: `save_checkpoint` and `load_checkpoint`, which TreeAMR
+# 0.2 moved out of its HDF5 extension into this companion package.
+using TreeIOHDF5
 
 using KernelAbstractions: Backend, CPU, allocate, get_backend, synchronize
 using KernelAbstractions: @kernel, @index, @Const
@@ -179,7 +182,7 @@ include("refinement.jl")
 # case-specific.
 include("driver.jl")
 # What `evolve!` writes at a chunk boundary and reads back on a restart: the
-# recipe, the run state, the file names and their rotation, all over TreeAMR's
+# recipe, the run state, the file names and their rotation, all over TreeIOHDF5's
 # `save_checkpoint` and `load_checkpoint`. After the driver, because its
 # recipe reads a `HydroCase` and says so in its signature; `evolve!` reaches
 # it only when it runs, which is resolved then and not when it is compiled.

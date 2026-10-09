@@ -17,7 +17,9 @@ the scheme conserve across refinement boundaries.
 once more. Since then, on TreeAMR's releases: checkpoint and restart
 (2026-09-29), reflecting walls (2026-09-29), and runs distributed over MPI
 (2026-10-02, on TreeAMR 0.1.6; see [Running
-distributed](#running-distributed)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
+distributed](#running-distributed)); and TreeAMR 0.2, whose checkpoints are
+the companion package TreeIOHDF5's (2026-10-09; see [Checkpoint and
+restart](#checkpoint-and-restart)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
 equation of state and floors, the reconstruction, the three Riemann fluxes,
 the six-step right-hand side, the entropy wave, the exact Riemann solver and
 Sod's tube); H2 the coarse-fine faces on a static mesh; H3 the refinement
@@ -113,8 +115,9 @@ needed from TreeAMR before its first milestone are under
   checkpointing through TreeAMR 0.1.4's M9a. `evolve!` writes checkpoints
   and restarts from them, through TreeAMR's `save_checkpoint` and
   `load_checkpoint`, so that the long device runs TreeAMR's M9a names can
-  outlast a queue's day; HDF5 is TreeAMR's weak dependency and the caller's
-  `using`, not a dependency of this package. It is still not a production
+  outlast a queue's day. Those two functions are TreeIOHDF5's since TreeAMR
+  0.2, and TreeIOHDF5 is a dependency of this package (2026-10-09). It is
+  still not a production
   code in the other two senses — no unit system, and output only for the
   viewers. See [Checkpoint and restart](#checkpoint-and-restart).)*
 - **Dirichlet physical boundaries only.** They are what the
@@ -2304,16 +2307,23 @@ provenance and the refusals of a file a version cannot read. That is the
 `src/checkpoint.jl`: when to write, the run state, the refusal of a restart
 with other parameters, and the files' names and rotation.
 
-**HDF5 is the caller's to load** (decided). TreeAMR's checkpoint functions
-have methods only once `using HDF5` has loaded its extension, and this
+**The checkpoint functions are TreeIOHDF5's, a dependency of this
+package** (Erik's decision, 2026-10-09, as for TreeGeneralizedHarmonic and
+TreeWaveGR). TreeAMR 0.2 moved `save_checkpoint`, `load_checkpoint`,
+`write_plain`, `read_plain` and `checkpoint_environment`, and its HDF5
+extension with them, into the companion package TreeIOHDF5 — the same
+signatures and the same file format — which is unregistered and located by a
+`[sources]` entry in `Project.toml`, and in `test/Project.toml` for the
+tests that call `load_checkpoint` and `save_checkpoint` directly. This
 package calls nothing but those exported functions with the plain-data
-`data =` form — never the do-block, never an HDF5 type — so it needs HDF5
-neither in `[deps]` nor as a weak dependency of its own. `test/Project.toml`
-has it; `bin/` does not checkpoint. `evolve!` checks
-`Base.get_extension(TreeAMR, :TreeAMRHDF5Ext)` **before the initial-data
-cycle**, with every other checkpoint keyword, so a job script that forgot
-`using HDF5`, or names a directory that does not exist, fails in a second
-and not at the first write hours in.
+`data =` form — never the do-block, never an HDF5 type — so it names no
+HDF5 type itself. *(Until 2026-10-09 HDF5 was the caller's to load: the
+functions had methods only once `using HDF5` had loaded TreeAMR's extension,
+and `evolve!` refused a checkpoint keyword without it at the call. A hard
+dependency has nothing left to refuse, and the check and its test went.)*
+`evolve!` checks every checkpoint keyword **before the initial-data
+cycle**, so a job script that names a directory that does not exist fails in
+a second and not at the first write hours in.
 
 **Where: at a chunk boundary, after the observer and before the regrid, and
 nowhere else** (amended 2026-10-01; it was *after the regrid and its reset*,
@@ -2369,7 +2379,7 @@ accumulators are in `R = float(real(T))`, which is `Float32x2` in
 So `plain_reals` stores a native float as itself and any other `isbits`
 real made of one native float throughout, with no padding, as the matrix of
 its limbs `(nlimbs, n)` — the rule TreeAMR applies to a field set's element
-type, restated because that function is internal to its extension — and a
+type, restated because that function is internal to TreeIOHDF5 — and a
 scalar as a one-element vector.
 
 **The recipe and the criterion, and the two things a restart may change**
@@ -2652,7 +2662,7 @@ communicator: `evolve!(case; …, comm = MPI.COMM_WORLD)` after `using MPI`
 and `MPI.Init()`, launched under `mpiexec` with every rank making the same
 call. `comm = nothing`, the default everywhere, is a serial run, and a run
 with one rank takes exactly the serial code path. **This package never
-loads MPI** — the caller does, as for HDF5, and `src/` names no MPI type —
+loads MPI** — the caller does, and `src/` names no MPI type —
 so MPI is in `test/Project.toml` only.
 
 **What TreeAMR does, and what is left here.** TreeAMR keeps the forest on
@@ -2828,7 +2838,7 @@ assertions on them are the same and pass.
 | `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
-| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeAMR's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the criterion a restart may change and its report (2026-10-01), the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
+| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeIOHDF5's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the criterion a restart may change and its report (2026-10-01), the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
@@ -2862,11 +2872,18 @@ need; for the hours between M7's merge and that release `Project.toml`
 pinned TreeAMR's `main` again, and the entry went with the release. The
 tests add `MPI = "0.20"`, which loads TreeAMR's MPI extension; the package
 itself does not depend on MPI. See [Running
-distributed](#running-distributed).)* IMEXRungeKutta is not registered and is located by a
-`[sources]` entry pinning its `main` — the one pin left in the package
-environment, and a path-tracked dependency's `[sources]` is honoured, so
-`bin/` and the scratch environments of the device and Symmetry runs find it
-through this package without an entry of their own. *(Amended after step
+distributed](#running-distributed).)* *(Amended 2026-10-09: the bound is
+`TreeAMR = "0.2"` here, in `bin/` and in `showcase/`, the release that moved
+the checkpoints into TreeIOHDF5; the package depends on `TreeIOHDF5 =
+"0.1.0"` through a `[sources]` entry pinning its `main`, the tests add it
+with an entry of their own and no longer add HDF5, and `showcase/` adds it
+beside the HDF5 its frame files need. See [Checkpoint and
+restart](#checkpoint-and-restart).)* IMEXRungeKutta is not registered and is located by a
+`[sources]` entry pinning its `main` — with TreeIOHDF5's since 2026-10-09,
+the only pins in the package environment — and a path-tracked dependency's
+`[sources]` is honoured, so `bin/` and the scratch environments of the
+device and Symmetry runs find both through this package without an entry of
+their own. *(Amended after step
 11. Between 2026-09-23 and the 0.1.3 release `Project.toml` also pinned
 TreeAMR's `main` through `[sources]`, to see the owner-based threading
 before it was released; that pin is gone again, and with it the
@@ -2924,8 +2941,9 @@ thread and 12064 in 3 m 47 at four**, `test/checkpoint_tests.jl` added
 after `type_tests.jl` — restart chains compared with the uninterrupted run
 field by field, the rotation, the refusals, and a restart in a subprocess at
 the other thread count through the standalone `test/restart_workload.jl`.
-It is the first file to load HDF5, and it tests the refusal of a checkpoint
-without HDF5 before it does, which is why it must stay the first. See
+*(Until 2026-10-09 it was also the first file to load HDF5, and tested the
+refusal of a checkpoint without it first; TreeIOHDF5 is a dependency since,
+and that refusal is gone.)* See
 [Checkpoint and restart, measured](#checkpoint-and-restart-measured).)*
 `CI.yml`'s `timeout-minutes: 30` is the guard against a
 runtime regression and has room, though less of it than before: the

@@ -97,7 +97,7 @@ block.
 `log.tsv` gets one line per frame, and `schedule.tsv` has the whole
 prescribed schedule.
 
-**Checkpoints** are TreeAMR's, written:
+**Checkpoints** are TreeIOHDF5's (TreeAMR's checkpoint package), written:
 
 - at every new finest level;
 - at the wall-time limit (`run.walltime_hours`), with a margin of three of
