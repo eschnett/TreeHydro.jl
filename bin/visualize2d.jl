@@ -89,6 +89,9 @@
 # so this script contains no time-stepping loop of its own. See `CODE.md`.
 
 using CairoMakie
+# `Relative` is also TreeAMR's boundary hook (since 0.2.2); here it is
+# Makie's layout size.
+using CairoMakie: Relative
 using Printf
 using SixelTerm
 using TreeAMR
