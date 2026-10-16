@@ -186,9 +186,8 @@ end
 # really are the same runs compared against each other. The names carry the
 # case because every test file is `include`d into the same `Main`:
 # `driver_tests.jl` has a `TRACKED_1D` of its own, and a second `const` of
-# that name is a `LoadError` on Julia 1.11 (and a silent redefinition on
-# 1.12 and later, which is how it reached CI unseen — see "Things that will
-# bite" in `CLAUDE.md`).
+# that name is a silent redefinition, which is how it reached CI unseen —
+# see "Things that will bite" in `CLAUDE.md`.
 const TRACKED_SEDOV_1D = tracked_sedov(Val(1), SEDOV1D)
 
 const TRACKED_SEDOV_2D = tracked_sedov(Val(2), SEDOV2D)

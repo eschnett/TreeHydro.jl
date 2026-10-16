@@ -676,7 +676,7 @@ function conserved_totals(U::FieldSet{T,D}, u::AbstractVector) where {T,D}
     forest = U.forest
     # `float(real(T))` inline rather than a local `R` the closures capture,
     # as TreeAMR's `total_mass` does: a closure over a local holding a type
-    # stores it as a `DataType` on Julia 1.10, which upstream measured as a
+    # stores it as a `DataType`, which upstream measured (on Julia 1.10) as a
     # dynamic dispatch per block (see its `volume_weighted_norm`).
     init = zero(float(real(T)))
     cellvolume(key) = spacing(float(real(T)), forest, key)^D

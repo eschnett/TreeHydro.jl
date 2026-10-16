@@ -18,44 +18,30 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.threads || 1 }} thread(s)
     runs-on: ${{ matrix.os }}
-    # A guard against a runtime regression, not a budget: every healthy
-    # cell here runs in ten to thirteen minutes.
-    timeout-minutes: 30
+    # A guard against a runtime regression, not a budget. Per cell, because
+    # the instrumented cell is the slow one: 23 m 22 measured on macOS at
+    # 1.13, where every uninstrumented cell runs in ten to thirteen minutes.
+    timeout-minutes: ${{ matrix.coverage == true && 45 || 30 }}
     strategy:
       fail-fast: false
-      # One cell per axis, spelled out rather than a `version x os`
-      # product: the floor version, the current release, macOS/arm64, and
-      # threads. The floor on Linux is the redundant fourth pair.
+      # Every cell runs Julia 1.13, the floor of all the Tree* packages since
+      # 2026-10-16. One cell per remaining axis, spelled out: Linux, macOS
+      # (arm64), and threads.
       matrix:
         include:
-          # Julia 1.11 is the floor, shared by all the Tree* packages
-          # since 2026-09-25 so that an unregistered dependency can be
-          # located with `[sources]`, a 1.11 key. (It was 1.10, TreeAMR's
-          # floor then, between TreeAMR's registration and that date.)
-          # It is stricter than 1.13: it still refuses to redefine a
-          # `const`, which is the thing the floor cell has actually caught.
-          #
-          # It also carries the coverage, because instrumented it is the
-          # fastest cell of the four: measured locally, back to back,
-          # coverage costs 1.04x on 1.11 against 3.14x on 1.13 (8 m 55 ->
-          # 9 m 17 against 4 m 01 -> 12 m 38, at 11609 tests; at 1.10 it
-          # was 1.83x, and the ordering held there too). No file in `src/`
-          # or `test/` has a `VERSION` check, so the lines reported are the
-          # same whichever cell reports them.
-          - version: "1.11"
+          - version: "1.13"
+            os: ubuntu-latest
+          # arm64: Base's `@simd` reductions arrange their partial sums by
+          # CPU target, which "Testing" in `CODE.md` rests on. It also
+          # carries the coverage, because instrumented it is the faster of
+          # the two runners: 23 m 22 against 42 m 02 on Linux, at 1.13.
+          - version: "1.13"
             os: macOS-latest
             coverage: true
-          - version: "1"
-            os: ubuntu-latest
-          # arm64 on the current release: Base's `@simd` reductions
-          # arrange their partial sums by CPU target, which "Testing" in
-          # `CODE.md` rests on.
-          - version: "1"
-            os: macOS-latest
           # Threaded. Never instrument this one: a coverage hit is an
           # atomic increment on one counter per line, so threads running
           # the same kernel contend on one cache line -- 100x.
-          - version: "1"
+          - version: "1.13"
             os: ubuntu-latest
             threads: 4
     steps:
@@ -106,7 +92,7 @@ jobs:
   #
   # Ungated, unlike the coverage step: coverage is a report whose consumer
   # only reads `main`, while this is a check, and a pull request is exactly
-  # where a broken viewer should be caught. It runs beside the four test
+  # where a broken viewer should be caught. It runs beside the three test
   # cells rather than after them, so it is not on the critical path.
   viewer:
     name: Viewer (bin/)
@@ -121,7 +107,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: "1"
+          version: "1.13"
       # The default cache key carries the job name, so this environment --
       # which is CairoMakie and this package by path, and the test matrix's
       # is neither -- gets its own entry without being told to.
@@ -151,9 +137,8 @@ jobs:
             --movie-frames=12 --no-display
       # Four separate processes on purpose, and not one `julia -e` that
       # includes both scripts: each defines `main`, `snapshot`/`frame2d` and
-      # `const LEVELCOLORS` at top level in `Main`, and Julia 1.10 and 1.11
-      # -- the package's floor, and this environment's -- refuse to redefine
-      # a `const`.
+      # `const LEVELCOLORS` at top level in `Main`, and the second script
+      # would silently replace the first's definitions.
       - name: Check that every figure was written
         run: |
           test -s bin/output/sod_1d.png

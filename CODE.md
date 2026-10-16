@@ -19,7 +19,8 @@ once more. Since then, on TreeAMR's releases: checkpoint and restart
 (2026-10-02, on TreeAMR 0.1.6; see [Running
 distributed](#running-distributed)); and TreeAMR 0.2, whose checkpoints are
 the companion package TreeIOHDF5's (2026-10-09; see [Checkpoint and
-restart](#checkpoint-and-restart)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
+restart](#checkpoint-and-restart)); and the Julia floor raised to 1.13
+(2026-10-16; see [The 1.13 floor](#the-113-floor-2026-10-16)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
 equation of state and floors, the reconstruction, the three Riemann fluxes,
 the six-step right-hand side, the entropy wave, the exact Riemann solver and
 Sod's tube); H2 the coarse-fine faces on a static mesh; H3 the refinement
@@ -2844,7 +2845,7 @@ assertions on them are the same and pass.
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
 | `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29); `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box (added 2026-09-29); `mpi_tests.jl`, the standalone `mpi_workload.jl` it runs under `mpiexec -n 3` and its launcher `mpi_jobs.jl`, for rank-count independence (added 2026-10-02) |
-| `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, over the Julia × OS matrix, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
+| `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, at Julia 1.13 on Linux and macOS, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
 | `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
@@ -2863,7 +2864,9 @@ depend on HDF5 — see [Checkpoint and restart](#checkpoint-and-restart).
 in `bin/` checkpoints.)* *(Amended in step 15: the compat bounds
 are `TreeAMR = "0.1.3"`, `KernelAbstractions = "0.9.42, 1"`,
 `IMEXRungeKutta = "1.3"` — the first release that runs `Float32x2`, see
-[Step 12](#step-12--precision) — and `julia = "1.11"`.)*
+[Step 12](#step-12--precision) — and `julia = "1.11"`.)* *(Amended
+2026-10-16: `julia = "1.13"`, in `Project.toml`, `bin/` and `showcase/`;
+see [The 1.13 floor](#the-113-floor-2026-10-16).)*
 TreeAMR is resolved from the General
 registry at `TreeAMR = "0.1.3"`, the release with the owner-based
 threading. *(Amended 2026-10-02: the bound is `TreeAMR = "0.1.6"`, the
@@ -2905,6 +2908,8 @@ upstream fix. `bin/Project.toml` keeps a `[sources]` entry for *this*
 package, which is unregistered, and therefore keeps 1.11 as its own floor
 — stated there as a compat bound rather than left to be discovered, since
 a 1.10 Pkg ignores `[sources]` and then fails to find TreeHydro at all.
+*(Amended 2026-10-16: the floor is **1.13** for the package and for `bin/`
+alike; see [The 1.13 floor](#the-113-floor-2026-10-16).)*
 
 Testset names are claims, each opening with the failure mode it guards;
 measured numbers are recorded in this file when they change. Conventions
@@ -2918,8 +2923,8 @@ that runs on every push *(qualified in step 15: the timings, the benchmark
 and Symmetry tables, the opt-in device runs, and two results recorded but
 not run in the suite — the ramp at `h = 1/1024` in step 6 and the `D = 2`
 tube at `N = 32` in step 5 — are the exceptions, each said where it
-stands)*, at one thread and at four, over the Julia × OS matrix
-of `.github/workflows/CI.yml`: the convergence sweeps and their rates, the
+stands)*, at one thread and at four, on Linux and macOS
+in `.github/workflows/CI.yml`: the convergence sweeps and their rates, the
 interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
 and prolongation-order tables. A number recorded in this file is a number
@@ -3049,7 +3054,11 @@ on the floor version's `macOS-latest` entry and the step reads
 there (below) rather than assumed; `version: "1.11"` again since
 2026-09-25, where the original measurement applies. No file
 here contains a `VERSION` check or an `@static`, so the lines reported are the same lines whichever cell
-carries it, and Codecov cannot tell which one did.
+carries it, and Codecov cannot tell which one did. *(Amended 2026-10-16:
+with the floor at 1.13 every cell runs 1.13, and the coverage is on the
+`macOS-latest` cell — at 1.13 the faster runner instrumented, 23 m 22
+against 42 m 02 on Linux, from the table above. The 1.11 column is the
+record of what was measured then.)*
 
 *Only where it is read.* The badge reflects `main`, so instrumenting a
 branch or a pull request buys nothing and spends the 3.14× on the cell
@@ -3087,7 +3096,9 @@ rather than for an inherited one. The 1.11 column is left above as the
 record of what was measured then; it was not re-taken, because no cell
 runs 1.11 any more. *(Amended in step 15: the floor cell runs 1.11 again
 since 2026-09-25, and the 1.11 column is once more the one that applies —
-see [The 1.11 floor again](#the-111-floor-again-2026-09-25).)*
+see [The 1.11 floor again](#the-111-floor-again-2026-09-25); and since
+2026-10-16 no cell runs either, see [The 1.13
+floor](#the-113-floor-2026-10-16).)*
 And the 1.13 instrumented entry reading **12 m 38**
 both times is a coincidence and not a number carried over: the
 uninstrumented one moved from 4 m 01 to 3 m 32 over the same interval,
@@ -3137,6 +3148,9 @@ one number guards all four the same way. It was briefly per cell,
 Linux at the current release, where a **healthy** run measured 42 m 45
 and a flat 30 would have failed it. If coverage is ever moved back to a
 1.13 or a Linux cell, the per-cell form has to come back with it.
+*(Amended 2026-10-16: it has, since every cell is now 1.13 — the cap is
+`${{ matrix.coverage == true && 45 || 30 }}`, against the 23 m 22 measured
+for the instrumented cell on macOS at 1.13.)*
 And the
 matrix is spelled out one cell at a time instead of as a
 `version × os` product, because the product's fourth combination is
@@ -3147,7 +3161,11 @@ red while 1.13 is green), the current release on Linux, and the current
 release on macOS (which carries the arm64 reduction claim above). The
 pair left unbuilt is the floor on Linux: the floor is a property of the
 Julia version rather than of the operating system, so one platform
-exercises it. Pushes whose every path
+exercises it. *(Amended 2026-10-16: with the floor at 1.13 the version
+axis is gone, and the matrix is three cells, all at 1.13: Linux, macOS
+(the arm64 reduction claim and the coverage), and Linux at four threads.
+Nothing in CI now catches a `TRACKED_1D`-style collision at run time; the
+source-text check at the top of `runtests.jl` is what does.)* Pushes whose every path
 matches `**.md` are skipped entirely — half the commits here are
 `Record step N …` and a Markdown change cannot move a measured number —
 while pull requests carry no such filter, so a PR always ends with a
@@ -4801,7 +4819,10 @@ TreeWave's `bin/` went on building against a TreeAMR older than its own
 tests until it failed on the removed `cell_center`. The four renders run as
 four separate processes rather than one, because both scripts define
 `main` and `const LEVELCOLORS` at top level in `Main` and Julia 1.11 — this
-package's floor — refuses to redefine a `const`.
+package's floor — refuses to redefine a `const`. *(Amended 2026-10-16: at
+1.13, the floor since, the redefinition is allowed, and the separate
+processes stay so that neither script silently runs with the other's
+definitions.)*
 
 ### Bounds checking in the kernels (added after step 11)
 
@@ -4988,6 +5009,35 @@ own. `CI.yml`'s floor cell is `version: "1.11"`; it keeps the coverage,
 for the 1.04× measured on 1.11 in "Testing" above, which is the number
 that applies once more. The 1.10 measurements in the section above are
 left as the record of what was measured then.
+
+### The 1.13 floor (2026-10-16)
+
+The Julia floor went from 1.11 to **1.13** (decided by Erik on
+2026-10-16), in this package and in all the Tree* packages at once:
+supporting the versions before 1.13 slows development and is not useful
+at the moment. `julia = "1.13"` in `Project.toml`, `bin/Project.toml` and
+`showcase/Project.toml`. `CI.yml` runs 1.13 only — three cells, Linux,
+macOS (arm64, with the coverage) and Linux at four threads — and its
+`viewer` job runs 1.13 rather than the current release.
+
+Nothing in `src/` or `test/` needed changing, there being no `VERSION`
+check anywhere; only comments that named 1.11 as the floor did. Two
+things the 1.11 cell did, and that go with it:
+
+- **It caught a `const` defined in two test files**, which 1.11 refuses
+  and 1.12 and later allow — the `TRACKED_1D` collision of step 10. The
+  source-text check at the top of `runtests.jl`, added then, is now the
+  only guard, and it stays.
+- **It made coverage nearly free** (1.04× on 1.11 against 3.14× on 1.13,
+  in [Testing](#testing)). Coverage moved to the macOS 1.13 cell, which
+  measured 23 m 22 instrumented on CI against 12–17 m for the old 1.11
+  cell, so a push to `main` is expected to take longer; the timeout is per
+  cell again for the same reason.
+
+The clean-checkout check at the older version, and the `julia +1.11`
+line in `CLAUDE.md`'s "Commands", are gone. The measurements taken at
+1.10 and 1.11 elsewhere in this document stay, as the record of what was
+measured then.
 
 ### IMEXRungeKutta and TreeAMR 0.1.3 (added after step 11)
 
@@ -5690,7 +5740,8 @@ Not planned, listed because they are the obvious next questions:
   give (step 14, "Symmetry: one H200"); and why `--check-bounds=yes` cost
   nothing at Julia 1.10 where it costs 1.4× at the release ("TreeAMR's
   release and the 1.10 floor"). Neither moves a claim, and each rests on
-  one job or one draw.
+  one job or one draw. *(Amended 2026-10-16: the second is moot, no CI cell
+  running 1.10 or 1.11 any more.)*
 - ~~Reflecting boundaries, once the region-form hook has a device form
   upstream; the 2D Sedov in a quadrant is the case that would want them.~~
   *(Done 2026-09-29, and there was no hook to wait for: TreeAMR's reflecting

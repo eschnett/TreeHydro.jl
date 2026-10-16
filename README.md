@@ -217,8 +217,7 @@ their own so that CairoMakie is never a dependency of the package. They
 contain no time-stepping loop: every frame and every curve comes through
 the one driver's `observer` hook, which exists for exactly that. The first
 call instantiates the environment, and the `[sources]` entry for this
-package means no manual `Pkg.develop` — it is also why `bin/` needs Julia
-1.11, which is the package's own floor as well:
+package means no manual `Pkg.develop`:
 
 ```bash
 julia --project=bin -e 'using Pkg; Pkg.instantiate()'

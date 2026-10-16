@@ -5,11 +5,8 @@
 # There is one `[sources]` entry left, and it is for *this* package, which
 # is unregistered; TreeAMR is resolved from the General registry here as it
 # is in the package environment, so there is no longer a second TreeAMR pin
-# to keep in step with the first. The entry is also why this environment
-# needs Julia 1.11 (the package's own floor too, since 2026-09-25) --
-# `[sources]` is a 1.11 feature, and a 1.10 Pkg would ignore it and then
-# fail to find TreeHydro at all, so the floor is stated below rather than
-# left to be discovered.
+# to keep in step with the first. The Julia bound below is the package's
+# own floor, 1.13 since 2026-10-16.
 #
 # `KernelAbstractions` is here because `bin/backend.jl` needs it, and that
 # file must work in this environment as well as the package one.
@@ -23,7 +20,7 @@ TreeHydro = "18f621c7-d3c4-4697-8f68-54143cdddff7"
 
 [compat]
 TreeAMR = "0.2"
-julia = "1.11"
+julia = "1.13"
 
 [sources]
 TreeHydro = {path = ".."}

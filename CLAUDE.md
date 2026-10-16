@@ -100,12 +100,13 @@ What exists, file by file (the names are the ones to grep for; `CODE.md`'s
   `KernelAbstractions`, `IMEXRungeKutta = "1.3"` (the first release
   that runs `Float32x2`) and `TreeIOHDF5 = "0.1.0"` (since 2026-10-09,
   TreeAMR's checkpoint functions), both through `[sources]` entries pinning
-  `main`, since they are unregistered; `julia = "1.11"`, the floor of all
-  the Tree* packages since 2026-09-25. **No HDF5 of its own**: the package
-  names no HDF5 type. `test/Project.toml` adds `MultiFloats`, `Random`,
-  `TreeIOHDF5` (since 2026-10-09, with a `[sources]` entry of its own, for
-  the testsets that call `load_checkpoint` directly; `HDF5` before, which
-  loaded TreeAMR's extension), and since 2026-10-02 `MPI = "0.20"`, which
+  `main`, since they are unregistered; `julia = "1.13"`, the floor of all
+  the Tree* packages since 2026-10-16 (1.11 from 2026-09-25). **No HDF5
+  of its own**: the package names no HDF5 type. `test/Project.toml` adds
+  `MultiFloats`, `Random`, `TreeIOHDF5` (since 2026-10-09, with a
+  `[sources]` entry of its own, for the testsets that call
+  `load_checkpoint` directly; `HDF5` before, which loaded TreeAMR's
+  extension), and since 2026-10-02 `MPI = "0.20"`, which
   loads TreeAMR's MPI extension — **no MPI in `[deps]`**: the caller
   loads it.
 - `src/TreeHydro.jl`, the module shell and its exports.
@@ -345,26 +346,8 @@ d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
   julia --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
 
-The same check **under the floor version**, before a change is merged. CI
-runs Julia 1.11 — the floor of all the Tree* packages since 2026-09-25 —
-as well as the current release, and 1.11 is stricter in at least one way
-that matters
-here: it refuses to redefine a `const`, which 1.12 and later allow, so a
-suite that is green at 1.13 can be red at the floor (see "Things that will
-bite"). With `juliaup`:
-
-```bash
-d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" && \
-  julia +1.11 --project="$d" -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
-```
-
-After step 12 the clean tree took **7 m 32** at 1.11 with the command as
-written, against the release's 4 m 26 (on 2026-09-29, **7 m 27** against
-4 m 28, with TreeAMR 0.1.4 and HDF5 0.17.4 resolved from the registry;
-on 2026-10-01, **7 m 45** against 5 m 01) — so budget for nearly twice the run
-you have just done. 1.11 is also the *cheap* version under coverage, which
-is the opposite way round and is why the instrumented cell is the floor
-cell; see "Things that will bite".
+There is no separate check under an older Julia: **1.13 is the floor**
+of all the Tree* packages since 2026-10-16, and CI runs nothing else.
 
 The MPI test by hand (added 2026-10-02): the workload under `mpiexec -n 3`
 writes `n3.txt`, `n2.txt`, `n1.txt` (a one-rank communicator) and `n0.txt`
@@ -381,9 +364,7 @@ julia --project=<env> -e 'using MPI; m = MPI.mpiexec(); run(setenv(`$m -n 3 $(Ba
 
 The viewers, in their own environment so that CairoMakie never becomes a
 dependency of the package. The first call instantiates it; the
-`[sources]` entry for TreeHydro means no manual `Pkg.develop`, and it is
-also why `bin/` needs **Julia 1.11**, which is the package's floor as
-well:
+`[sources]` entry for TreeHydro means no manual `Pkg.develop`:
 
 ```bash
 julia --project=bin -e 'using Pkg; Pkg.instantiate()'
@@ -541,13 +522,10 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   it used to be that an unpushed change there was invisible here, and now
   an **unreleased** one is. A TreeAMR change this package needs has to be
   tagged and registered before it can be used; say so rather than editing
-  that checkout and assuming the tests see it. Dropping the entry is also
-  what lowered the Julia floor from 1.11 to 1.10, `[sources]` being a 1.11
-  feature; it went back to 1.11 on 2026-09-25, with all the Tree*
-  packages, so that unregistered dependencies can use `[sources]` again.
+  that checkout and assuming the tests see it.
   `bin/Project.toml` still has one, for *this* package, which is
-  unregistered — so the viewer environment has 1.11 as its floor and
-  says so in its own `[compat]`.
+  unregistered. (The Julia floor's history — 1.11, 1.10, 1.11, and 1.13
+  since 2026-10-16 — is in `CODE.md`'s "The 1.13 floor".)
 - **Three ghost widths, three off-by-`G`s.** The state `U` has `G = 2`,
   the primitives `P` have `G = 2`, the fluxes `F_d` have `G = 0`. Face `i`
   of a block (in `1 … N+1`) lies between cells `i−1` and `i`; cell `i` is
@@ -849,21 +827,18 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   `3.125e-6` being the ambient share of the top hat that `measured_E₀`
   subtracts along with the rest of the box.
 - **Every test file is `include`d into the same `Main`, so a top-level
-  `const` name must be unique across files — and only the floor version
-  will tell you** (found in step 10b, when the merge of steps 8–10 went
-  red on the two 1.11 entries of CI and green on the two 1.13 ones; the
-  floor cell was 1.10 for a while, is 1.11 again, and both behave the
-  same way). `driver_tests.jl`
+  `const` name must be unique across files — and Julia will not tell you**
+  (found in step 10b, when the merge of steps 8–10 went red on the two 1.11
+  entries of CI and green on the two 1.13 ones). `driver_tests.jl`
   and `sedov_tests.jl` both defined `TRACKED_1D`, `TRACKED_2D`, `FINE_2D`,
   `COARSE_2D` and `NOFIX_2D`. Julia 1.12 and later quietly allow a `const`
-  to be redefined, so every local run at 1.13 and the clean-checkout check
-  passed; 1.11 throws `invalid redefinition of constant`, five minutes into
-  otherwise green output. Name a file's shared runs with their case
-  (`TRACKED_SEDOV_1D`, `TRACKED_KH`); `runtests.jl` now fails on any
-  duplicate, from the source text, before anything is included; and a
-  change that adds a test file runs once under the floor version before it
-  is merged — the "Commands" section has the line. The floor is 1.11, and
-  every Julia before 1.12 checks this.
+  to be redefined, the second file's value replacing the first's, so every
+  run at 1.13 passed; only 1.11, the floor then, threw `invalid
+  redefinition of constant`. Name a file's shared runs with their case
+  (`TRACKED_SEDOV_1D`, `TRACKED_KH`). Since the floor is 1.13 and no CI
+  cell checks this any more, the check in `runtests.jl` — which fails on
+  any duplicate, from the source text, before anything is included — is
+  the only guard; keep it.
 - **A count taken as the ceiling of a float quotient gets one more at
   `Float32`** (found in step 12). `evolve!` counted its chunks as
   `ceilint(t_end / chunk)`, which is exact at `Float64` on every case here;
@@ -1003,26 +978,12 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   both jobs had on. Measured since, on the **whole suite** at one thread,
   locally and back to back: **4 m 01 without coverage and 12 m 38 with
   it**, a factor of **3.14**, both green at 11609 tests. So coverage is
-  collected **once, where it is read, on the fastest cell of the four**:
-  `coverage: true` on the floor version's `macOS-latest` entry alone
-  (`version: "1.11"` when it was measured, `version: "1.10"` after
-  TreeAMR's release, `version: "1.11"` again since 2026-09-25).
-  Instrumented on CI, one thread, the four combinations measure **macOS
-  1.11 12–17 m, ubuntu 1.11 18–20 m, macOS 1.13 23 m 22, ubuntu 1.13
-  42 m 02** — macOS 1.5–1.8× faster than Linux at either version, 1.11
-  1.9–2.3× faster than 1.13 on either architecture, each effect
-  reproduced across the other axis. Most of the version column is
-  instrumentation itself: measured locally, back to back, coverage cost
-  **1.04× on 1.11 and 3.14× on 1.13** (8 m 55 → 9 m 17 against 4 m 01 →
-  12 m 38). **Re-measured when the floor moved to 1.10**, the same way and
-  at 11622 tests: **4 m 25.5 → 8 m 05.4 on 1.10 (1.83×)** against
-  **3 m 32.3 → 12 m 38.3 on 1.13 (3.58×)**. So the *conclusion* holds —
-  the floor cell runs instrumented in 8 m 05 against 12 m 38, a factor of
-  1.56 — and the reason given for it does not: instrumentation is nearly
-  free on **1.11**, not on floors, and 1.10 is the slower version
-  uninstrumented. Do not repeat the 1.04× as though it were a property of
-  whichever version is the floor — though since the floor is 1.11 again,
-  it is once more the number that applies. With no `VERSION` check anywhere in
+  collected **once, where it is read, on the faster runner**:
+  `coverage: true` on the `macOS-latest` entry alone. Instrumented on CI,
+  one thread, at 1.13: **macOS 23 m 22, ubuntu 42 m 02**. (While the
+  floor was 1.11 the coverage sat on the 1.11 macOS cell, where
+  instrumentation cost 1.04× and the cell ran in 12–17 m; `CODE.md`'s
+  "Testing" has those measurements.) With no `VERSION` check anywhere in
   `src/` or `test/` the lines reported are identical whichever cell
   carries it.
   The step's condition is `matrix.coverage == true && (github.ref ==
@@ -1034,11 +995,11 @@ specific to a hydro code. Each is in `CODE.md` with its reason.
   the upload path can be exercised on purpose, because a reporting step
   that runs nowhere reports nothing. **Never put coverage on the threaded
   entry.** A `D ≥ 2` sweep costs its local seconds and may go anywhere
-  the claim belongs. `timeout-minutes: 30` is there so that a runtime
-  regression fails loudly rather than billing an hour; it is a flat
-  number only because the instrumented cell is the fast one, and moving
-  coverage to a 1.13 or Linux cell needs the per-cell form back (there a
-  *healthy* run measured 42 m 45).
+  the claim belongs. `timeout-minutes` is there so that a runtime
+  regression fails loudly rather than billing an hour; it is per cell,
+  `${{ matrix.coverage == true && 45 || 30 }}`, because the instrumented
+  cell at 1.13 is the slow one (23 m 22 on macOS; a *healthy* Linux run
+  measured 42 m 45, so moving coverage there needs a larger number).
 - **Base's reductions are not bit-identical across machines, and that is
   measured** (step 7b, kept in step 7c). On all four CI runners — macOS
   arm64 on the same Julia 1.13 and the same packages as this machine
@@ -1289,20 +1250,21 @@ Match TreeAMR's, since the three packages are read together:
   seconds without it).
 - One workflow with two jobs: `.github/workflows/CI.yml`. `test` runs the
   whole suite on every
-  push that touches something other than Markdown, over **four cells
-  spelled out one at a time** rather than a product — 1.11 on macOS (the
-  floor, and the cell that carries the coverage), 1 on Linux, 1 on macOS
-  (which carries the arm64 reduction claim) and 1 on Linux at 4 threads.
-  The redundant fourth pair of the product is the floor on Linux; the
-  floor is a property of the version, not of the OS. **Coverage is
+  push that touches something other than Markdown, over **three cells
+  spelled out one at a time**, all at Julia 1.13 (the floor since
+  2026-10-16) — Linux, macOS (which carries the arm64 reduction claim and
+  the coverage) and Linux at 4 threads. **Coverage is
   collected on one cell, on `main` or a manual dispatch only**, and never
   on the threaded entry, where it costs a factor of a hundred — see
-  "Things that will bite". End to end, an ordinary push costs about
+  "Things that will bite". End to end, while the matrix still had a 1.11
+  cell, an ordinary push cost about
   **12 m** with the threaded cell on the critical path, and a push to
   `main` **18 m 02** with the *instrumented* cell on it, against
   **14 m 20** for the suite before any of this — the instrumented cell
   has been the critical path under every arrangement tried (18 m 02 on
-  macOS at 1.11, 20 m 42 on Linux at 1.11, 42 m 45 on Linux at 1.13). And treat every CI timing as ±70%: one instrumented cell came
+  macOS at 1.11, 20 m 42 on Linux at 1.11, 42 m 45 on Linux at 1.13). With
+  coverage on macOS at 1.13 (23 m 22 measured) a push to `main` is
+  expected to take longer; not yet measured. And treat every CI timing as ±70%: one instrumented cell came
   back at 18 m 08, 11 m 24 and 19 m 52 on three consecutive runs, so only
   orderings wider than that carry a decision, and a claim about which
   cell is slowest needs more than one run behind it.
@@ -1311,7 +1273,7 @@ Match TreeAMR's, since the three packages are read together:
   The second job, `viewer`, instantiates `bin/` and renders all four
   figures, and is **ungated** — it runs on pull requests too, because
   unlike coverage it is a check rather than a report, and `bin/` is the one
-  part of the tree no test would notice breaking. It runs beside the four
+  part of the tree no test would notice breaking. It runs beside the
   test cells rather than after them. **Measured on PR #1: 11 m 43 cold and
   3 m 57 warm**, the difference being entirely the instantiate step —
   7 m 31 against 5 s, 64% of a cold run and 2% of a warm one. The four
