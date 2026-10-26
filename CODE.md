@@ -2982,7 +2982,7 @@ that runs the benchmark must add it by name.
 `Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
 `IMEXRungeKutta` and `TreeIOHDF5`: `TreeAMR = "0.2"` from the General
 registry — here, in `bin/` and in `showcase/` —, `KernelAbstractions =
-"0.9.42, 1"`, `IMEXRungeKutta = "1.3"` — the first release that runs
+"0.9.42"`, `IMEXRungeKutta = "1.3"` — the first release that runs
 `Float32x2`, see [Step 12](#step-12--precision) — and `TreeIOHDF5 =
 "0.1.0"`, TreeAMR's checkpoint functions. IMEXRungeKutta and TreeIOHDF5
 are not registered and are located by `[sources]` entries pinning their
