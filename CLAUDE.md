@@ -211,7 +211,7 @@ your own with the device package in it (neither this package nor TreeAMR
 depends on one), and so do the device tests, which are opt-in:
 
 ```bash
-julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "MultiFloats"]); Pkg.add(url="https://github.com/eschnett/TreeIOHDF5.jl", rev="main")'
+julia --project=/tmp/thgpu -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Metal", "KernelAbstractions", "TreeAMR", "TreeIOHDF5", "MultiFloats"])'
 ```
 
 (`TreeIOHDF5` for `test/checkpoint_tests.jl`; the device file alone, as

@@ -23,4 +23,3 @@ julia = "1.13"
 
 [sources]
 TreeHydro = {path = ".."}
-TreeIOHDF5 = {rev = "main", url = "https://github.com/eschnett/TreeIOHDF5.jl"}

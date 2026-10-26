@@ -2958,7 +2958,7 @@ File by file, with the names to grep for:
 - `showcase/`: the Kelvin–Helmholtz zoom movie, in an
   environment of its own like `bin/`'s (`Project.toml` with CairoMakie and
   HDF5 for the frame files, TreeIOHDF5 for the checkpoints, and
-  `[sources]` entries for TreeHydro and TreeIOHDF5). `kh_zoom.jl` (the
+  a `[sources]` entry for TreeHydro). `kh_zoom.jl` (the
   configuration, `Geometry`, `Schedule`, `camera_centre`, `fold`, the
   interval folds and `block_cap` — pure, shared by both scripts),
   `simulate.jl` (the zoom-window loop, `evolve!`'s order from TreeHydro's
@@ -2984,17 +2984,17 @@ that runs the benchmark must add it by name.
 registry — here, in `bin/` and in `showcase/` —, `KernelAbstractions =
 "0.9.42"`, `IMEXRungeKutta = "1.3"` — the first release that runs
 `Float32x2`, see [Step 12](#step-12--precision) — and `TreeIOHDF5 =
-"0.1.0"`, TreeAMR's checkpoint functions. IMEXRungeKutta and TreeIOHDF5
-are not registered and are located by `[sources]` entries pinning their
-`main` — the only pins in the package environment — and a path-tracked
-dependency's `[sources]` is honoured, so `bin/` and the scratch
-environments of the device and Symmetry runs find both through this
+"0.1.0"`, TreeAMR's checkpoint functions, also from the General registry.
+IMEXRungeKutta is not registered and is located by a `[sources]` entry
+pinning its `main` — the only pin in the package environment — and a
+path-tracked dependency's `[sources]` is honoured, so `bin/` and the
+scratch environments of the device and Symmetry runs find it through this
 package without an entry of their own. `julia = "1.13"` in `Project.toml`,
 `bin/` and `showcase/`, the floor of all the Tree* packages (why: [The 1.13
 floor](HISTORY.md#the-113-floor-2026-10-16)). **No HDF5 of its own**: the
 package names no HDF5 type. `test/Project.toml` adds `MultiFloats`,
-`Random`, `TreeIOHDF5` (with a `[sources]` entry of its own, for the
-testsets that call `load_checkpoint` directly) and `MPI = "0.20"`, which
+`Random`, `TreeIOHDF5` (for the testsets that call `load_checkpoint`
+directly) and `MPI = "0.20"`, which
 loads TreeAMR's MPI extension — **no MPI in `[deps]`**: the caller loads
 it. `bin/` adds `CairoMakie` and `SixelTerm` in its own environment, and
 `showcase/` adds TreeIOHDF5 beside the HDF5 its frame files need.
