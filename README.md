@@ -30,109 +30,25 @@ relativistic MHD code, which is what the package rehearses; methods that
 only work for Newtonian hydrodynamics are avoided even where they would be
 better here.
 
+**Contents**
+
+- [Status](#status)
+- [Testing](#testing)
+- [Checkpoint and restart](#checkpoint-and-restart)
+- [Running distributed](#running-distributed)
+- [Pictures](#pictures)
+- [Design and history](#design-and-history)
+
+## Status
+
 **Status: complete. All four cases run and all four are drawn, at any
 thread count, on a GPU and at three float types — milestones H0 through H6
 are done, and the design document has been read against the code a last
 time.** Since then: checkpoint and restart, reflecting walls, and runs
-distributed over MPI. What exists is
-the module shell, the `Base` bridges for software floating-point types,
-the host-copy helpers, the tests that say the TreeAMR release still
-provides what the scheme is written against, the ideal-gas equation of
-state, the conversions between the conserved and primitive states, the two
-floor rules and the reset that imposes them on the conserved state from
-the integrator's own limiter hook, the MUSCL reconstruction with its three
-slope limiters, the
-LLF, HLLE and HLLC fluxes, the six-step right-hand side over the mesh with
-its three kernels, SSPRK33 in time through
-[IMEXRungeKutta](https://github.com/eschnett/IMEXRungeKutta.jl) with its
-stage arithmetic split by block owner, the Löhner refinement criterion, the
-one chunked evolve-and-regrid driver, and four cases on it. The entropy
-wave is an exact solution of the nonlinear system, and it
-measures second order in L1 and L∞ in one and two dimensions. Sod's shock
-tube runs against Toro's exact Riemann solution through a Dirichlet
-boundary — the first use of TreeAMR's physical-boundary hook by any
-downstream package — at an L1 rate of 0.903, with the tube giving the same
-answer along every axis *bit for bit*.
-
-**The central claim is measured.** On a two-level mesh in one, two and
-three dimensions, every one of the `D + 2` conserved integrals holds to a
-hundredth of one ulp of its own scale per step — and the identical run with
-TreeAMR's interface flux restriction switched off, one line of the
-right-hand side, leaks by **a factor of `1e8` to `1e9`**. The prolongation
-order behaves as the interface-order rule predicts for a flux divergence:
-L∞ rates of 0.96, 2.03 and 2.04 at orders 1, 3 and 5 against an unrefined
-control of 2.02.
-
-**The refinement criterion is a Löhner indicator on `ρ` and `p`**, and it
-is calibrated rather than guessed: max `τ` on uniform meshes at four
-spacings says that a captured shock scores 0.57 at every one of them —
-so the criterion never resolves a discontinuity, and the level cap is
-what stops it — while the shear layer's smooth ramp falls by more than a
-factor of two per halving, which is what picks the thresholds. An
-atmosphere six orders below the data scores 0.0020 with the indicator's
-global floor term and 0.97 without it.
-
-**And the mesh follows the shock.** There is exactly one time-stepping
-loop, `evolve!`, and a case is data it takes: the tracked shock tube
-matches the uniformly fine reference's L1 error to within 0.04% in one
-dimension and 0.00% in two, at 200 cells against 256 and 1472 against
-2048, with the uniform coarse mesh as the control at 3.68 and 1.85 times
-the error. Every cell the indicator fires strongly on sits on a
-finest-level block at every chunk, and all `D + 2` integrals hold to
-roundoff across the regrids while the same run without the interface
-fixup leaks by a factor of `1e9`. A time step sized from the signal speed
-at the *start* of a chunk is not safe on a shock tube — a Riemann
-problem's fastest signal is not in its initial data — so the driver carries
-a per-case headroom factor and rechecks the condition at the end of every
-chunk, loudly: with the headroom at 1, Sod throws in its first chunk.
-
-**And where the gas runs out, the atmosphere is imposed on the state.**
-The reset is a pointwise `con2prim` / floors / `prim2con` pass run from
-the integrator's stage and step limiters and again after every regrid — GRMHD
-practice in the integrator's vocabulary, and the right-hand side still
-never mutates its state. It writes back *only* the cells a floor fired in,
-which is what lets the conservation results above stand unchanged with the
-reset on by default: on the tracked tube and the entropy wave the measured
-injection is exactly `(0, 0, 0)`, no cell is floored in either population,
-and the final state is bit-identical to a run with the reset switched off.
-Applying it twice equals applying it once bit for bit, at `Float64` and
-`Float32` in one, two and three dimensions.
-
-**The Sedov blast is where the floors finally fire, and where two
-Dirichlet faces meet.** The shock expands as the similarity law says it
-must — measured exponents 0.641, 0.504 and 0.438 against `2/3`, `1/2` and
-`2/5`, with the constant `ξ₀ = 1.0328` for `γ = 7/5` in 3D reproducing
-Taylor's own 1.033 — and the captured density jump approaches the
-strong-shock limit of 6 from below. The tracked mesh reproduces the
-uniformly fine run *to roundoff* at 12544 cells against 16384. Three
-findings corrected the design. A mesh that tracks a shock keeps its
-coarse-fine faces in undisturbed gas, so a tracked run cannot measure the
-interface flux restriction at all, and every such claim is made on a
-static mesh the blast leaves; the evacuated interior never reaches the
-atmosphere density, so it is the *pressure* floor that fires and the
-coarse-fine face that drives it, 4096 cells in two dimensions and 24504 in
-three; and a piecewise-constant prolongation floors nothing at all there,
-which buys exact positivity for 0.47% of the L1 error. Every outward-facing
-ghost entry of a fine block wedged into a corner of the box holds its
-boundary state exactly — 1664, 72000 and 59360 of them across a 2D corner,
-a 3D edge and a 3D corner — which is the one exchange path no downstream
-package had run.
-
-**And the Kelvin–Helmholtz shear layer chooses the flux.** McNally, Lyra &
-Passy's smooth-ramp setup — checked against the paper term for term — is
-the one case with no closed form, and the one whose feature *grows* rather
-than travels: the refined region starts as two strips within five ramp
-widths of the interfaces and thickens with the rolls, monotonically, at
-91% of the uniform fine mesh's cells and the same answer. The seeded mode
-grows from 0.0100 to 0.1235 at a fitted rate of 2.58, below both the
-incompressible bounds of 4.38 and 5.92; every conserved integral holds to
-roundoff through the regrids while the same run without the interface
-fixup leaks by five to six orders of magnitude — this being the tracked
-mesh the blast could not provide, since here the whole domain is in motion.
-And HLLE against HLLC is not close: the shear layer *is* a contact, HLLE's
-two-wave average is what smears it, and HLLC at half the linear resolution
-is further along than HLLE at full resolution. HLLC becomes this case's
-default; the package-wide default stays HLLE, which is *the* GRMHD flux.
+distributed over MPI. Every measured result — the convergence orders, the
+conservation at coarse-fine faces, the tracked shock tube, the Sedov blast,
+the Kelvin–Helmholtz growth rate — is under "Measured results" in
+[CODE.md](CODE.md#measured-results).
 
 **And the same answer comes back at any thread count, on a GPU, and at a
 lower precision.** Every run is bit-identical at one thread and at four; on
@@ -143,12 +59,18 @@ the blast build the `Float64` mesh and floor the same cells exactly, with
 their errors agreeing to `1.6e-5` and `1e-13` — which took one rounding
 fix in the driver that only `Float32` could expose.
 
-There is one test suite and it runs whole, on every push: the unit tests
-and every physics claim the measured results above rest on — the
+**Inconsistent:** `CODE.md` ("Step 14", the device tests widened) says
+Metal reproduces the host bit for bit in everything except the shear
+layer, whose seeded `sin(4πx)` differs in the last bit; the paragraph
+above says every driver.
+
+## Testing
+
+There is one suite and it runs whole, on every push: the unit tests
+and every physics claim the measured results in `CODE.md` rest on — the
 convergence sweeps, the interface-order tables, the refinement
 calibration, the tracked shock tube, the blast and its similarity law, the
-shear layer and its growth rate. About four and a half minutes at one
-thread, and under four at four.
+shear layer and its growth rate.
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
@@ -163,6 +85,8 @@ be passed explicitly:
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test(; julia_args = ["--threads=4"])'
 ```
+
+## Checkpoint and restart
 
 **And a run can outlast a job.** `evolve!` writes checkpoints at chunk
 boundaries, before the regrid, and restarts from them through
@@ -197,6 +121,8 @@ The last two files are kept (`num_checkpoints_keep`), whichever job wrote
 them. The wall-time limit is timed from the call, so leave room for Julia's
 startup and compilation below the queue's own.
 
+## Running distributed
+
 **And a run can span many processes.** Pass a communicator and launch under
 `mpiexec`; every rank makes the same call. The blocks are distributed by
 TreeAMR, and the answer is the serial one — the state, the mesh, every step
@@ -211,6 +137,8 @@ r = evolve!(case, Val(3); …, comm = MPI.COMM_WORLD)
 ```
 
 This needs TreeAMR 0.1.6 or later; the package's compat bound is 0.2.
+
+## Pictures
 
 **And there are pictures.** `bin/` holds the viewers, in an environment of
 their own so that CairoMakie is never a dependency of the package. They
@@ -255,7 +183,9 @@ dependency of this one. CI renders every figure on every push and uploads
 them, because `bin/` sits outside `src/` and `test/` and nothing else would
 notice it breaking.
 
+## Design and history
+
 See [CODE.md](CODE.md) for the design document — the equations, the
 scheme, the cases, every measured result beside the prediction it confirms
 or corrects, and the possible extensions that were measured or considered
-and not built.
+and not built — and [HISTORY.md](HISTORY.md) for how the package got here.

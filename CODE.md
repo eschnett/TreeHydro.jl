@@ -12,41 +12,76 @@ the conservative operator family, per-field-set ghost widths, ghost-free
 face-centered flux fields, and the interface flux restriction that makes
 the scheme conserve across refinement boundaries.
 
-*Status: complete — milestones H0 to H6 are done (see
-[Milestones](#milestones)), and step 15 read this document against the code
-once more. Since then, on TreeAMR's releases: checkpoint and restart
-(2026-09-29), reflecting walls (2026-09-29), and runs distributed over MPI
-(2026-10-02, on TreeAMR 0.1.6; see [Running
-distributed](#running-distributed)); and TreeAMR 0.2, whose checkpoints are
-the companion package TreeIOHDF5's (2026-10-09; see [Checkpoint and
-restart](#checkpoint-and-restart)); and the Julia floor raised to 1.13
-(2026-10-16; see [The 1.13 floor](#the-113-floor-2026-10-16)).* H0 is the scaffolding; H1 the scheme on a uniform mesh (the
-equation of state and floors, the reconstruction, the three Riemann fluxes,
-the six-step right-hand side, the entropy wave, the exact Riemann solver and
-Sod's tube); H2 the coarse-fine faces on a static mesh; H3 the refinement
-criterion and the one evolve-and-regrid driver; H4 the atmosphere reset and
-the Sedov blast; H5 Kelvin–Helmholtz and the viewers; and H6 threads, the
-benchmark and the device, and precision. Every number is in
+**Status.** Complete. Every number is in
 [Measured results](#measured-results), beside the prediction it confirms or
 corrects. Every physics number there comes from a test that runs on every
 push; the exceptions are said where they stand — the timings, the benchmark
 and Symmetry tables, the opt-in device runs, and two rows recorded but not
 run in the suite (the ramp's `h = 1/1024` in step 6 and the `D = 2` tube at
-`N = 32` in step 5).
-What was not measured, or was measured and deliberately not built, is under
-[Possible extensions](#possible-extensions); H7, higher-order
-reconstruction, stays optional and is not planned.
-Markers: **(decided)** is a decision taken in review; **(proposed)** is
-one this document made and wanted confirmed; **(predicted)** is a
-number a milestone was to measure and the "Measured results" section then
-records, as TreeAMR's and TreeWave's `CODE.md` do; **(open)** pointed
-at [Open questions](#open-questions). *(Amended in step 15: none of the
-three is outstanding. Every **(proposed)** has been confirmed or amended in
-place, every **(predicted)** has its measured number beside it, and no
-question is left open — the markers are kept where they stand, next to what
-settled them, as the record of what was expected.)* Two things this package
-needed from TreeAMR before its first milestone are under
-[Upstream prerequisites](#upstream-prerequisites).
+`N = 32` in step 5). What was not measured, or was measured and
+deliberately not built, is under [Possible
+extensions](#possible-extensions); H7, higher-order reconstruction, stays
+optional and is not planned. Two things this package needed from TreeAMR
+before its first milestone are under [Upstream
+prerequisites](#upstream-prerequisites). How the package got here — the
+milestones and their steps, who decided what and when, the alternatives
+tried, and the measurements that later ones replaced — is in
+[HISTORY.md](HISTORY.md); a step number below, and the "Step N" headings of
+[Measured results](#measured-results), name a step of the plan listed at
+the top of [HISTORY.md](HISTORY.md#milestones-and-steps).
+
+**Contents**
+
+- [Goals](#goals)
+- [Scope and non-goals](#scope-and-non-goals)
+- [Upstream prerequisites](#upstream-prerequisites)
+- [The equations](#the-equations)
+- [The scheme](#the-scheme)
+  - [Field sets](#field-sets)
+  - [Reconstruction](#reconstruction)
+  - [Riemann solver](#riemann-solver)
+  - [Time integration and the time step](#time-integration-and-the-time-step)
+  - [Floors and the atmosphere](#floors-and-the-atmosphere)
+  - [What has a GRMHD counterpart, and what is deliberately not used](#what-has-a-grmhd-counterpart-and-what-is-deliberately-not-used)
+- [The right-hand side](#the-right-hand-side)
+- [Conservation at coarse-fine faces](#conservation-at-coarse-fine-faces)
+- [Operator order](#operator-order)
+- [Boundaries](#boundaries)
+- [The cases](#the-cases)
+  - [Entropy wave](#entropy-wave)
+  - [Sod shock tube](#sod-shock-tube)
+  - [Sedov blast wave](#sedov-blast-wave)
+  - [Kelvin–Helmholtz instability](#kelvinhelmholtz-instability)
+- [The refinement criterion](#the-refinement-criterion)
+- [Regridding: one driver, restart per chunk](#regridding-one-driver-restart-per-chunk)
+- [Checkpoint and restart](#checkpoint-and-restart)
+- [Precision](#precision)
+- [Multi-threading](#multi-threading)
+- [Running on a device](#running-on-a-device)
+- [Running distributed](#running-distributed)
+- [File layout](#file-layout)
+- [Testing](#testing)
+- [Measured results](#measured-results)
+  - [Step 3 — the entropy wave on the uniform mesh](#step-3--the-entropy-wave-on-the-uniform-mesh)
+  - [Step 4 — Sod on the uniform mesh](#step-4--sod-on-the-uniform-mesh)
+  - [Step 5 — the static two-level mesh](#step-5--the-static-two-level-mesh)
+  - [Step 6 — the refinement criterion](#step-6--the-refinement-criterion)
+  - [Step 7 — the driver and the tracked shock tube](#step-7--the-driver-and-the-tracked-shock-tube)
+  - [Step 8 — the atmosphere reset](#step-8--the-atmosphere-reset)
+  - [Step 9 — the Sedov blast](#step-9--the-sedov-blast)
+  - [Step 10 — Kelvin–Helmholtz](#step-10--kelvinhelmholtz)
+  - [Step 11 — the viewers and the figure job](#step-11--the-viewers-and-the-figure-job)
+  - [A movie](#a-movie)
+  - [Raising the level cap](#raising-the-level-cap)
+  - [Bounds checking in the kernels](#bounds-checking-in-the-kernels)
+  - [Step 13 — threads](#step-13--threads)
+  - [Step 14 — the benchmark and the device](#step-14--the-benchmark-and-the-device)
+  - [Step 12 — precision](#step-12--precision)
+  - [Checkpoint and restart, measured](#checkpoint-and-restart-measured)
+  - [Reflecting walls, measured](#reflecting-walls-measured)
+  - [The zoom showcase](#the-zoom-showcase)
+- [Possible extensions](#possible-extensions)
+- [Open questions](#open-questions)
 
 ## Goals
 
@@ -70,8 +105,7 @@ needed from TreeAMR before its first milestone are under
 - **Run in the caller's floating-point type, on the caller's backend, on
   any thread count with bit-identical results**, as TreeWave does and
   for the same reasons. Nothing here is new in that respect; it is
-  inherited discipline — and so is the one qualification it now carries
-  (amended after step 11, when TreeAMR narrowed its M5 guarantee). The
+  inherited discipline — and so is the one qualification it carries. The
   state, the mesh, the schedule, every per-block value and every max, min
   or integer reduction are bit-identical across thread counts; a
   floating-point *sum* — the conserved totals, the L1 norms, the injection
@@ -111,35 +145,34 @@ needed from TreeAMR before its first milestone are under
   something from the mesh — a limited, positivity-preserving
   prolongation of hydro data — is recorded as an upstream question
   rather than built here (see [Operator order](#operator-order)).
-- **Not a production code.** No checkpointing, no HDF5, no unit system.
-  Output is what the viewer in `bin/` needs. *(Amended 2026-09-29:
-  checkpointing through TreeAMR 0.1.4's M9a. `evolve!` writes checkpoints
-  and restarts from them, through TreeAMR's `save_checkpoint` and
-  `load_checkpoint`, so that the long device runs TreeAMR's M9a names can
-  outlast a queue's day. Those two functions are TreeIOHDF5's since TreeAMR
-  0.2, and TreeIOHDF5 is a dependency of this package (2026-10-09). It is
-  still not a production
-  code in the other two senses — no unit system, and output only for the
-  viewers. See [Checkpoint and restart](#checkpoint-and-restart).)*
-- **Dirichlet physical boundaries only.** They are what the
-  device-capable `CellBoundary` hook can express, and — set to the
-  initial state — they are exact for a shock tube or a blast wave until a
-  wave reaches the boundary, which the driver checks in advance.
-  Reflecting and outflow conditions read the interior and are CPU-only
-  upstream; nothing here needs them. *(Amended 2026-09-29: that was true of
-  TreeAMR's region-form hook and stale about reflection, which TreeAMR has
-  had since 0.1.3 as a **first-class face** and not a hook at all — M10
-  declares it on the forest and the ghost schedule fills it with mirrored
-  copies and a sign per variable, on every backend. This package now wires
-  it through, and the Kelvin–Helmholtz half box uses it; see
-  [Boundaries](#boundaries). Outflow is still CPU-only upstream and still
-  unused.)*
+- **Not a production code.** `evolve!` writes checkpoints and restarts
+  from them, through TreeAMR's `save_checkpoint` and `load_checkpoint`, so
+  that the long device runs TreeAMR's M9a names can outlast a queue's day.
+  Those two functions are TreeIOHDF5's since TreeAMR 0.2, and TreeIOHDF5 is
+  a dependency of this package. It is still not a production code in the
+  other two senses — no unit system, and output only for the viewers. See
+  [Checkpoint and restart](#checkpoint-and-restart).
+- **Dirichlet physical boundaries, and reflecting faces.** Dirichlet
+  boundaries are what the device-capable `CellBoundary` hook can express,
+  and — set to the initial state — they are exact for a shock tube or a
+  blast wave until a wave reaches the boundary, which the driver checks in
+  advance. Reflection TreeAMR has had since 0.1.3 as a **first-class
+  face** and not a hook at all — M10 declares it on the forest and the
+  ghost schedule fills it with mirrored copies and a sign per variable, on
+  every backend. This package wires it through, and the Kelvin–Helmholtz
+  half box uses it; see [Boundaries](#boundaries). Outflow is CPU-only
+  upstream and unused.
+
+  **Inconsistent:** TreeAMR's own `HISTORY.md` ("Domain and boundaries")
+  records outflow faces arriving on 2026-10-13 as a face kind filled by
+  transfers, on every backend; the sentence above says outflow is CPU-only
+  upstream.
 
 ## Upstream prerequisites
 
-Two things this package needs from TreeAMR before H1, both decided in
-review and both about the storage rather than the physics, which is why
-they go upstream instead of being spelled out here:
+Two things this package needs from TreeAMR, both about the storage rather
+than the physics, which is why they go upstream instead of being spelled
+out here:
 
 1. **`map_blocks!(kernel!, fs, …; stored = true)`** — a launch over every
    *stored* point of every block, ghosts included, beside the existing
@@ -159,13 +192,24 @@ they go upstream instead of being spelled out here:
    be evaluated `D + 2` times per cell, and in the boundary hook's case
    at every RHS evaluation.
 
-`m8` has since been merged, so both are in TreeAMR's releases. *(Amended
-when TreeAMR 0.1.1 was released.)* The `[sources]` entry that used to pin
-`main` is gone: TreeAMR is in the General registry and this package's
-compat bound is `TreeAMR = "0.1.1"`, so what the tests see is a released
-version and a change upstream arrives here only with a release. *(Amended
-in step 15: the bound is `TreeAMR = "0.1.3"`, the release with the
-owner-based threading; see [File layout](#file-layout).)*
+Both are in TreeAMR's releases, and TreeAMR comes from the General
+registry, so what the tests see is a released version and a change
+upstream arrives here only with a release; the compat bound is under
+[File layout](#file-layout).
+
+`test/prerequisite_tests.jl` asserts the two prerequisites rather than
+assuming them — that `fill_by_coordinates!(AllVariables(f), fs)` fills a
+field set with *bit-for-bit* the numbers the per-variable form does (the
+convergence studies compare against numbers the two forms must agree on,
+so agreement to roundoff would put a floor under every error this package
+measures), and that `map_blocks!(…; stored = true)` reaches every stored
+point with the kernel's index *as* the stored index, checked on a
+face-centered set with `G = (0, 1)` so that a per-dimension ghost width
+with a zero in it is what is tested. The rest of the M8 surface —
+`InterfaceSchedule`, `restrict_interfaces!`, `CellBoundary`,
+`boundary_by_coordinates`, `firing_boxes`, `block_mapreduce` — is checked
+as a list of exported names, which is the cheapest thing that fails when a
+release moves under a rename.
 
 ## The equations
 
@@ -183,7 +227,7 @@ index `γ`:
 
     p = (γ − 1) ρ ε,     E = ρ ε + ½ ρ v²,     c_s² = γ p / ρ
 
-**Variable order** (decided): index 1 is `ρ`, indices `2 … D+1` are the
+**Variable order**: index 1 is `ρ`, indices `2 … D+1` are the
 `D` momentum (velocity) components, index `D+2` is `E` (`p`). The same
 positions in `U` and `P`, so that a kernel reading "variable `1+d`" reads
 the `d`-component of whichever set it was handed.
@@ -204,8 +248,7 @@ struct and nothing else. `γ` is stored in the working type `T`, and is a
 case parameter: Sod uses `7/5`, Kelvin–Helmholtz uses `5/3` (following
 the setups they are compared against).
 
-**(Implemented in step 1.)** What writing `src/eos.jl` and
-`src/floors.jl` settled, beyond the above:
+What writing `src/eos.jl` and `src/floors.jl` settled, beyond the above:
 
 - **A state is an `NTuple{D+2,T}` and nothing indexes one by a literal.**
   `density`, `velocity`, `momentum`, `pressure_of` and `energy` are the
@@ -252,7 +295,7 @@ merits for Sod's problem, is why it is the choice.
 
 ### Field sets
 
-Three kinds of field set over one forest (decided):
+Three kinds of field set over one forest:
 
 | set | centering | `nvars` | `G` | in the state vector | at a regrid |
 |---|---|---|---|---|---|
@@ -260,64 +303,56 @@ Three kinds of field set over one forest (decided):
 | `P`, primitive | cell | `D+4` | `2` | no | `P => nothing` (resized; recomputed by the next RHS) |
 | `F_d`, fluxes, `d = 1 … D` | `facecentered(D, d)` | `D+2` | `0` | no | `F_d => nothing` |
 
-**`P` carries two diagnostic slots beyond the `D + 2` primitives**
-(amended in step 3; it was `nvars = D+2` when this table was first
-written). Slot `D+3` is the cell's signal speed `max_d (|v_d| + c_s)` and
-slot `D+4` its floor-hit flag, `1` or `0`; the `con2prim` kernel writes
-both as it recovers each cell, over the stored extent like everything else
-it writes. They are there because `block_mapreduce` maps a *scalar*
-function over *one* variable's values and so cannot form `|v_d| + c_s`
-from three of them — the reduction would need the velocity and the sound
-speed of the same cell at once, which its signature does not offer. The
-kernel that already holds all `D + 2` primitives writes the number once,
-after which `λ_max` and the owned-cell floor count are plain
-`block_mapreduce` calls over one slot each, exact across thread counts (a
-`max` and an integer-valued sum; see the next paragraph) and with no
-second pass over the data. The alternative — a reduction kernel of
-this package's own over the stored extent — would be mesh machinery
-written downstream, which `CLAUDE.md` rules out. (The *ghost*-cell floor
-count does need the stored extent, which `block_mapreduce` does not cover;
-that one is a one-item-per-block kernel summing slot `D+4`, and it arrives
-with the atmosphere reset.)
+Face `i` of a block (in `1 … N+1`) lies between cells `i−1` and `i`; cell
+`i` is stored at `i + G_U` in `U` and `i + G_P` in `P`, the face at
+`i + G_F` in `F_d`. `coordinates(fs, b, idx)` takes **stored** indices.
+Getting this wrong produces plots that look almost right.
 
-**(Amended after step 11, when TreeAMR narrowed its M5 guarantee.)** The
-"deterministic upstream" the paragraph above used to say has become two
-statements, and only one of them is still a guarantee. Every work item
-owning its output slot is race freedom and stays: the per-block values
-`block_mapreduce` returns are bit-identical across thread counts, and so is
-any reduction whose `op` is a `max`, a `min` or an integer sum. Combining
-the partials of a floating-point *sum* in block order is what upstream no
-longer promises — a sum is reproducible to roundoff only, across thread
-counts, rank counts, backends and machines, because a hierarchical device
-reduction and a plain `Allreduce` both need the association to be theirs.
-Of the two reductions above, `λ_max` is a `max` and the floor count is a
-sum of `1`s and `0`s that `roundint` closes (`round(Int, …)` until step 12,
-which MultiFloats does not provide), an exact integer per block
-and in total, so neither can move whatever the fold does; the same holds
-for `indicator_scales`, `peak_compression`, the `p = ∞` norms and the ghost
-count. The conserved totals, `conserved_scales`, the injection and the
-`p = 1` norms *are* floating-point sums. They are exact across thread
-counts today because the CPU fold under `block_mapreduce` and `total_mass`
-is unchanged, and they are promised roundoff; what that means for the
-thread workload is under [Multi-threading](#multi-threading). And the
-totals should stop combining by hand: TreeAMR plans a global scalar form,
-`mesh_mapreduce(f, op, init, fs[, u]; vars, weight)`, the per-block values
-scaled by `weight(key)` and combined over the mesh — on one process now,
-with the M7 `Allreduce` inside it later — and `conserved_totals` is that
-call with `weight = key -> spacing(key)^D`. Once it exists the totals go
-through it (the field-set form already does, through `total_mass`, which
-upstream will reroute), which is how they turn global without a
-communicator appearing in this package. *(Amended in step 15: it exists.
-TreeAMR 0.1.3 exports `mesh_mapreduce` in both forms, and its `total_mass`
-is now that call with the cell volume as the weight, so the field-set
-`conserved_totals` goes through it already. The state-vector form of
-`conserved_totals` and `conserved_scales` still multiplied and summed their
-per-block partials by hand.)* *(Done after step 15: both are now that call
-too, `mesh_mapreduce(identity | abs, +, zero(R), U[, u]; vars = v, weight =
-key -> spacing(R, forest, key)^D)`, so every total, scale and injection in
-this package goes through the one reduction TreeAMR carries across blocks
-and, under M7, across ranks — and not one bit moved; the evidence is under
-[Multi-threading](#multi-threading).)*
+**`P` carries two diagnostic slots beyond the `D + 2` primitives.** Slot
+`D+3` is the cell's signal speed `max_d (|v_d| + c_s)` and slot `D+4` its
+floor-hit flag, `1` or `0`; the `con2prim` kernel writes both as it
+recovers each cell, over the stored extent like everything else it writes.
+They are there because `block_mapreduce` maps a *scalar* function over
+*one* variable's values and so cannot form `|v_d| + c_s` from three of
+them — the reduction would need the velocity and the sound speed of the
+same cell at once, which its signature does not offer. The kernel that
+already holds all `D + 2` primitives writes the number once, after which
+`λ_max` and the owned-cell floor count are plain `block_mapreduce` calls
+over one slot each, exact across thread counts (a `max` and an
+integer-valued sum; see the next paragraph) and with no second pass over
+the data. The alternative — a reduction kernel of this package's own over
+the stored extent — would be mesh machinery written downstream, which
+`CLAUDE.md` rules out. (The *ghost*-cell floor count does need the stored
+extent, which `block_mapreduce` does not cover; that one is a
+one-item-per-block kernel summing slot `D+4`.)
+
+Every work item owning its output slot is race freedom: the per-block
+values `block_mapreduce` returns are bit-identical across thread counts,
+and so is any reduction whose `op` is a `max`, a `min` or an integer sum.
+Combining the partials of a floating-point *sum* in block order is what
+upstream does not promise — a sum is reproducible to roundoff only, across
+thread counts, rank counts, backends and machines, because a hierarchical
+device reduction and a plain `Allreduce` both need the association to be
+theirs. Of the two reductions above, `λ_max` is a `max` and the floor
+count is a sum of `1`s and `0`s that `roundint` closes, an exact integer
+per block and in total, so neither can move whatever the fold does; the
+same holds for `indicator_scales`, `peak_compression`, the `p = ∞` norms
+and the ghost count. The conserved totals, `conserved_scales`, the
+injection and the `p = 1` norms *are* floating-point sums. They are exact
+across thread counts today because the CPU fold under `block_mapreduce`
+and `total_mass` is unchanged, and they are promised roundoff; what that
+means for the thread workload is under [Multi-threading](#multi-threading).
+The totals do not combine by hand: TreeAMR exports `mesh_mapreduce(f, op,
+init, fs[, u]; vars, weight)`, the per-block values scaled by
+`weight(key)` and combined over the mesh, and its `total_mass` is that
+call with the cell volume as the weight. `conserved_totals` in both forms
+and `conserved_scales` are that call too, `mesh_mapreduce(identity | abs,
++, zero(R), U[, u]; vars = v, weight = key -> spacing(R, forest, key)^D)`,
+so every total, scale and injection in this package goes through the one
+reduction TreeAMR carries across blocks and, under M7, across ranks, which
+is how they are global without a communicator appearing in this package.
+The evidence that this moved not one bit is under
+[Multi-threading](#multi-threading).
 
 `U` is the **only evolved set**, so the state vector is `statevector(U)`
 and the several-set form TreeAMR has specified is not needed. `G = 2` on
@@ -331,8 +366,8 @@ within the layout. `N ≥ 2G` puts `N ≥ 4`; tests use `N = 8`, demos
 `N = 16 … 32`.
 
 **`P` has `U`'s ghost width and centering, and holds primitives in its
-ghost cells too** (decided). The reconstruction reads primitives at
-`i−2 … i+1`, so a block needs primitives two cells into its neighbours. There are two
+ghost cells too.** The reconstruction reads primitives at `i−2 … i+1`, so
+a block needs primitives two cells into its neighbours. There are two
 ways to get them, and the choice is a real design decision because the
 two prolongate different quantities across a coarse-fine face:
 
@@ -346,39 +381,35 @@ two prolongate different quantities across a coarse-fine face:
   application's choice — this is the "primitive-variable-based
   prolongation" TreeAMR's design lists as an application operator.
 
-**(a) is decided**, with the understanding that it may change. It keeps
-the state vector and everything the mesh interpolates in conserved
-variables, so the ghost exchange, the regrid transfer and the
-conservation argument are one story; it is one schedule rather than two;
-and it is what the Burgers example already does, with `con2prim` as the
-identity. Its known weakness is that an unlimited linear prolongation of
-`ρ`, `S`, `E` *separately* into a fine ghost cell across a strong shock
-can produce a negative internal energy there, which `con2prim` then
-floors. That is a measurement, not an argument: the driver counts floor
-hits in ghost cells separately from owned cells (see
-[Floors and the atmosphere](#floors-and-the-atmosphere)), and if the
-ghost count dominates on the Sedov blast, that is the concrete case to
-take upstream as a request for a limited prolongation — and the point at
-which (b) would be reconsidered.
+**(a) is decided.** It keeps the state vector and everything the mesh
+interpolates in conserved variables, so the ghost exchange, the regrid
+transfer and the conservation argument are one story; it is one schedule
+rather than two; and it is what the Burgers example already does, with
+`con2prim` as the identity. Its known weakness is that an unlimited linear
+prolongation of `ρ`, `S`, `E` *separately* into a fine ghost cell across a
+strong shock can produce a negative internal energy there, which
+`con2prim` then floors. That is a measurement, not an argument: the driver
+counts floor hits in ghost cells separately from owned cells (see
+[Floors and the atmosphere](#floors-and-the-atmosphere)), and if the ghost
+count dominates on the Sedov blast, that is the concrete case to take
+upstream as a request for a limited prolongation — and the point at which
+(b) would be reconsidered. It does not dominate; see
+[Floors and the atmosphere](#floors-and-the-atmosphere).
 
-The `con2prim` pass over the stored extent is one thing `map_blocks!`
-cannot launch today: it covers the owned or the closed range, never the
-ghosts. **`map_blocks!(…; stored = true)` is an upstream prerequisite**
-(decided) rather than a direct launch here: a launch over every stored
-point of every block is a statement about the storage layout, which is
-the mesh's to make, and a second application spelling out `size(fs.work)`
-would be a second copy of that statement. See
-[Upstream prerequisites](#upstream-prerequisites).
+**`map_blocks!(…; stored = true)` is an upstream prerequisite** rather than
+a direct launch here: a launch over every stored point of every block is a
+statement about the storage layout, which is the mesh's to make, and a
+second application spelling out `size(fs.work)` would be a second copy of
+that statement. See [Upstream prerequisites](#upstream-prerequisites).
 
-**(The ghost floor count arrived in step 8.)** `ghost_floor_hits(p)` is the
-one-item-per-block kernel this section promised: it sums slot `D + 4` over
-each block's stored cells, skips the owned range, and combines the per-block
-values on the host in block order. It counts ghost *entries* and not cells,
-so a physical cell that is a ghost of two blocks counts twice — what is
-being measured is how often the recovery meets an unphysical ghost. It reads
-**zero** on the tracked shock tube and on the entropy wave (measured in step
-8), which is what says the open question above is about the Sedov blast in
-particular and not about the exchange in general.
+`ghost_floor_hits(p)` is the one-item-per-block kernel this section
+promised: it sums slot `D + 4` over each block's stored cells, skips the
+owned range, and combines the per-block values on the host in block order.
+It counts ghost *entries* and not cells, so a physical cell that is a ghost
+of two blocks counts twice — what is being measured is how often the
+recovery meets an unphysical ghost. It reads **zero** on the tracked shock
+tube and on the entropy wave, which is what says the question above is
+about the Sedov blast in particular and not about the exchange in general.
 
 ### Reconstruction
 
@@ -399,14 +430,14 @@ reconstructed `ρ` and `p` lie between neighbouring cell values and so
 stay positive; with `:none` they may not, and the face states go through
 the same floor function `con2prim` uses before the flux is formed.
 
-Primitives rather than conserved variables (decided), because
+Primitives rather than conserved variables, because
 reconstructing `U` produces pressure oscillations at contacts and, in
 GRMHD, would cost a root find per *face state* instead of per cell and
 put its failures where they are hardest to handle. Characteristic-variable
 reconstruction is rejected for the GRMHD reason: the eigenvectors are
 expensive and nobody uses them there.
 
-**(Implemented in step 2.)** `src/reconstruction.jl` is `slope(lim, a, b)`
+`src/reconstruction.jl` is `slope(lim, a, b)`
 for the three limiters and
 `face_states(lim, eos, floors, P₋₂, P₋₁, P₀, P₊₁) -> (P_L, P_R)`. What
 writing it settled:
@@ -442,16 +473,16 @@ the primitive face states and the equation of state:
 - **LLF / Rusanov.** `F = ½(F_L + F_R) − ½ λ (U_R − U_L)`, with
   `λ = max(|v_L| + c_L, |v_R| + c_R)`. The simplest and most diffusive;
   the fallback every GRMHD code keeps for cells that fail otherwise.
-- **HLLE** (decided default). Two-wave HLL with Davis's speed
+- **HLLE** (the default). Two-wave HLL with Davis's speed
   estimates, `s_L = min(v_L − c_L, v_R − c_R)`,
   `s_R = max(v_L + c_L, v_R + c_R)`. Needs the fastest and slowest
   signal speeds and nothing else, which in GRMHD are the fast
   magnetosonic speeds — this is *the* GRMHD flux.
 - **HLLC.** Restores the contact wave HLLE smears. It has a GRHD
   counterpart (Mignone & Bodo 2005) and HLLD is the MHD one, so it is
-  admissible. It is *the comparison, not the baseline* (decided): the
+  admissible. It is *the comparison, not the baseline*: the
   Kelvin–Helmholtz case is where HLLE's contact diffusion shows, so HLLC
-  is added at that milestone and measured against HLLE there.
+  is measured against HLLE there.
 
 `v` here is the component normal to the face; the tangential momenta are
 advected. The flux function takes the direction `d` as a `Val` and the
@@ -462,11 +493,10 @@ Deliberately **not** the flux: the exact Riemann solver. It exists in
 this package — as the *reference solution* for the shock tube — but it
 has no GRMHD counterpart as a flux and is not used as one.
 
-**(Implemented in step 2.)** `src/riemann.jl` is
+`src/riemann.jl` is
 `physical_flux(eos, P, ::Val{d})`, `signal_speed(eos, P)` and
-`riemann_flux(::Val{:llf|:hlle|:hllc}, eos, P_L, P_R, ::Val{d})`. HLLC is
-written here beside the other two, and measured in H5. What writing them
-settled:
+`riemann_flux(::Val{:llf|:hlle|:hllc}, eos, P_L, P_R, ::Val{d})`. What
+writing them settled:
 
 - **`s_R − s_L > 0` is a fact about the floors, not about Davis's
   estimate.** `s_R − s_L ≥ (v_L + c_L) − (v_L − c_L) = 2 c_L > 0` because
@@ -506,8 +536,7 @@ settled:
   contact speed — is written to with `Base.setindex`. One method serves
   every `d` and every `D`, which a cyclic-permutation test asserts.
 
-**(Measured in step 10: HLLC becomes the Kelvin–Helmholtz case's default
-and the package-wide default stays HLLE.)** The comparison was made on the
+The comparison was made on the
 shear layer, which is where it belongs, and it is not close. `M(t = 1.5)`
 on uniform meshes:
 
@@ -560,42 +589,37 @@ acts (see [Floors and the atmosphere](#floors-and-the-atmosphere)) — a
 second reason for an SSP method, since a positivity-preserving correction
 is what those hooks exist for.
 
-**(Amended after step 11: the integrator is IMEXRungeKutta's, not
-OrdinaryDiffEq's.)** The Tree* packages moved to
-[IMEXRungeKutta](https://github.com/eschnett/IMEXRungeKutta.jl) for every
-time integration, explicit ones included — TreeAMR's own tests and
-TreeGeneralizedHarmonic first — and this package follows. It is
-`IRK.SSPRK33()`, the same Shu–Osher (3,3) method written in **Butcher
-form** (`Ã = [0 0 0; 1 0 0; ¼ ¼ 0]`, `b̃ = (1/6, 1/6, 2/3)`), through one
-`hydro_integrator` in `src/stepping.jl` that `hydro_solve!` and `evolve!`
-both build. Three things changed, and one of them is a design change:
+The integrator is
+[IMEXRungeKutta](https://github.com/eschnett/IMEXRungeKutta.jl)'s, which
+the Tree* packages use for every time integration, explicit ones included.
+It is `IRK.SSPRK33()`, the same Shu–Osher (3,3) method written in
+**Butcher form** (`Ã = [0 0 0; 1 0 0; ¼ ¼ 0]`, `b̃ = (1/6, 1/6, 2/3)`),
+through one `hydro_integrator` in `src/stepping.jl` that `hydro_solve!` and
+`evolve!` both build. Three things follow from it:
 
 - **The stage arithmetic runs by block owner.** `state_partition` hands
   the integrator TreeAMR's `threadchunks(nblocks)` ownership as a
   partition of the state vector, so every stage combination of a block's
   entries is formed on the thread `map_blocks!` runs that block on — the
-  same placement TreeAMR 0.1.3 gives every per-block pass — and the scratch
-  is first-touched the same way. This is the Amdahl term the last paragraph
-  of this section used to say was "not TreeHydro's to fix"; it is fixed
-  without a hand-written integrator. A device state takes the integrator's
+  same placement TreeAMR gives every per-block pass — and the scratch is
+  first-touched the same way. A device state takes the integrator's
   broadcast path instead (`state_partition` returns `nothing`), and the two
   paths are bitwise the same, which `test/stepping_tests.jl` asserts.
 - **`evolve!` builds one integrator per chunk and hands each the previous
-  one's scratch** while the mesh is unchanged (IMEXRungeKutta 1.2's
-  `reuse`), stepping the state vector in place.
-- **Where a stage limiter's correction goes** (the design change). In
-  Butcher form the stage limiter acts on a stage value just before the
-  right-hand side reads it, and that correction reaches `uⁿ⁺¹` only through
-  the right-hand side; only the step limiter writes the stored state. See
-  the amendment under [Floors and the
+  one's scratch** while the mesh is unchanged (IMEXRungeKutta's `reuse`),
+  stepping the state vector in place. It builds its integrator with
+  `alias_u0 = true`, and must set `integ_prev = nothing` after any regrid
+  that changed the mesh: the state vector has another length then, and
+  IMEXRungeKutta refuses the scratch with an `ArgumentError` rather than
+  silently resizing it. `hydro_solve!` does not alias: it returns a new
+  vector and leaves its argument alone — `sod.jl`, `sedov.jl` and the tests
+  rely on that.
+- **Where a stage limiter's correction goes.** In Butcher form the stage
+  limiter acts on a stage value just before the right-hand side reads it,
+  and that correction reaches `uⁿ⁺¹` only through the right-hand side; only
+  the step limiter writes the stored state. See [Floors and the
   atmosphere](#floors-and-the-atmosphere) for what that does to `:stage`,
-  and to the injection, which becomes an equality under both cadences.
-
-Every number the suite prints moved at roundoff (Shu–Osher and Butcher
-form associate the same sums differently) and none moved beyond it except
-the ones that depend on the limiter placement; both are recorded under
-[IMEXRungeKutta and TreeAMR
-0.1.3](#imexrungekutta-and-treeamr-013-added-after-step-11).
+  and to the injection, which is an equality under both cadences.
 
 One global time step for the whole hierarchy — TreeAMR has no
 subcycling — from the finest spacing and the fastest signal:
@@ -605,45 +629,29 @@ subcycling — from the finest spacing and the fastest signal:
 
 The `D` is the sum over directions of an unsplit scheme's CFL condition,
 bounded above by `D · λ_max`; slightly conservative, and simpler than a
-per-cell sum. `λ_max` is measured **once per chunk** (proposed; confirmed
-in steps 4 and 7, beside a headroom factor and a recheck that throws — see
-the amendments below), because
+per-cell sum. `λ_max` is measured **once per chunk**, beside a headroom
+factor and a recheck that throws (below), because
 the integrator owns the steps within a chunk and a step-adaptive `dt`
 would mean a callback fighting a fixed-step `solve`. The driver
 re-measures `λ_max` at the end of the chunk and *throws* if the step it
 used violated the condition — a loud failure naming the chunk rather than
-an instability a few chunks later. For the three test problems the speed
-is constant (Sod), nearly constant (Kelvin–Helmholtz) or decreasing
-(Sedov, after the deposition), so the per-chunk value is a bound in
-practice; the check is what makes that a fact rather than a hope.
-**(Amended in step 9: "decreasing after the deposition" is right and the
-first chunk is not covered by it.** Sedov's jump at `r₀` is a Riemann
-problem like Sod's, and its star region is not present at `t = 0`, so
-`λ_max` grows within the first chunk by **1.16537, 1.25164 and 1.10396** in
-`D = 1, 2, 3` — smaller than Sod's 1.8522 because the blast's initial sound
-speed is already large, and still a growth. `HydroCase(::SedovBlast)` uses
-`speed_headroom = 2`, and those are also the largest growths over each
-run.)
+an instability a few chunks later.
 
-**(Amended in step 4: "constant for Sod" is wrong, and the driver needs a
-headroom factor beside the recheck.)** A Riemann problem's fastest signal
-is *not in its initial data*. Sod's initial data carries nothing above
-`c_L = sqrt(7/5) ≈ 1.18322`; the gas behind the shock, which does not
-exist until the discontinuity resolves, carries
-`u★ + c★_R ≈ 2.19157`. The ratio is **1.8522** (measured in step 4; see
-[Measured results](#measured-results)), so a step sized from
+**A Riemann problem's fastest signal is *not in its initial data*.** Sod's
+initial data carries nothing above `c_L = sqrt(7/5) ≈ 1.18322`; the gas
+behind the shock, which does not exist until the discontinuity resolves,
+carries `u★ + c★_R ≈ 2.19157`. The ratio is **1.8522** (see [Measured
+results](#step-4--sod-on-the-uniform-mesh)), so a step sized from
 `max_signal_speed(p)` at the start of a chunk would run the first steps of
 that chunk at nearly twice the CFL number it asked for. The speed is
 constant in the sense that matters — it stops growing once the waves are
 formed — and that is exactly the wrong sense for a `λ_max` measured at
-`t = 0`.
-
-Two consequences, one taken now and one recorded for step 7:
+`t = 0`. Two consequences:
 
 - **The shock tube takes its `λ` from the exact solution.**
   `max_signal_speed(::ExactRiemann)` is the supremum over all time, by
   construction, so `sod_errors` needs no headroom at all. That is
-  available because Sod has a closed-form solution; the driver will not
+  available because Sod has a closed-form solution; the driver does not
   have one.
 - **The per-chunk `λ_max` needs a headroom factor, as a case parameter,
   beside the end-of-chunk recheck.** The recheck is a detector, not a
@@ -651,18 +659,25 @@ Two consequences, one taken now and one recorded for step 7:
   already been integrated. Sod's 1.8522 is the number that sizes the
   factor — it is the largest growth within a chunk that any case here
   produces, and it is produced by the first chunk of a shock tube, which
-  is the configuration the driver will meet on Sod, on Sedov's deposition
+  is the configuration the driver meets on Sod, on Sedov's deposition
   and on any restart from discontinuous initial data. A second, much
   smaller contribution is measured beside it: the *discrete* state sits
   above the exact supremum at a discontinuity by 0.49% at `N = 16`, falling
   to 0.0056% at `N = 128`, because a reconstruction of a jump produces a
-  face state the exact solution does not contain. The driver is not
-  designed here; the fact and the number are recorded so that it is not
-  designed without them.
+  face state the exact solution does not contain.
 
-**(Implemented in step 7; the amendment is closed.)** The driver sizes each
-chunk's step from `cfl · h_min / (D · speed_headroom · λ)` with `λ`
-measured once at the start of the chunk, re-measures at the end, and calls
+On Sedov, `λ_max` decreases after the deposition, and the first chunk is
+not covered by that. Sedov's jump at `r₀` is a Riemann problem like Sod's,
+and its star region is not present at `t = 0`, so `λ_max` grows within the
+first chunk by **1.16537, 1.25164 and 1.10396** in `D = 1, 2, 3` — smaller
+than Sod's 1.8522 because the blast's initial sound speed is already
+large, and still a growth. `HydroCase(::SedovBlast)` uses
+`speed_headroom = 2`, and those are also the largest growths over each
+run.
+
+The driver sizes each chunk's step from
+`cfl · h_min / (D · speed_headroom · λ)` with `λ` measured once at the
+start of the chunk, re-measures at the end, and calls
 `check_cfl(dt_used, h_min, D, cfl, λ_end)`, which **throws** an
 `ArgumentError` naming the chunk, both speeds, the headroom and the two
 remedies. The comparison carries a few ulp of slack, because the step
@@ -689,17 +704,14 @@ headroom is conservative by exactly the factor the headroom is, and in the
 right direction: a margin that is too wide costs cells, and one that is too
 narrow costs the feature.
 
-The Amdahl term TreeWave measured — the integrator's serial stage
-arithmetic capping a threaded step at 3.6× — applied here unchanged until
-the move to IMEXRungeKutta, and was said to be not TreeHydro's to fix.
-*(Amended: IMEXRungeKutta forms the stage combinations by block owner, and
-on this machine they cost about 1 ms per step on a 262144-cell mesh at any
-thread count — at the memory bandwidth, not serial. See [Step 14 — the
-benchmark and the device](#step-14--the-benchmark-and-the-device).)*
+IMEXRungeKutta forms the stage combinations by block owner, and on this
+machine they cost about 1 ms per step on a 262144-cell mesh at any thread
+count — at the memory bandwidth, not serial. See [Step 14 — the
+benchmark and the device](#step-14--the-benchmark-and-the-device).
 
 ### Floors and the atmosphere
 
-Two regimes, two rules, as in every GRMHD code (decided):
+Two regimes, two rules, as in every GRMHD code:
 
 - **Atmosphere.** Where `ρ < ρ_atm`, the cell *is* vacuum and its whole
   state is replaced: `ρ = ρ_atm`, `v = 0`, `p = p_atm`. Zeroing the
@@ -724,12 +736,11 @@ given that TreeAMR's RHS contract forbids the RHS to mutate `u` and an
 external integrator owns the stages. The ways it can be done
 consistently, and what each costs:
 
-1. **In the integrator's own stage hook** (decided). Every SSPRK method
-   in `OrdinaryDiffEqSSPRK` takes `stage_limiter!(u, integrator, p, t)`
-   and `step_limiter!(u, integrator, p, t)`, called on each stage vector
-   after it is formed and on the step's result — the hooks that exist
-   for positivity-preserving limiters, which is what this is. The reset
-   is a pointwise kernel over `statearray(u, U)`: `con2prim`,
+1. **In the integrator's own stage hook.** IMEXRungeKutta takes
+   `stage_limiter!(u, integrator, p, t)` and
+   `step_limiter!(u, integrator, p, t)` as `init` keywords — the hooks that
+   exist for positivity-preserving limiters, which is what this is. The
+   reset is a pointwise kernel over `statearray(u, U)`: `con2prim`,
    `apply_floors`, `prim2con`, written back where anything changed. It
    needs no ghosts, no spacings and no scatter, only the EOS and the
    floors, which the hook reaches through `p`. This is GRMHD practice —
@@ -741,48 +752,30 @@ consistently, and what each costs:
    reset buys over the per-step one is a measurement on Sedov rather
    than an inheritance.
 
-   **(Amended after step 11: IMEXRungeKutta's hooks, and `:stage` is
-   now both of them.)** IMEXRungeKutta takes the same two keywords with
-   the same signature, as `init` keywords. Its `SSPRK33` is in Butcher
-   form, and its stage limiter is called on the two stage values per step
-   that the right-hand side reads beyond `uⁿ` — on a scratch copy, just
-   before the right-hand side — and not on the step's result, which is the
-   step limiter's. So `:stage` passes the reset as **both**: `reset_stage!`
-   as the stage limiter and `reset_atmosphere!` as the step limiter, which
-   resets every state the right-hand side reads and every state stored,
-   the same three calls per step as before. `:step` is the step limiter
-   alone, as before. The difference that matters is where a stage
-   correction goes: it changes the right-hand side's *input* and reaches
-   `uⁿ⁺¹` only through a flux divergence, which conserves, where
-   OrdinaryDiffEq's Shu–Osher stages carried it forward with weights
-   `1/6, 2/3, 1`. Only the step limiter moves a total, `reset_stage!`
-   accounts no injection, and the injection is an equality under both
-   cadences (below). The positivity argument an SSP method offers rests on
-   limited stage values that are *convex combinations* of limited states;
-   in Butcher form that convexity is not what the limiter sees, and
-   whether that matters for a GRMHD code is the open question TreeAMR
-   records as "Shu–Osher against Butcher form". For a reset that only ever
-   fires on the pressure floor at a coarse-fine face, as here, it moved
-   the static Sedov blast's L1 in the eighth digit and its reset count by
-   1% (4096 → 4136).
-
-   **(Amended in step 8: the hooks are `solve` keywords now, not
-   constructor arguments.)** The signature and the semantics are exactly
-   as above, but `OrdinaryDiffEqCore` has moved the two limiters into the
-   solver options: `SSPRK33(; stage_limiter! = f)` is deprecated in
-   favour of `solve(prob, SSPRK33(); stage_limiter = f)`, warns on every
-   run under `--depwarn=yes` — which is what `Pkg.test` passes — and
-   would, once the deprecation is completed, leave the constructor's
-   field silently unread. A positivity correction that is installed
-   nowhere and reports nothing is the one failure mode this must not
-   have, so `hydro_solve!` passes the keywords to `solve` and
-   `test/reset_tests.jl` asserts that a step really does come out floored
-   under `:stage` and under `:step` and does not under `:none`. Read
-   against the installed `OrdinaryDiffEqSSPRK`: `stage_limiter!` is
-   applied to every stage of `SSPRK33` *including the last*, and
-   `step_limiter!` once to the accepted step's result, which is what
-   makes `:step` the cheaper cadence of the same thing rather than a
-   different correction.
+   **`:stage` is both of IMEXRungeKutta's hooks.** Its `SSPRK33` is in
+   Butcher form, and its stage limiter is called on the two stage values
+   per step that the right-hand side reads beyond `uⁿ` — on a scratch
+   copy, just before the right-hand side — and not on the step's result,
+   which is the step limiter's. So `:stage` passes the reset as **both**:
+   `reset_stage!` as the stage limiter and `reset_atmosphere!` as the step
+   limiter, which resets every state the right-hand side reads and every
+   state stored, three calls per step. `:step` is the step limiter alone.
+   The difference that matters is where a stage correction goes: it
+   changes the right-hand side's *input* and reaches `uⁿ⁺¹` only through a
+   flux divergence, which conserves, where OrdinaryDiffEq's Shu–Osher
+   stages carried it forward with weights `1/6, 2/3, 1`. Only the step
+   limiter moves a total, `reset_stage!` accounts no injection, and the
+   injection is an equality under both cadences (below). Passing
+   `reset_atmosphere!` as the stage limiter alone would leave every stored
+   state unreset; passing it as both would count stage corrections as
+   injection, which no total ever sees. The hooks are `init` keywords
+   whose omission is silent, and `test/reset_tests.jl` asserts both the
+   flooring and the hit counts, which is the only thing that would notice
+   (see [Step 8](#step-8--the-atmosphere-reset)). The positivity argument
+   an SSP method offers rests on limited stage values that are *convex
+   combinations* of limited states; in Butcher form that convexity is not
+   what the limiter sees, and whether that matters for a GRMHD code is the
+   open question TreeAMR records as "Shu–Osher against Butcher form".
 2. **A `DiscreteCallback`** with an always-true condition, modifying
    `integrator.u` and calling `u_modified!`. Equivalent to the
    `step_limiter!` and less direct; not adopted, recorded because it is
@@ -807,32 +800,25 @@ consistently, and what each costs:
 
 **What "consistent" has to mean**, and how each part is checked:
 
-- **`U` and `P` agree after a reset**: `con2prim` of the reset `U`
-  reproduces the floored `P` to roundoff, and applying the reset twice
-  equals applying it once to roundoff (an idempotence test; bit-for-bit
-  would need the floor comparison to absorb the `prim2con`/`con2prim`
-  round trip, and is not claimed).
-
-  **(Measured in step 8; the prediction is corrected in both
-  directions.)** The *state* is idempotent **bit for bit** — at `Float64`
-  and at `Float32`, in `D = 1, 2, 3`, on a synthetic state carrying all
-  six populations (healthy gas, `0 < ρ < ρ_atm`, `ρ = 0`, `ρ < 0`,
-  `ρ = NaN`, and a healthy density with a negative internal energy). The
-  *flag* is not, and the reason is the round trip the prediction named: a
-  pressure-floored cell recovers its internal energy through the
-  cancellation `E − ½S²/ρ`, so where the kinetic energy dominates, the
-  recovered pressure lands a fraction of an ulp below `p_floor` and the
-  rule fires again — writing `prim2con(eos, (ρ, v, p_floor))` from the
-  same `ρ` and the same `v`, which is the same arithmetic on the same
-  numbers and therefore the same bits. Second-pass counts on that state:
-  2 of 13 floored cells at `Float64` in `D = 1`, none in `D = 2`, 85 of
-  426 in `D = 3`, none at `Float32` in any dimension. So the reset is a
-  fixed point of the state and not of its own report, which is why the
-  counts are taken per call rather than read back off the flag slot.
-  `con2prim` of the reset `U` reproduces the floored `P` to roundoff of
-  the *data's own scale* — not of `p_floor`, for the same cancellation
-  reason — and every cell in which no floor fired is bit-identical to
-  what it was.
+- **`U` and `P` agree after a reset.** The *state* is idempotent **bit for
+  bit** — at `Float64` and at `Float32`, in `D = 1, 2, 3`, on a synthetic
+  state carrying all six populations (healthy gas, `0 < ρ < ρ_atm`,
+  `ρ = 0`, `ρ < 0`, `ρ = NaN`, and a healthy density with a negative
+  internal energy). The *flag* is not, and the reason is the
+  `prim2con`/`con2prim` round trip: a pressure-floored cell recovers its
+  internal energy through the cancellation `E − ½S²/ρ`, so where the
+  kinetic energy dominates, the recovered pressure lands a fraction of an
+  ulp below `p_floor` and the rule fires again — writing
+  `prim2con(eos, (ρ, v, p_floor))` from the same `ρ` and the same `v`,
+  which is the same arithmetic on the same numbers and therefore the same
+  bits. Second-pass counts on that state: 2 of 13 floored cells at
+  `Float64` in `D = 1`, none in `D = 2`, 85 of 426 in `D = 3`, none at
+  `Float32` in any dimension. So the reset is a fixed point of the state
+  and not of its own report, which is why the counts are taken per call
+  rather than read back off the flag slot. `con2prim` of the reset `U`
+  reproduces the floored `P` to roundoff of the *data's own scale* — not
+  of `p_floor`, for the same cancellation reason — and every cell in
+  which no floor fired is bit-identical to what it was.
 - **Conservation is accounted for, not assumed.** A reset injects mass,
   momentum and energy; the injection is *measured* — the per-variable
   totals of the stage vector before and after the reset, through
@@ -844,27 +830,33 @@ consistently, and what each costs:
   plus measured injection, and the negative control compares the two
   runs on the drift *net of* injection. The accounting doubles the
   reductions per stage and is a keyword the tests turn on and the demos
-  do not. *(Amended in step 15, after the move to IMEXRungeKutta: only the
-  step limiter, `reset_atmosphere!`, measures an injection — once per step
-  and after every regrid — and the stage limiter, `reset_stage!`, counts
-  hits and measures nothing, for the reason given in the amendment to
-  option 1 above.)*
+  do not. Only the step limiter, `reset_atmosphere!`, measures an
+  injection — once per step and after every regrid — and the stage
+  limiter, `reset_stage!`, counts hits and measures nothing, for the
+  reason given under option 1 above.
 
-  **(Measured in step 8, and "exactly" is the word.)** On the tracked
-  shock tube under `:stage` and under `:step`, and on the entropy wave
-  through the driver, the injection comes back `(0.0, 0.0, 0.0)`, the
-  reset hit count is `0`, the ghost floor count is `0` — and the final
-  state, the drift, the step count and the mesh history are
-  **bit-identical** to the `reset = :none` run's. That is what the
-  "written back only where `hit` is true" rule buys, and it is why every
-  roundoff drift bound recorded in this file is unchanged now that
-  `:stage` is the default and every run in the suite calls the reset three
-  times per step. The accounting is `accounting = false` by default and
-  then returns `nothing` rather than a tuple of zeros, so that "not
-  measured" cannot be read as "measured and zero". One honest exception it
-  reports rather than hides: a state carrying a `NaN` has no total, so the
-  injection into it is a `NaN` in the variable the `NaN` lived in and a
-  finite number in the others — the state is repaired all the same.
+  "Exactly" is the word. On the tracked shock tube under `:stage` and
+  under `:step`, and on the entropy wave through the driver, the injection
+  comes back `(0.0, 0.0, 0.0)`, the reset hit count is `0`, the ghost
+  floor count is `0` — and the final state, the drift, the step count and
+  the mesh history are **bit-identical** to the `reset = :none` run's.
+  That is what the "written back only where `hit` is true" rule buys, and
+  it is why every roundoff drift bound recorded in this file is unchanged
+  with `:stage` the default and every run in the suite calling the reset
+  three times per step. A kernel that wrote `prim2con(con2prim(U))`
+  unconditionally would be the same physics and would move every cell by a
+  few ulp at every stage — and since `:stage` is the default, every run in
+  this suite would then drift, turning every roundoff conservation bound in
+  this file into a tolerance and the `:none` comparison into an
+  approximation. The reset's own tests would still pass; the claim that
+  catches it is the bit-identity above, in `test/reset_tests.jl`, where the
+  injection is `0.0` rather than `≈ 0.0`. The accounting is
+  `accounting = false` by default and then returns `nothing` rather than a
+  tuple of zeros, so that "not measured" cannot be read as "measured and
+  zero". One honest exception it reports rather than hides: a state
+  carrying a `NaN` has no total, so the injection into it is a `NaN` in the
+  variable the `NaN` lived in and a finite number in the others — the
+  state is repaired all the same.
 - **The reset is a pure pointwise map**, so it is bit-identical across
   thread counts and identical on every backend, and it composes with
   the RHS's purity: the RHS reads the reset `u` and nothing else.
@@ -891,7 +883,7 @@ combined in block order; `firing_boxes` covers owned cells only). The
 ghost count is what the Sedov milestone reports against the
 ghost-exchange decision.
 
-**(Implemented in step 8.)** `src/floors.jl` holds `ResetAccounting` and
+`src/floors.jl` holds `ResetAccounting` and
 `reset_atmosphere!(u, integrator, p, t)` — a `map_blocks!` launch over the
 owned cells of `statearray(u, U)`, writing back only where `hit` came back
 true and writing the flag into `P`'s diagnostic slot `D + 4` as it goes;
@@ -922,14 +914,11 @@ settled:
   values combined on the host in block order. `block_mapreduce` reduces a
   block's *interior*, which is exactly the range this count must not use.
   The block order is this package's own discipline here and not an
-  inheritance (amended after step 11, when TreeAMR narrowed its M5
-  guarantee to everything but floating-point sums), and for this count it
-  is not even load-bearing: the flags are `1`s and `0`s, each block's
-  partial is an exact integer and the host closes each with
-  `roundint` (`round(Int, …)` until step 12), so the total is the same
-  under any association. Both
-  floor counts stay exact whatever upstream's fold becomes; the
-  reductions the narrowing does reach are listed under
+  inheritance, and for this count it is not even load-bearing: the flags
+  are `1`s and `0`s, each block's partial is an exact integer and the host
+  closes each with `roundint`, so the total is the same under any
+  association. Both floor counts stay exact whatever upstream's fold
+  becomes; the reductions the narrowing does reach are listed under
   [Multi-threading](#multi-threading).
 - **The record is host-side, mutable, and held by the problem.** A run
   rebuilds its `HydroProblem` after every regrid, so a record the problem
@@ -940,9 +929,12 @@ settled:
   negative control it is meant to be rather than "the reset, minus the
   hooks".
 
-**(Measured in step 9, on the case where the floors finally fire — and the
-design was wrong about which rule fires and about where.)** The numbers are
-in [Measured results](#step-9--the-sedov-blast).
+**Inconsistent:** the paragraph before the list above places
+`hydro_solve!`'s `reset` keyword in `src/evolution.jl`; [File
+layout](#file-layout) puts `hydro_solve!` in `src/stepping.jl`.
+
+**On Sedov, the case where the floors fire.** The numbers are in
+[Measured results](#step-9--the-sedov-blast).
 
 - **The atmosphere rule never fires on Sedov, at any size the tests can
   afford.** The prediction above put the firing in the evacuated interior,
@@ -959,10 +951,9 @@ in [Measured results](#step-9--the-sedov-blast).
   coarse-fine face.** The interface flux restriction replaces a coarse
   cell's flux with the average of its fine neighbours', and in gas whose
   internal energy is `p_amb/(γ−1) = 2.5e-5` that correction can take it
-  below `p_floor`. On the static two-level mesh: **4096** owned cells and
-  **40** ghost entries in `D = 2`, **24504** and **4703** in `D = 3`
-  *(4136 and 40, 24576 and 4786 since IMEXRungeKutta, whose `:stage` resets
-  the step's result as well as the stage values)*. On
+  below `p_floor`. On the static two-level mesh: **4136** owned cells and
+  **40** ghost entries in `D = 2`, **24576** and **4786** in `D = 3`,
+  `:stage` resetting the step's result as well as the stage values. On
   every *uniform* mesh, and on the tracked mesh — whose coarse-fine faces
   stand in undisturbed gas — nothing fires at all. This is the interaction
   the fourth option above named in the abstract ("an average of limited
@@ -974,38 +965,24 @@ in [Measured results](#step-9--the-sedov-blast).
   *roundoff* rather than zero, because the same round trip recomputes
   `S = ρ (S/ρ)`, which is not the bits it started from — measured
   `-1.65e-24` in `D = 3` against a bound of `2.2e-14`.
-- **The accumulated injection is an equality under both cadences**
-  *(amended after step 11, with the move to IMEXRungeKutta: the stage
-  limiter's correction no longer reaches a total, so it is no longer
-  counted, and the `:stage` drift equals its injection to `8.9e-16` in
-  `D = 2` and `3.6e-15` in `D = 3`, against roundoff bounds of `8.0e-13`
-  and `2.5e-13`. What follows is the step-9 finding under OrdinaryDiffEq,
-  kept because it is what made the accounting's semantics explicit.)*
-  It was an upper bound under `:stage` and an
-  equality under `:step`. The accounting adds the raw
-  `Σ hᴰ ΔU` of every call, but `SSPRK33`'s three stage vectors enter the
-  step's result with weights `1/6`, `2/3` and `1`, so an injection into a
-  stage reaches the state scaled by that stage's weight. Measured ratio of
-  drift to accumulated injection: **0.51984** in `D = 2` and **0.52203** in
-  `D = 3`. Under `:step`, which resets once on the step's own result, the
-  drift **equals** the injection — to `4.4e-16` and `2.2e-16` against
-  roundoff bounds of `8.0e-13` and `2.5e-13`. Step 8 could not see this,
-  because on Sod and the entropy wave the injection was exactly zero and
-  every weighting of zero is zero. The fix is not to weight the
-  accounting — the hook is not told which stage it is in, and a
-  `DiscreteCallback` would not be either — but to say what the number is:
-  a bound with `:stage`, an equality with `:step`.
+- **The accumulated injection is an equality under both cadences.** The
+  stage limiter's correction does not reach a total, so it is not counted,
+  and the `:stage` drift equals its injection to `8.9e-16` in `D = 2` and
+  `3.6e-15` in `D = 3`, against roundoff bounds of `8.0e-13` and
+  `2.5e-13`. Under `:step`, which resets once on the step's own result, the
+  drift **equals** the injection — to `4.4e-16` and `2.2e-16` against the
+  same bounds. The equality under `:stage` is the integrator's Butcher
+  form; under OrdinaryDiffEq it was a bound (see
+  [HISTORY.md](HISTORY.md#floors-and-the-atmosphere)).
 - **So what does `:stage` buy over `:step`?** On this case: three times the
-  repairs (4096 against 1384 owned cells in `D = 2`, 24504 against 8232 in
-  `D = 3`; 4136 and 24576 since IMEXRungeKutta) for the same final state to
-  roundoff, and — under OrdinaryDiffEq — a strictly less informative
-  injection, which IMEXRungeKutta's Butcher form has since made exact. What it buys is what it was adopted for and this
-  case cannot show — a stage vector that is never seen in an unphysical
-  state by the *next* stage's right-hand side — and the case where that
-  matters is a star in a vacuum, not a blast in an ambient. `:stage` stays
-  the default, GRMHD practice being the reason, and the measurement
-  recorded here is that on a blast the cheaper cadence is indistinguishable
-  in the answer and better in the bookkeeping.
+  repairs (4136 against 1384 owned cells in `D = 2`, 24576 against 8232 in
+  `D = 3`) for the same final state to roundoff. What it buys is what it
+  was adopted for and this case cannot show — a stage vector that is never
+  seen in an unphysical state by the *next* stage's right-hand side — and
+  the case where that matters is a star in a vacuum, not a blast in an
+  ambient. `:stage` stays the default, GRMHD practice being the reason, and
+  the measurement recorded here is that on a blast the cheaper cadence is
+  indistinguishable in the answer.
 - **The ghost floor count answers the upstream question, and the answer is
   "not on the exchange in general".** `ghost_floor_hits` is zero on the
   entropy wave, on Sod, on every uniform mesh and on the tracked Sedov
@@ -1026,13 +1003,13 @@ in [Measured results](#step-9--the-sedov-blast).
 | `IdealGas` behind an EOS interface | hybrid or tabulated EOS behind the same |
 | primitive reconstruction, MC or minmod | the same |
 | HLLE from `|v| ± c_s` | HLLE from the fast magnetosonic speeds |
-| HLLC (implemented in step 2; the Kelvin–Helmholtz default since step 10) | HLLC (Mignone & Bodo 2005), HLLD |
+| HLLC (the Kelvin–Helmholtz default) | HLLC (Mignone & Bodo 2005), HLLD |
 | LLF fallback | LLF fallback |
 | MOL, SSPRK33 (IMEXRungeKutta, Butcher form, stages by block owner), unsplit flux divergence, one global `dt` | the same; an IMEX tableau of the same package when stiff sources arrive |
 | empty source-term slot in the divergence kernel | geometric source terms |
 | Löhner indicator on `ρ` and `p` | the same, plus `B` |
 | Dirichlet boundary from the initial state | an analytic exterior |
-| a reflecting face (TreeAMR's M10) with a parity per variable *(added 2026-09-29)* | equatorial, bitant and octant reflection symmetry |
+| a reflecting face (TreeAMR's M10) with a parity per variable | equatorial, bitant and octant reflection symmetry |
 
 **Not used, on purpose:** the exact Riemann solver as a flux; Roe's
 solver and any characteristic decomposition; operator (Strang) splitting;
@@ -1077,8 +1054,8 @@ widths, the limiter and the Riemann solver. It is rebuilt after every
 regrid and takes the existing `P` and `F_d` when it is, since `regrid!`
 already resized them.
 
-**(Implemented in step 3.)** `src/evolution.jl`, in `hydro_rhs!`, is the
-six steps above with nothing between them. What the writing settled:
+`src/evolution.jl`, in `hydro_rhs!`, is the six steps above with nothing
+between them. What the writing settled:
 
 - **`HydroProblem(U, ops; eos, floors, limiter, riemann = :hlle, fixup =
   true, boundary = nothing, prims = nothing, fluxes = nothing)`.** `U` is
@@ -1090,22 +1067,22 @@ six steps above with nothing between them. What the writing settled:
   this document's decision and not the caller's. The layout obligations
   are checked here rather than discovered later: `U` cell-centered with
   `G ≥ 2` everywhere, `P` with `U`'s forest, ghost width and centering and
-  `nvars = D + 4`, the fluxes with `G = 0`. *(Amended in step 15: step 8
-  added a tenth keyword, `accounting`, the host-side `ResetAccounting` the
-  reset accumulates into, defaulting to a fresh record with the injection
-  measurement off; `evolve!` hands one record to every problem it builds.)*
+  `nvars = D + 4`, the fluxes with `G = 0`. A tenth keyword, `accounting`,
+  is the host-side `ResetAccounting` the reset accumulates into,
+  defaulting to a fresh record with the injection measurement off;
+  `evolve!` hands one record to every problem it builds.
 - **Three kernels, three ranges.** `con2prim_kernel!` runs under
   `stored = true` and its index *is* the stored index; `flux_kernel!` runs
   under `closed = true`, one launch per direction with a constant
   `Val(d)`, and reads `P` at `c[d]−2 … c[d]+1` around face `I[d]`;
   `divergence_kernel!` runs over the owned range and writes straight into
   the state layout. The empty source slot is a comment on the line that
-  would carry `S(P)`.
-- **The boundary hook is passed through** `fill_ghosts!(U, schedule;
-  boundary)` from step 3 on, although the only case here is periodic and
-  hands it `nothing`: the hook is the part of the signature a Dirichlet
-  case needs, and adding it in step 4 would mean touching the right-hand
-  side again for it.
+  would carry `S(P)`. `map_blocks!`'s three ranges differ in what the
+  kernel adds: by default the owned cells, and the kernel adds `G[d]`;
+  under `closed = true` the `N+1` faces, and the kernel adds `G[d]`; under
+  `stored = true` every stored point including ghosts, and the kernel's
+  index *is* the stored index — nothing to add. A kernel written for one
+  form is wrong under another.
 - **Four helpers the driver will want** live beside the right-hand side
   rather than inside it: `update_primitives!(p, u)` is steps (0)–(2)
   alone, so a driver can refresh `P` for `λ_max` or for the refinement
@@ -1123,30 +1100,27 @@ area-weighted average of the fine ones. What this package adds is that
 there are now **`D + 2` conserved quantities**, each with its own domain
 integral, and the claim is made for all of them:
 
-- **(measured in step 5)** Total mass, each momentum component and total
-  energy are conserved to a few ulp of their own scale `Σ hᴰ |U_v|` over a
-  run on the static two-level mesh in `D = 1, 2, 3`; the drift does not
-  grow with the step count — the worst of the `D + 2` integrals moves by
-  **0.003 to 0.011 ulp of its own scale per step**. The negative control —
-  `fixup = false`, the single difference, same mesh and same step count —
-  leaks by `1e-4 … 3e-5` of the scale, which is **1e8 to 1e9 times** the
-  bound the fixup run meets. The **uniform control** is
-  **(measured in step 3)**: on a single-level mesh the two runs agree bit
-  for bit, since `restrict_interfaces!` has no coarse-fine face to act on.
-  All three are in [Measured results](#measured-results). This is TreeAMR's
-  M8b table, repeated for a system. What step 5 does *not* cover, because
-  it has no driver yet, is a refined region that *follows* a shock with
-  regrids in between; that is step 7's, and the static mesh is the sharper
-  measurement of the two because nothing but the fixup differs between the
-  runs.
-- **(measured in step 7)** The moving mesh holds as well as the static one.
-  On the tracked Sod tube — the mesh rebuilt under the solution **9** times
-  in `D = 1` over 588 steps and **3** times in `D = 2` over 431 — the mass
-  and energy drifts are `3.3e-16` and `1.6e-15` in `D = 1` and `4.2e-17`
-  and `1.9e-16` in `D = 2`, and the momentum equals its closed-form
-  boundary flux to `8.6e-16` and `1.0e-16`. The negative control leaks
-  `4.2e9`, `1.2e9` and `7.4e9` times more in `D = 1` and `1.0e9`, `7.8e8`
-  and `4.9e8` in `D = 2`, on **the same mesh history and the same step
+- Total mass, each momentum component and total energy are conserved to a
+  few ulp of their own scale `Σ hᴰ |U_v|` over a run on the static
+  two-level mesh in `D = 1, 2, 3`; the drift does not grow with the step
+  count — the worst of the `D + 2` integrals moves by **0.003 to 0.011 ulp
+  of its own scale per step**. The negative control — `fixup = false`, the
+  single difference, same mesh and same step count — leaks by
+  `1e-4 … 3e-5` of the scale, which is **1e8 to 1e9 times** the bound the
+  fixup run meets. The **uniform control**: on a single-level mesh the two
+  runs agree bit for bit, since `restrict_interfaces!` has no coarse-fine
+  face to act on. All three are in [Measured results](#measured-results).
+  This is TreeAMR's M8b table, repeated for a system. The static mesh is
+  the sharper measurement of the two — the moving one is the next item —
+  because nothing but the fixup differs between the runs.
+- The moving mesh holds as well as the static one. On the tracked Sod
+  tube — the mesh rebuilt under the solution **9** times in `D = 1` over
+  588 steps and **3** times in `D = 2` over 431 — the mass and energy
+  drifts are `3.3e-16` and `1.6e-15` in `D = 1` and `4.2e-17` and
+  `1.9e-16` in `D = 2`, and the momentum equals its closed-form boundary
+  flux to `8.6e-16` and `1.0e-16`. The negative control leaks `4.2e9`,
+  `1.2e9` and `7.4e9` times more in `D = 1` and `1.0e9`, `7.8e8` and
+  `4.9e8` in `D = 2`, on **the same mesh history and the same step
   count** — the leak does not move the criterion, which is worth knowing
   because it means the two runs really do differ in one line. The static
   measurement is still the sharper one, and this is the one that says
@@ -1155,12 +1129,12 @@ integral, and the claim is made for all of them:
 - The **momentum** is the new case: for a momentum component whose total
   is zero by symmetry (the Kelvin–Helmholtz `S_y`, the Sedov `S_d`), the
   drift is measured against the maximum of that component's `Σ hᴰ |S_d|`
-  over the run, not against its total, which may be zero. **(Amended in
-  step 5: the scale can be zero too.)** On Sod the initial state is at
-  rest, so `Σ hᴰ |S|` is *exactly* zero at `t = 0` and the momentum has no
-  scale of its own at all. There the drift is measured against the
-  closed-form boundary flux `(p_L − p_R)·t_end·A` it is claimed to equal,
-  which is a better yardstick than any norm of the state — see
+  over the run, not against its total, which may be zero. The scale can be
+  zero too. On Sod the initial state is at rest, so `Σ hᴰ |S|` is
+  *exactly* zero at `t = 0` and the momentum has no scale of its own at
+  all. There the drift is measured against the closed-form boundary flux
+  `(p_L − p_R)·t_end·A` it is claimed to equal, which is a better
+  yardstick than any norm of the state — see
   [Sod shock tube](#sod-shock-tube).
 - The **atmosphere reset** does touch `U`, and what it injects is
   measured rather than lost in the drift (see
@@ -1179,14 +1153,14 @@ restriction the exact average (no order), prolongation of odd order `p`.
 TreeAMR's interface-order rule for a flux divergence — measured on
 Burgers in M8b — says `p` must exceed the scheme's order by *one*, so a
 second-order scheme wants **`p = 3`**, and `p = 5` buys nothing further.
-Two things this package expects to add to that finding:
+Two things this package adds to that finding:
 
-- **(measured in step 5)** The rule holds for the system as it did for the
-  scalar, and the prediction — L∞ rates 1, 2, 2 for `p = 1, 3, 5` and L1
-  rates 2, 2, 2, with the refined `p = 3` run landing on the unrefined
-  control's rate — is met without amendment in both dimensions. The table
-  is in [Measured results](#measured-results): L∞ **0.963 / 2.034 / 2.037**
-  in `D = 1` against a control of 2.024, and **0.925 / 2.041 / 2.037** in
+- The rule holds for the system as it did for the scalar, and the
+  prediction — L∞ rates 1, 2, 2 for `p = 1, 3, 5` and L1 rates 2, 2, 2,
+  with the refined `p = 3` run landing on the unrefined control's rate —
+  is met without amendment in both dimensions. The table is in
+  [Measured results](#measured-results): L∞ **0.963 / 2.034 / 2.037** in
+  `D = 1` against a control of 2.024, and **0.925 / 2.041 / 2.037** in
   `D = 2` against 2.029, with every L1 rate between 1.90 and 2.02. The
   norm is part of the result here as it was on Burgers, and for the same
   reason: the defect an order-`p` prolongation leaves sits on the
@@ -1201,38 +1175,35 @@ Two things this package expects to add to that finding:
   form: without the fixup the residual has net mass and the equation
   carries it downstream as an `O(h)` plateau, which an integral norm does
   see.
-- **The `p = 1` question is a real one here, and open** *(closed in step 9,
-  below — the answer is a trade with a price on it)*. Piecewise-constant
-  prolongation is the only linear prolongation that is
-  positivity-preserving for every field, and Burgers measured that an
-  integral norm never sees the interface defect it leaves. For a limited
-  shock-capturing scheme judged in L1 on discontinuous solutions — the
-  Sod and Sedov cases — `p = 1` may be indistinguishable from `p = 3` in
-  the error and strictly better in the floor count. The Kelvin–Helmholtz
-  rolls, smooth and L∞-sensitive, are where `p = 3` should win. **Default
-  `p = 3` (decided), with `p = 1` measured beside it on all three shock
-  cases and the table recorded here.** A *limited* linear prolongation
-  — `p = 3` accuracy with `p = 1` positivity — is what a hydro code would
-  actually want, is not a fixed-weight tensor-product stencil, and is
-  therefore the one upstream request this package is most likely to
-  make. It is not made in advance of the measurement.
+- **The `p = 1` question is a real one here, and the answer is a trade
+  with a price on it.** Piecewise-constant prolongation is the only linear
+  prolongation that is positivity-preserving for every field, and Burgers
+  measured that an integral norm never sees the interface defect it
+  leaves. For a limited shock-capturing scheme judged in L1 on
+  discontinuous solutions — the Sod and Sedov cases — `p = 1` may be
+  indistinguishable from `p = 3` in the error and strictly better in the
+  floor count. The Kelvin–Helmholtz rolls, smooth and L∞-sensitive, are
+  where `p = 3` should win. **Default `p = 3`, with `p = 1` measured beside
+  it on all three shock cases and the table recorded here.** A *limited*
+  linear prolongation — `p = 3` accuracy with `p = 1` positivity — is what
+  a hydro code would actually want, is not a fixed-weight tensor-product
+  stencil, and is therefore the one upstream request this package is most
+  likely to make.
 
-  **What the entropy wave says about it (measured in step 5), and why the
-  question stays open.** On a smooth solution `p = 1` costs exactly what
-  the rule says: a full order in L∞ (0.963 and 0.925 against a control of
-  2.024 and 2.029) and *nothing at all* in L1 (1.966 and 1.900, inside the
-  spread of the `p = 3` and `p = 5` runs). So the smooth case reproduces
-  the Burgers finding and decides nothing: it confirms that an integral
-  norm cannot see the interface defect, which is the premise of the
-  question rather than its answer. The question is what happens in L1 on a
-  *discontinuous* solution, where the scheme's own rate is about 0.9 rather
-  than 2 and where positivity is a live concern — and that is Sod in step 7
-  and Sedov in step 9, run at `p = 1` beside `p = 3` with the floor counts
-  beside the errors. Until then `p = 3` remains the default and the
-  upstream request remains unmade.
+  **What the entropy wave says about it.** On a smooth solution `p = 1`
+  costs exactly what the rule says: a full order in L∞ (0.963 and 0.925
+  against a control of 2.024 and 2.029) and *nothing at all* in L1 (1.966
+  and 1.900, inside the spread of the `p = 3` and `p = 5` runs). So the
+  smooth case reproduces the Burgers finding and decides nothing: it
+  confirms that an integral norm cannot see the interface defect, which is
+  the premise of the question rather than its answer. The question is what
+  happens in L1 on a *discontinuous* solution, where the scheme's own rate
+  is about 0.9 rather than 2 and where positivity is a live concern — Sod
+  and Sedov, run at `p = 1` beside `p = 3` with the floor counts beside the
+  errors.
 
-  **The first discontinuous row (measured in step 7), and it goes against
-  `p = 1`.** On the tracked Sod tube in `D = 1`:
+  **The first discontinuous row, and it goes against `p = 1`.** On the
+  tracked Sod tube in `D = 1`:
 
   | `p` | L1 against the exact solution | tracking | cells | floor hits |
   |---|---|---|---|---|
@@ -1245,32 +1216,26 @@ Two things this package expects to add to that finding:
   leaves on a coarse-fine face is itself a second difference, so the
   indicator fires on it, on a block that is not at the cap. So on this case
   the lower order costs accuracy *and* mesh, and buys nothing in the floor
-  count because Sod fires no floor at all. That last clause is why the
-  question is not closed here: positivity is the argument for `p = 1`, and
-  Sod cannot speak to it. Sedov, whose density spans orders of magnitude
-  and whose bubble sits at the atmosphere, is where the floor count becomes
-  a real column, and it completes the table in step 9.
+  count because Sod fires no floor at all. Positivity is the argument for
+  `p = 1`, and Sod cannot speak to it. Sedov, whose density spans orders of
+  magnitude and whose bubble sits at the atmosphere, is where the floor
+  count becomes a real column.
 
-  **The question is closed in step 9, and the answer is a trade with a
-  price on it.** It took two measurements, and the first was that the
-  *tracked* blast cannot answer it either: `tracking == 1` puts the refined
-  region's boundary ahead of the shock by construction, so a tracked run's
-  prolongation only ever acts on undisturbed ambient gas, and `p = 1` there
-  is indistinguishable from `p = 3` in every column — same exponent, same
-  peak, same cells, same mesh history, no floor hit either way. The
-  question needs a prolongation acting **across a strong shock**, which is
-  the static two-level mesh `sedov_forest(refined = :center)`, where the
-  blast leaves the refined region. There, in `D = 2` over 433 steps:
+  **The answer is a trade with a price on it.** It took two measurements,
+  and the first was that the *tracked* blast cannot answer it either:
+  `tracking == 1` puts the refined region's boundary ahead of the shock by
+  construction, so a tracked run's prolongation only ever acts on
+  undisturbed ambient gas, and `p = 1` there is indistinguishable from
+  `p = 3` in every column — same exponent, same peak, same cells, same mesh
+  history, no floor hit either way. The question needs a prolongation
+  acting **across a strong shock**, which is the static two-level mesh
+  `sedov_forest(refined = :center)`, where the blast leaves the refined
+  region. There, in `D = 2` over 433 steps:
 
   | `p` | L1 against the uniform fine run | reset hits | ghost hits | energy drift |
   |---|---|---|---|---|
   | 1 | 4.427249e-2 | **0** | **0** | 2.0e-15 |
-  | 3 | **4.406604e-2** | 4096 | 40 | 1.24659e-5 |
-
-  *(Since IMEXRungeKutta: `p = 3` is 4.406604e-2, 4136, 40 and 1.24609e-5 —
-  the reset count moves because `:stage` now also resets the step's result,
-  and L1 moves in the eighth digit; `p = 1` floors nothing and is unchanged
-  to roundoff.)*
+  | 3 | **4.406604e-2** | 4136 | 40 | 1.24609e-5 |
 
   So `p = 1` buys **exact positivity** — nothing floored, nothing injected,
   conservation at roundoff — for **0.47%** of L1. That is the argument
@@ -1279,22 +1244,20 @@ Two things this package expects to add to that finding:
   do not disagree: they measure different things, and which one a case is
   in depends on whether its prolongation ever spans a shock.
 
-  **`p = 3` stays the default (decided, unchanged).** The interface-order
-  rule is what it is there for, it is better in L1 on both discontinuous
-  cases that can tell the difference, and it is strictly better on the
-  smooth ones. What the table changes is the *upstream request*: a limited,
-  positivity-preserving prolongation would buy `p = 3`'s 0.47% and `p = 1`'s
-  zero floor count together, and that is now a request with a number on it
-  rather than a guess. It is still not made, because the floor count it
-  would remove is a count of repairs the reset already makes correctly and
-  accounts for exactly.
+  **`p = 3` stays the default.** The interface-order rule is what it is
+  there for, it is better in L1 on both discontinuous cases that can tell
+  the difference, and it is strictly better on the smooth ones. What the
+  table changes is the *upstream request*: a limited,
+  positivity-preserving prolongation would buy `p = 3`'s 0.47% and
+  `p = 1`'s zero floor count together, and that is now a request with a
+  number on it rather than a guess. It is still not made, because the
+  floor count it would remove is a count of repairs the reset already
+  makes correctly and accounts for exactly.
 
 ## Boundaries
 
 **Dirichlet wherever the physics does not require periodicity; periodic
-only where it does** (decided, reversing the first draft, which reached
-for periodic boundaries wherever the problem allowed them because they
-cost no application code). Two arguments overturned that default:
+only where it does.** Two arguments decide it:
 
 - **Cost.** A periodic boundary face is an ordinary face of the exchange
   — a copy, or a prolongation and a restriction where the levels differ,
@@ -1316,9 +1279,9 @@ What that gives per case:
 | Sod | Dirichlet in `x`, periodic transversally | the `x` states are the initial ones until a wave arrives; transversally the planar solution is translation-invariant, and a Dirichlet boundary set to the *initial* state there would be wrong from the first step |
 | Sedov | Dirichlet (the ambient state) on every face | the ambient gas is uniform and at rest until the shock arrives; this is the case that runs the hook on edges and corners |
 | Kelvin–Helmholtz | periodic in all directions | intrinsic: the shear flow and its `sin(4πx)` seed in `x`, McNally's two-interface setup in `y` |
-| Kelvin–Helmholtz, half box *(added 2026-09-29)* | periodic in `x`, reflecting at `y = 0` and `y = ½` | the mirrored seed makes the full box its own mirror image in both lines, so the lower half between two mirrors is the whole flow at half the cells |
+| Kelvin–Helmholtz, half box | periodic in `x`, reflecting at `y = 0` and `y = ½` | the mirrored seed makes the full box its own mirror image in both lines, so the lower half between two mirrors is the whole flow at half the cells |
 
-**Reflecting faces (added 2026-09-29).** A face can be a **mirror**: the
+**Reflecting faces.** A face can be a **mirror**: the
 solution beyond it is its own mirror image, with the velocity normal to it
 reversed. This is TreeAMR's M10 and it is **not a boundary hook** — the face
 is declared when the forest is built (`reflecting = ((lo, hi), …)`) and the
@@ -1328,12 +1291,16 @@ kernel as every other exchange and so on every backend, edges and corners
 included. The boundary hook never sees such a face, and a case whose every
 non-periodic face reflects needs none. What the package supplies is the
 **parity** of each variable, which TreeAMR refuses to build a field set
-over a reflecting forest without, because it is physics:
-[`state_parity`](@ref) makes slot `1 + d` odd across a face normal to `d`
-and everything else even — the same rule for the conserved state and for
-the primitive set, whose two diagnostic slots (the signal speed and the
-floor flag) are scalars — and [`flux_parity`](@ref) gives a flux component
-the product of its variable's parity and its face normal's. `HydroCase`
+over a reflecting forest without — `parity` must give every variable
+`EvenParity` or `OddParity` in each such dimension — because it is physics:
+[`state_parity`](@ref)`(forest, nvars)` makes slot `1 + d` odd across a
+face normal to `d` and everything else even — the same rule for the
+conserved state (`D + 2`) and for the primitive set (`D + 4`), whose two
+diagnostic slots (the signal speed and the floor flag) are scalars — and
+[`flux_parity`](@ref)`(forest, d)` gives a flux component the product of
+its variable's parity and its face normal's. A new
+`FieldSet{T}(forest, …)` anywhere a reflecting forest can reach must pass
+one; on every other forest both return `nothing`. `HydroCase`
 carries the faces as `reflecting`, `evolve!` builds its forest with them,
 and the checkpoint recipe records them. `HydroCase(w::KelvinHelmholtz;
 half = true)` is the case that uses them; see [Kelvin–Helmholtz
@@ -1353,19 +1320,35 @@ passed to `fill_ghosts!`, to `regrid!` (which fills ghosts before its
 transfer) and to `adapt_to_initial_data!` alike; forgetting the second is
 the bug that would arrive one chunk late.
 
+**`evolve!` does not check it — the case does.** The check compares
+`t_end · λ` against the distance from the *feature* to the nearest
+physical boundary, and both of those are case knowledge: the driver knows
+neither where the feature is nor what the supremum of `λ` over all time
+will be, and the `λ` it can measure is the one that is not a bound. So
+`assert_no_arrival` stays in `src/sod.jl`, the tests call it beside the
+run, and every later case owes itself the same. If it fires, shorten
+`t_end` or enlarge the box; do not remove it. It is written on the
+*characteristic* speed rather than on the shock's own travel, which is
+conservative by about 25% on Sod's data and conservative in the right
+direction.
+
+**Inconsistent:** the paragraph before this one, [Scope and
+non-goals](#scope-and-non-goals) ("which the driver checks in advance")
+and [Sedov blast wave](#sedov-blast-wave) ("the driver's arrival check
+enforces") say the driver asserts the arrival; this paragraph, from
+`CLAUDE.md`, says `evolve!` does not check it and the case does.
+
 The hook runs *between* the copy/restriction phase and the prolongation
 sweep, as TreeAMR's M2 amendment describes, because prolongation at a
 domain edge reads tangentially into the source's outer ghosts. A two-level
 mesh whose refined region touches a Dirichlet boundary is the
 configuration that would show a mistake there; the Sod tests include one
-on a face **(implemented in step 5)**, and the Sedov tests include one on
-an edge and a corner.
+on a face, and the Sedov tests include one on an edge and a corner.
 
-**(Implemented in step 4.)** The shock tube is the first downstream use of
-the physical-boundary path, and `src/sod.jl` uses it through
+The shock tube is the first downstream use of the physical-boundary path,
+and `src/sod.jl` uses it through
 `boundary_by_coordinates(AllVariables(x -> prim2con(eos, sod_state(w, x))))`
-handed to `HydroProblem`'s `boundary` keyword, which step 3 put in the
-signature for this. What the exercise showed:
+handed to `HydroProblem`'s `boundary` keyword. What the exercise showed:
 
 - **One callback serves the interior at setup and the exterior forever.**
   The same `AllVariables` object goes to `fill_by_coordinates!` and, wrapped
@@ -1392,7 +1375,7 @@ signature for this. What the exercise showed:
   array including the ghosts the hook wrote: see
   [Measured results](#measured-results).
 
-**(Implemented in step 5: a refined region touching the Dirichlet face.)**
+**A refined region touching the Dirichlet face.**
 `sod_forest(…; refined = :left)` refines every root block whose center
 along the tube is below `x₀`, so the low physical face is covered by
 *fine* blocks and the single coarse-fine face sits at the diaphragm. What
@@ -1403,7 +1386,7 @@ that measured:
   region of every boundary block holds the conserved left or right state
   *exactly* — the level-1 blocks on the low face included, and the ghost
   rows *across* the tube included, which TreeAMR fills unconditionally.
-  Asserted after the run and not before it, for the reason step 4 gives.
+  Asserted after the run and not before it, for the reason given above.
 - **A coarse-fine face beside a physical one conserves.** Mass and energy
   drift by no more than the uniform mesh of the same coarse spacing does,
   and the momentum by the boundary flux; without the fixup all three leak
@@ -1415,21 +1398,21 @@ that measured:
   ordering case in full is a prolongation reaching *tangentially* into
   hook-filled ghosts, and that needs two physical faces meeting at an edge
   or a corner. The tube is periodic across itself, so its only physical
-  faces are its two ends and they never meet. That case is Sedov's, in
-  step 9, where every face is Dirichlet. What `:left` exercises is the
+  faces are its two ends and they never meet. That case is Sedov's, where
+  every face is Dirichlet (below). What `:left` exercises is the
   hook on a fine block and a coarse-fine face with the boundary state on
   one side of the refined region.
 
-**(Measured in step 7.)** The hook's other two call sites, `regrid!` and
-`adapt_to_initial_data!`, are wired in `evolve!` and exercised on the
-tracked tube: after the adaptation cycle every stored entry of the
-outward-facing ghost regions along the tube holds its conserved boundary
-state exactly — ghost rows across the tube included — on blocks that did
-not exist when the run started, and it stays that way through nine
-regrids. What is still not exercised is the M2 ordering case in full,
-which needs two physical faces meeting; that is Sedov's corner, in step 9.
+The hook's other two call sites, `regrid!` and `adapt_to_initial_data!`,
+are wired in `evolve!` and exercised on the tracked tube: after the
+adaptation cycle every stored entry of the outward-facing ghost regions
+along the tube holds its conserved boundary state exactly — ghost rows
+across the tube included — on blocks that did not exist when the run
+started, and it stays that way through nine regrids;
+`test/driver_tests.jl` counts the outward-facing ghost entries that do not
+hold their boundary state on blocks the cycle created.
 
-**(Implemented in step 9: the M2 ordering case in full.)** The blast is
+**The M2 ordering case in full.** The blast is
 Dirichlet on every face, so `sedov_forest(refined = :corner)` puts a *fine*
 block where every physical face meets — two in `D = 2`, three in `D = 3` —
 and `refined = :edge` puts a line of them along a 3D edge, where two do.
@@ -1466,21 +1449,20 @@ each measures something the others cannot.
 |---|---|---|---|---|
 | entropy wave | 1, 2, 3 | periodic | exact | the scheme's order; the interface-order rule for a system; conservation on a static mesh |
 | Sod shock tube | 1, 2, (3) | Dirichlet in `x`, periodic else | exact Riemann solver | shock capturing against a known answer; conservation through regrids; direction independence; the boundary hook |
-| Sedov blast | 1, 2, **3** | Dirichlet (ambient) on every face | similarity law; uniform-fine run | a strong shock through the floors and the atmosphere reset; a refined region that follows a closed expanding surface (a growing *disk*, not the shell this row first said — amended in step 9); the 3D coarse-fine face; the boundary hook on edges and corners |
+| Sedov blast | 1, 2, **3** | Dirichlet (ambient) on every face | similarity law; uniform-fine run | a strong shock through the floors and the atmosphere reset; a refined region that follows a closed expanding surface (a growing *disk*); the 3D coarse-fine face; the boundary hook on edges and corners |
 | Kelvin–Helmholtz | 2 | periodic | published diagnostics; uniform-fine run | a contact-dominated, vortical flow; refinement following a growing structure; the picture |
 
 **Initial data is given as primitives** — a pure `x -> P` closure per
 case, returning all `D + 2` values as a tuple — and converted with
-`prim2con` once per cell. TreeAMR's coordinate callbacks are today called
-once *per variable*, `(x, v) -> value`, which would evaluate `P(x)`
-`D + 2` times per cell and, worse, would make the boundary hook do the
-same at every RHS evaluation; an all-variables form of
-`fill_by_coordinates!`, of `adapt_to_initial_data!`'s `initial` and of
-`CellBoundary` is therefore an **upstream prerequisite** (decided; see
+`prim2con` once per cell. TreeAMR's per-variable coordinate callbacks,
+`(x, v) -> value`, would evaluate `P(x)` `D + 2` times per cell and,
+worse, would make the boundary hook do the same at every RHS evaluation;
+an all-variables form of `fill_by_coordinates!`, of
+`adapt_to_initial_data!`'s `initial` and of `CellBoundary` is therefore an
+**upstream prerequisite** (see
 [Upstream prerequisites](#upstream-prerequisites)), and the cases are
 written against it.
-**Point samples at cell centers**, not cell averages (decided in step 4,
-which is the first case to use them): every
+**Point samples at cell centers**, not cell averages: every
 case but the entropy wave is discontinuous or nearly so, where a cell
 average is no better defined than a sample, and the initial-data cycle
 re-evaluates the data on every mesh it produces, which a closed-form
@@ -1505,22 +1487,19 @@ limiter, and the slope of the error against `h` is 2 or it is not.
 It is also the smooth case for the interface-order table above and for
 the static-mesh conservation control. It is a contact wave, which is
 exactly what HLLE diffuses most; the rate is unaffected, the constant is
-not, and the HLLE/HLLC comparison has its first number here. *(Amended in
-step 15: it never did. Every entropy-wave number in this file is HLLE's; the
-comparison was made on the shear layer in step 10, where it decided
-something, and the entropy wave under HLLC is listed under [Possible
-extensions](#possible-extensions).)*
+not. Every entropy-wave number in this file is HLLE's; the HLLE/HLLC
+comparison was made on the shear layer, where it decided something, and
+the entropy wave under HLLC is listed under [Possible
+extensions](#possible-extensions).
 
 Not a demo: it lives in the tests and the viewer does not draw it.
 
-**(Implemented in step 3; the two-level runs measured in step 5.)**
-`src/entropywave.jl`. Step 3 measured it on the *uniform* mesh
-(`refined = false`), which is the control; step 5 ran the same study on the
-M3 two-level hierarchy and it is where the package's two central numbers
-come from — conservation of all `D + 2` integrals with the fixup against a
-ten-order leak without it, and the interface-order table at `p = 1, 3, 5`.
-The rates and the drifts are in [Measured results](#measured-results). What
-the writing settled:
+`src/entropywave.jl`. On the *uniform* mesh (`refined = false`) it is the
+control; on the M3 two-level hierarchy it is where the package's two
+central numbers come from — conservation of all `D + 2` integrals with the
+fixup against a ten-order leak without it, and the interface-order table
+at `p = 1, 3, 5`. The rates and the drifts are in [Measured
+results](#measured-results). What the writing settled:
 
 - **The parameters are a struct**, `EntropyWave(T, Val(D); ρ₀ = 1,
   a = 1//5, v = 1, p₀ = 1, γ = 7//5, L = 1, floors)`, `isbits` and
@@ -1559,10 +1538,10 @@ so.
 **Reference:** the exact Riemann solution (Toro's pressure iteration and
 sampling), host `Float64` code in the role TreeWave's Hankel table
 plays, evaluated at cell centers and compared in the volume-weighted L1
-norm. **(measured in step 4: 0.903)** L1 convergence at a rate between 0.8
-and 1 on a uniform mesh, as a limited second-order scheme gives on a
-solution with a contact and a shock — this is a check that the scheme is
-right, not a claim of order.
+norm. L1 convergence at a rate between 0.8 and 1 on a uniform mesh —
+0.903 measured — as a limited second-order scheme gives on a solution
+with a contact and a shock; this is a check that the scheme is right, not
+a claim of order.
 
 **What it measures beyond that:**
 
@@ -1570,29 +1549,29 @@ right, not a claim of order.
   follows the shock (and the contact, and the rarefaction — the Löhner
   indicator on `ρ` fires on all three), the mesh is rebuilt every chunk,
   and all `D + 2` integrals hold to roundoff with the fixup and leak
-  without it. The M8b acceptance test, for a system. (Measured in step 7:
-  they do, and the leak is `4.9e8` to `7.4e9` times the bound.)
+  without it. The M8b acceptance test, for a system. They do, and the
+  leak is `4.9e8` to `7.4e9` times the bound.
 - **A tracked shock matches the uniformly fine reference at fewer
   cells**, reduced onto a common grid as `track_shock` does, with the
   uniform coarse mesh as the control that says refinement bought
-  something (measured in step 7: the error ratio is 1.0004 and 1.0000
-  against a control of 3.678 and 1.850).
-- **Direction independence, bit for bit** (measured in step 4: both
-  halves hold, with no differing entry anywhere). On a uniform mesh
-  the tube along `y` is the tube along `x` transposed, and the `D = 2`
-  planar tube's profile equals the `D = 1` run's: the transverse flux
-  differences are *exactly* zero (both faces see identical states), and
-  adding an exact zero is exact. A cheap, sharp claim about the flux
-  kernel having no preferred direction, worth asserting because the
-  `ntuple` loops over `d` are the place a stray asymmetry would hide.
+  something (the error ratio is 1.0004 and 1.0000 against a control of
+  3.678 and 1.850).
+- **Direction independence, bit for bit** (both halves hold, with no
+  differing entry anywhere). On a uniform mesh the tube along `y` is the
+  tube along `x` transposed, and the `D = 2` planar tube's profile equals
+  the `D = 1` run's: the transverse flux differences are *exactly* zero
+  (both faces see identical states), and adding an exact zero is exact. A
+  cheap, sharp claim about the flux kernel having no preferred direction,
+  worth asserting because the `ntuple` loops over `d` are the place a
+  stray asymmetry would hide.
 - **The boundary hook**, as above.
 
 `D = 3` is a smoke test at small size; the planar tube in 3D exercises
 nothing the 2D one does not, except cost.
 
-**(Implemented in step 4.)** `src/exact_riemann.jl` and `src/sod.jl`,
-measured on the *uniform* mesh. The numbers are in
-[Measured results](#measured-results). What the writing settled:
+`src/exact_riemann.jl` and `src/sod.jl`. The numbers on the uniform mesh
+are in [Measured results](#step-4--sod-on-the-uniform-mesh). What the
+writing settled:
 
 - **The `t ≈ 0.29` above is the shock's travel time, and the assertion is
   made on the characteristic speed instead.** `assert_no_arrival` compares
@@ -1617,7 +1596,7 @@ measured on the *uniform* mesh. The numbers are in
   the transverse *extents* follow from the tube's root spacing rather than
   being given — a box of side `L` across would be `roots[direction]` times
   too much mesh.
-- **`λ` comes from the exact solution**, which is the amendment recorded
+- **`λ` comes from the exact solution**, which is the point recorded
   under [Time integration and the time
   step](#time-integration-and-the-time-step) and the one thing about this
   case that generalizes badly: a driver without a closed-form solution
@@ -1632,17 +1611,17 @@ measured on the *uniform* mesh. The numbers are in
   not move at all. That is an equality with a closed form, and it fails for
   a forgotten hook, for a reflecting boundary and for a run long enough for
   a wave to arrive. The roundoff conservation claim proper is made for Sod
-  on a refined mesh in step 5, as the *difference* between two runs sharing
+  on a refined mesh (below), as the *difference* between two runs sharing
   this same boundary flux.
 
-**(Implemented in step 5: the two static two-level configurations.)**
-`sod_forest` gains `refined`, which is `false`/`:none`, `:middle` or
-`:left`. Both refined meshes are still non-periodic along the tube and
-periodic across it, both are 2:1 balanced, and both refine whole root
-blocks on a criterion that reads the tube's axis *alone* — across the tube
-there is one root block and the solution does not vary, so a criterion that
-also asked about the transverse center would refine nothing or everything
-depending on the box's thickness. What step 5 settled about the case:
+**The two static two-level configurations.** `sod_forest` takes
+`refined`, which is `false`/`:none`, `:middle` or `:left`. Both refined
+meshes are still non-periodic along the tube and periodic across it, both
+are 2:1 balanced, and both refine whole root blocks on a criterion that
+reads the tube's axis *alone* — across the tube there is one root block and
+the solution does not vary, so a criterion that also asked about the
+transverse center would refine nothing or everything depending on the
+box's thickness. What they settled about the case:
 
 - **`:middle` exists so that the shock crosses a coarse-fine face.** It
   refines the root blocks whose center along the tube lies in
@@ -1654,7 +1633,7 @@ depending on the box's thickness. What step 5 settled about the case:
   reason, so the crossing is asserted from the exact solution rather than
   assumed.
 - **`:left` puts the refined region against the Dirichlet face**, with the
-  single coarse-fine face at `x₀`; see the step-5 note under
+  single coarse-fine face at `x₀`; see the note under
   [Boundaries](#boundaries) for what it does and does not exercise.
 - **The mass and energy drift here is the boundary's, not the coarse-fine
   face's, and it is a discretization error rather than roundoff.** The
@@ -1669,7 +1648,9 @@ depending on the box's thickness. What step 5 settled about the case:
   plain roundoff bound holds on a mesh with a coarse-fine face in it. The
   negative control is compared against the run *with* the fixup and not
   against that bound, since the leak is what is being measured and
-  inflating the yardstick would measure the yardstick.
+  inflating the yardstick would measure the yardstick. So a conservation
+  test written at `8 eps · scale · nsteps` fails on a coarse tube for a
+  reason that has nothing to do with the coarse-fine face.
 - **The momentum's yardstick is the boundary flux and not a norm.** Sod's
   initial state is at rest, so `Σ hᴰ |S|` is *exactly* zero and
   `conserved_scales` gives the momentum no scale at all. The closed form
@@ -1679,13 +1660,11 @@ depending on the box's thickness. What step 5 settled about the case:
 - **The two-level tube's error is 1.338 times the uniform run's at the same
   finest spacing**, in `D = 1` and in `D = 2` alike, and below the uniform
   run's at the coarse spacing. That is a sanity bound and not the
-  tracked-shock claim, which needs a mesh that follows the shock and is
-  step 7's.
+  tracked-shock claim, which needs a mesh that follows the shock (below).
 
-**(Implemented in step 7: the tracked tube.)** `HydroCase(::SodTube)` and
-`evolve!`; the numbers are in
-[Measured results](#step-7--the-driver-and-the-tracked-shock-tube). What
-step 7 settled about the case:
+**The tracked tube.** `HydroCase(::SodTube)` and `evolve!`; the numbers are
+in [Measured results](#step-7--the-driver-and-the-tracked-shock-tube).
+What it settled about the case:
 
 - **A tracked shock does match the uniformly fine reference, and the
   match is much better than the static mesh's 1.338.** The tracked run's
@@ -1707,10 +1686,10 @@ step 7 settled about the case:
   in `D = 2` (28%). By `t = 0.2` the rarefaction head has reached
   `x = 0.263` and the shock `x = 0.850`, so 59% of the box holds something
   the criterion fires on; the `D = 2` run stops at `t = 0.15` for cost,
-  where it is 44%. A case whose feature is a thin shell — Sedov, in step 9
-  — is where the saving becomes the headline.
+  where it is 44%. A case whose feature is a thin shell — Sedov — is where
+  the saving becomes the headline.
 - **`speed_headroom = 1` throws in the first chunk**, which is the
-  measurement that turns the step-4 amendment into a parameter. See
+  measurement that makes the headroom a parameter. See
   [Time integration and the time
   step](#time-integration-and-the-time-step).
 - **The boundary hook's other two call sites hold.** After the adaptation
@@ -1744,14 +1723,13 @@ and the **post-shock density jump** of 6. `ξ₀(γ, D)` and the full radial
 profile come from the standard quadrature of the similarity ODE (Kamm &
 Timmes 2007), as host `Float64` reference code; the classical value
 `ξ₀ ≈ 1.033` for `γ = 7/5` in 3D (Taylor) is the check on that code.
-The profile is the second part and is **an extension, not a milestone**
-(decided): the exponent, the jump, and the comparison against a uniform
+The profile is the second part and is **an extension, not a milestone**:
+the exponent, the jump, and the comparison against a uniform
 fine run are the acceptance, and the profile is what makes the
-radial-scatter figure (below) quantitative rather than qualitative
-**(drawn in step 11: `bin/visualize2d.jl --case=sedov` sweeps the
-profile parametrically in `u` and draws it against the *measured* `E₀`,
-stopping at the shock, the law being the strong-shock limit and
-describing nothing outside it)**.
+radial-scatter figure (below) quantitative rather than qualitative.
+`bin/visualize2d.jl --case=sedov` sweeps the profile parametrically in `u`
+and draws it against the *measured* `E₀`, stopping at the shock, the law
+being the strong-shock limit and describing nothing outside it.
 
 **What it measures:**
 
@@ -1759,23 +1737,16 @@ describing nothing outside it)**.
   where (the interior bubble against fine ghosts at the shock), what the
   reset injects, that the drift net of the injection is roundoff, and
   what `:stage` buys over `:step`.
-- **A refined shell that grows while the interior coarsens** — the
-  Sedov mesh problem TreeWave could only imitate with the wave equation.
-  Block count and coverage of the shell against time.
 - **The 3D coarse-fine face**, where the fixup averages `2 × 2` fine
   faces, under a real shock. The 3D adaptive run is expensive (TreeWave
-  measured minutes for a wave-equation shell); the test runs it small and
-  short (`N = 8`, few roots, cap 1, a few chunks), and `bin/` runs it at
-  demo size. *(Amended in step 15: the test runs it at `N = 4`, `roots = 4`,
-  cap 1 over 15 chunks — see [Step 9](#step-9--the-sedov-blast) — and
-  `bin/` does not run it at all. The Sedov viewer of step 11 is `D = 2`
-  only, since a 3D render needs a midplane slice; that render is under
-  [Possible extensions](#possible-extensions).)*
+  measured minutes for a wave-equation shell); the test runs it at
+  `N = 4`, `roots = 4`, cap 1 over 15 chunks — see
+  [Step 9](#step-9--the-sedov-blast) — and `bin/` does not run it at all.
+  The Sedov viewer is `D = 2` only, since a 3D render needs a midplane
+  slice; that render is under [Possible extensions](#possible-extensions).
 - **The early phase is where the time step is smallest** — `c_s` inside
-  the hot spot scales as `(E₀/V_D(r₀))^{1/2}` — and it is *also* where
-  `λ_max` only decreases, so the per-chunk `dt` is a bound. Both facts
-  are recorded here so that the first chunk being slow is expected rather
-  than investigated.
+  the hot spot scales as `(E₀/V_D(r₀))^{1/2}` — which is recorded here so
+  that the first chunk being slow is expected rather than investigated.
 
 Dirichlet boundaries holding the ambient state on every face — the case
 that runs the boundary hook on edges and corners, see
@@ -1783,10 +1754,9 @@ that runs the boundary hook on edges and corners, see
 which the similarity law predicts in advance and the driver's arrival
 check enforces.
 
-**(Implemented in step 9.)** `src/sedov_reference.jl` holds the similarity
-law and `src/sedov.jl` the case; the numbers are in
-[Measured results](#step-9--the-sedov-blast). What the case decided, and
-where the paragraphs above needed amending:
+`src/sedov_reference.jl` holds the similarity law and `src/sedov.jl` the
+case; the numbers are in [Measured results](#step-9--the-sedov-blast).
+What the case decided:
 
 - **The parameters.** `p_amb = 1/10⁵`, `r₀ = 1/16` in `D = 1, 2` and `1/8`
   in `D = 3`, `ρ_atm = p_atm = 1/10⁶` and `p_floor = 1/10⁸`. The
@@ -1803,14 +1773,23 @@ where the paragraphs above needed amending:
   chunks instead of 40 — and the wider top hat is also what lets the centre
   flatten within an affordable `t_end`. `D = 3` uses four, where the cap is
   one level.
-- **`speed_headroom = 2`, and the sentence about `λ_max` above is wrong.**
-  "The early phase … is *also* where `λ_max` only decreases" is right about
-  the blast and wrong about the first chunk, for the same reason it was
-  wrong on Sod: the jump at `r₀` is a Riemann problem and the gas on the
-  hot side of its contact moves, so `|v| + c_s` there exceeds the hot
-  spot's own `c_s` before the discontinuity has resolved. Measured
-  first-chunk growth **1.16537, 1.25164, 1.10396** in `D = 1, 2, 3`, and
-  those are also the largest growths over each run. See
+- **Sedov's chunk bound is tighter than Sod's, and the hot spot's `c_s` is
+  why.** The derived margin covers `speed_headroom · λ · chunk` at the
+  cap's spacing and must stay under one finest-level block width, and the
+  blast's early `λ` is `sqrt(γ p_hot/ρ₀)` with `p_hot = (γ−1)E₀/V_D(r₀)` —
+  **6.76** in `D = 2` and **8.27** in `D = 3`, against an `O(1)` wave
+  speed. It also scales as `r₀^{-D/2}`, so halving `r₀` doubles `λ` *and*
+  halves `h_cap`, tightening the admissible chunk by four.
+  `chunk = 1/400` fits the `D = 2` configuration at `r₀ = 1/16` and
+  `1/1000` is needed at `1/32`; a chunk that does not fit is refused by
+  `refinement_buffer` naming the constraint, which is the guard working.
+- **`speed_headroom = 2`.** The jump at `r₀` is a Riemann problem, as on
+  Sod, and the gas on the hot side of its contact moves, so `|v| + c_s`
+  there exceeds the hot spot's own `c_s` before the discontinuity has
+  resolved: `λ_max` grows within the first chunk even though it decreases
+  over the blast. Measured first-chunk growth **1.16537, 1.25164,
+  1.10396** in `D = 1, 2, 3`, and those are also the largest growths over
+  each run. See
   [Time integration and the time step](#time-integration-and-the-time-step).
 - **The measured `E₀` is what the law takes, and the ratios are
   1.00000, 1.03451, 1.04445.** In `D = 1` the cells that receive the
@@ -1830,22 +1809,26 @@ where the paragraphs above needed amending:
   this case uses, so `E₀` is the energy on *both* sides of a planar blast;
   Kamm & Timmes count one side. The cylindrical and spherical values agree
   with the recalled ones in every digit.
-- **The refined region is a growing *disk*, not a shell** (amended). The
-  prediction above — "a refined shell that grows while the interior
-  coarsens", and the step plan's "block count rising then falling behind
-  the shock" (that plan was `PLAN.md`, deleted in step 15) — assumes
-  the evacuated bubble is flat. It is not: the similarity
-  solution's `G(λ) ∼ λ^{D/(γ−1)}` is a **steep density ramp**, and a
-  Löhner indicator on `ρ` fires throughout it, correctly, because the ramp
-  is under-resolved. Measured block history in `D = 2`: 40 → 88 → 112 → …
-  → 196 over 40 chunks, **monotone**. Only at the very centre, where the
-  ramp has flattened, does the criterion fall silent — at `t_end` the
-  blocks within `r < 0.06` report `Coarsen` while those from 0.06 to 0.42
-  fire — so the hollow opens from the inside out and opens late. The mesh
-  still follows the blast (`tracking == 1`) and still saves cells (12544
-  against 16384), which is what the milestone was for; what is corrected is
-  the shape. A criterion that produced a shell would have to know that a
-  monotone ramp behind a shock is not a feature, which is not something a
+- **In `src/sedov_reference.jl`, `V − V₀` is never formed.** The similarity
+  parameter and its centre value agree to the last bit long before `λ` is
+  small — the substitution raises `w` to a power near 10 — so every formula
+  is written in terms of `u = V − V₀` and `V` is only ever *formed*, as
+  `V₀ + u`. Writing the difference instead produces a `NaN` at
+  `λ ≈ 10⁻³`, and the adaptive quadrature then recurses to its depth cap on
+  a panel it can never accept, which looks like a hang rather than an
+  error.
+- **The refined region is a growing *disk*, not a shell.** The evacuated
+  bubble is not flat: the similarity solution's `G(λ) ∼ λ^{D/(γ−1)}` is a
+  **steep density ramp**, and a Löhner indicator on `ρ` fires throughout
+  it, correctly, because the ramp is under-resolved. Measured block history
+  in `D = 2`: 40 → 88 → 112 → … → 196 over 40 chunks, **monotone**. Only at
+  the very centre, where the ramp has flattened, does the criterion fall
+  silent — at `t_end` the blocks within `r < 0.06` report `Coarsen` while
+  those from 0.06 to 0.42 fire — so the hollow opens from the inside out
+  and opens late. The mesh still follows the blast (`tracking == 1`) and
+  still saves cells (12544 against 16384). A criterion that produced a
+  shell would have to know that a monotone ramp
+  behind a shock is not a feature, which is not something a
   second-difference indicator can be told.
 - **The tracked mesh cannot measure the coarse-fine face at all, and that
   is a consequence of tracking rather than a defect.** `tracking == 1`
@@ -1859,16 +1842,19 @@ where the paragraphs above needed amending:
   prolongation order and the floor counts is therefore made on a **static**
   two-level mesh, `sedov_forest(refined = :center)`, where the blast starts
   inside the refined region and leaves it at `|x_d| = L/4`. That is the
-  blast's `sod_forest(:middle)`.
-- **`sedov_static` replaces the planned `uniform_sedov`.** What the case
-  needed was a static-mesh driver, which `uniform_run` — the driver with
-  the cap at zero — cannot be; the uniform control is `sedov_static` with
+  blast's `sod_forest(:middle)`. A tracked run that "conserves" is not
+  evidence that the fixup does anything; Sod's tracked tube did show a
+  leak, and only because its Dirichlet boundary sits inside the refined
+  region.
+- **`sedov_static` is the static-mesh driver.** What the case needs is a
+  static-mesh driver, which `uniform_run` — the driver with the cap at
+  zero — cannot be; the uniform control is `sedov_static` with
   `refined = false`.
 
 ### Kelvin–Helmholtz instability
 
 The case that exists for the picture, and the only one without an exact
-solution. **Setup (decided): McNally, Lyra & Passy (2012), ApJS 201:18**
+solution. **Setup: McNally, Lyra & Passy (2012), ApJS 201:18**
 — a smooth-ramp shear layer designed as a *converged* code-comparison
 test, rather than the classic sharp-interface setup whose small-scale
 structure never converges and whose secondary rolls are grid noise. On
@@ -1882,28 +1868,25 @@ the periodic unit square with `γ = 5/3`, `p = 5/2`, `ρ₁ = 1`, `ρ₂ = 2`,
     y ∈ [¾, 1):   ρ = ρ₁ − ρ_m e^{(¾ − y)/L}       v_x = v₁ − v_m e^{(¾ − y)/L}
     v_y = 0.01 sin(4πx)
 
-run to `t = 1.5`. **(Checked against the paper in step 10.)** Every line
-above — the four branches and their signs, `ρ_m`, `v_m`, the parameter
-values, the perturbation, `γ`, `p` and `t_end` — is equations (1)–(5) of
-arXiv:1111.1764 term for term; `test/kelvinhelmholtz_tests.jl` re-evaluates
-them independently from the paper's own literals and the two agree **bit
-for bit** over a grid of sample points. One thing below was wrong and is
-corrected in place; it is flagged where it was. Step 6
-uses the density ramp's **shape** — the four branches above, in one
-dimension, at uniform pressure — as the smooth calibration profile for
-the refinement criterion, and nothing else of the setup. Nothing there
-depended on the transcription being faithful, and the one error was not in
-the profile in any case, so the calibration table stands unamended.
+run to `t = 1.5`. Every line above — the four branches and their signs,
+`ρ_m`, `v_m`, the parameter values, the perturbation, `γ`, `p` and
+`t_end` — is equations (1)–(5) of arXiv:1111.1764 term for term;
+`test/kelvinhelmholtz_tests.jl` re-evaluates them independently from the
+paper's own literals and the two agree **bit for bit** over a grid of
+sample points. [Step 6](#step-6--the-refinement-criterion) uses the
+density ramp's **shape** — the four branches above, in one dimension, at
+uniform pressure — as the smooth calibration profile for the refinement
+criterion, and nothing else of the setup.
 
 Its diagnostics are the paper's: the **amplitude of the seeded mode**
 `M(t)`, from the projections of `v_y` onto `sin(4πx)` and `cos(4πx)`
 weighted by `e^{−4π|y − ¼|}` for `y < ½` and by `e^{−4π|(1−y) − ¼|}` for
 `y ≥ ½`, so that **both interfaces are read, mirrored onto one another**
-(equations (6)–(8); the first draft of this paragraph said "so that the
-lower interface alone is read", which is wrong — **corrected in step 10**.
-The two interfaces carry the same mode with opposite sign of `∂_y v_x`, and
-the mirrored weight is what lets them add rather than cancel), and the
-**maximum `y`-kinetic energy** `max ½ ρ v_y²` over the domain against time.
+(equations (6)–(8). The two interfaces carry the same mode with opposite
+sign of `∂_y v_x`, and the mirrored weight is what lets them add rather
+than cancel; reading one interface alone would halve the signal and pick
+up the other interface's mode with the wrong sign), and the **maximum
+`y`-kinetic energy** `max ½ ρ v_y²` over the domain against time.
 
 On a mesh whose cells are not all the same size the sums are
 **area-weighted**, the paper's equations (14)–(17) rather than its
@@ -1912,11 +1895,11 @@ uniform-grid (6)–(9):
     s_i = V_y w_i sin(4πx_i) e_i     c_i = V_y w_i cos(4πx_i) e_i
     d_i = w_i e_i                    M   = 2 √((Σs_i/Σd_i)² + (Σc_i/Σd_i)²)
 
-with `w_i` the cell's area. That is the form this package uses (decided in
-step 10), because an adaptive mesh has cells of two sizes by construction:
-the uniform sums would weight a coarse cell as though it were a fine one
-and `M` would jump at every regrid. The two forms agree exactly on a
-uniform mesh, where `w_i` cancels between numerator and denominator.
+with `w_i` the cell's area. That is the form this package uses, because an
+adaptive mesh has cells of two sizes by construction: the uniform sums
+would weight a coarse cell as though it were a fine one and `M` would jump
+at every regrid. The two forms agree exactly on a uniform mesh, where
+`w_i` cancels between numerator and denominator.
 
 `M(t)` grows exponentially through the linear phase and eventually
 saturates. Two upper bounds are quoted and the measured rate must stay
@@ -1944,36 +1927,30 @@ a number.
 - **Conservation of `S_x`, `S_y` and `E`** under a flow with no shocks
   to speak of, where the leak without the fixup is small in absolute
   terms and the roundoff claim is correspondingly sharper.
-- **HLLE against HLLC** (predicted): at the same resolution HLLC's rolls
-  are visibly sharper and its `M(t)` closer to the fine reference,
-  because the shear layer *is* a contact. This is the measurement that
-  decides whether HLLC becomes the default or stays a switch.
-  **(Measured in step 10: HLLC wins by a factor of two in linear
-  resolution, and it becomes this case's default; the package-wide default
-  stays HLLE. See "Riemann solver" and "Step 10" below.)**
+- **HLLE against HLLC**: HLLC wins by a factor of two in linear
+  resolution, because the shear layer *is* a contact, and it is this
+  case's default; the package-wide default stays HLLE. See [Riemann
+  solver](#riemann-solver) and [Step 10](#step-10--kelvinhelmholtz).
 - **The picture**: a filmstrip of `ρ` at four times, one heatmap per
   block with the block boundaries drawn and coloured by level, in the
   manner of TreeWave's `visualize2d.jl`; `M(t)` and the maximum
   `y`-kinetic energy against time with the uniform reference over them;
-  block count against time. **(Implemented in step 11 as
-  `bin/visualize2d.jl --case=kh`, exactly as described.** The diagnostics
-  are the ones `kh_run` records, reached through the `observer`
-  pass-through step 11 added to it, so the figure plots the run's own
-  curves rather than a second computation of them. The four frames are
+  block count against time — `bin/visualize2d.jl --case=kh`. The
+  diagnostics are the ones `kh_run` records, reached through its
+  `observer` pass-through, so the figure plots the run's own curves rather
+  than a second computation of them. The four frames are
   `t = 0, 1/2, 1, 3/2` on one colour range, the fit window `2a ≤ M ≤ 6a`
   is shaded under `M(t)`, and the uniform fine run's 256 blocks are drawn
-  across the block count as the mesh the 232 are being compared with.)
-  **(Extended after step 11 with `--movie`, which was not part of what H5
-  accepted and is recorded as an addition rather than folded in.** The
-  design asked for four frames and four frames is what H5 was marked done
-  on; the movie keeps all 301 the observer hands over instead. It exists
-  because the strip cannot show *order* — that the mode decays before it
-  grows, and that the refined region thickens with the rolls rather than
-  travelling with them — which is the one thing this case is for. See
-  "A movie" below.)
+  across the block count as the mesh the 232 are being compared with.
+  `--movie` keeps all 301 frames the observer hands over instead of four.
+  It exists because the strip cannot show *order* — that the mode decays
+  before it grows, and that the refined region thickens with the rolls
+  rather than travelling with them — which is the one thing this case is
+  for. See [A movie](#a-movie).
 
-**What step 10 decided, beside the flux** — each measured rather than
-assumed, and each recorded with its number under "Step 10" below:
+**What the case decided, beside the flux** — each measured rather than
+assumed, and each recorded with its number under
+[Step 10](#step-10--kelvinhelmholtz):
 
 - **`speed_headroom = 1`.** The flow is smooth and subsonic and carries no
   Riemann problem whose star region could outrun the initial data's
@@ -1981,8 +1958,8 @@ assumed, and each recorded with its number under "Step 10" below:
   Measured worst growth over 300 chunks: **1.00031**. The entropy wave is
   the only other case at `1`.
 
-  **(Amended after step 11: this holds at the calibrated cap and not at
-  deeper ones, and the reason is not the physics.)** `λ` does grow within a
+  **This holds at the calibrated cap and not at deeper ones, and the
+  reason is not the physics.** `λ` does grow within a
   chunk here — the recorded 1.00031 says so — and at `speed_headroom = 1`
   the step is sized for exactly `λ`, so the *only* thing absorbing that
   growth is integer-step quantization: the step actually taken is
@@ -2014,7 +1991,8 @@ assumed, and each recorded with its number under "Step 10" below:
   and on this case the buffer is what decides how much of the box is
   refined: a 3-cell margin (`chunk = 1/200`) refines 128 of the 256
   possible finest blocks and a 7-cell one (`chunk = 1/64`) refines all 256,
-  which is the uniform fine mesh under another name. **A feature that grows
+  which is the uniform fine mesh under another name and passes every test
+  in the file. **A feature that grows
   rather than travels gets nothing from a travelling margin** and pays the
   whole saving for it — which is new, the tube and the blast both having
   features that travel.
@@ -2025,7 +2003,7 @@ assumed, and each recorded with its number under "Step 10" below:
   the clock. `M` first *decays* while the ramp sheds the transient, so a
   window opened at `t = 0` would measure that instead.
 
-**The half box (added 2026-09-29).** `KelvinHelmholtz(…; seed =
+**The half box.** `KelvinHelmholtz(…; seed =
 :mirrored)` multiplies the seeded mode by `sin(2πy)`: McNally's mode at the
 lower interface, its mirror image at the upper one, and zero on both mirror
 lines. Under it the whole setup is its own mirror image in `y = 0` and `y =
@@ -2034,7 +2012,8 @@ sin(4πx)` was not, being even in a line where a normal velocity must be odd
 — so `HydroCase(w; half = true)` runs the lower half alone, periodic in `x`
 and reflecting at both `y` faces, with the full box's root blocks. The
 envelope is evaluated at the mirror point and negated in the upper half,
-so that the initial data is odd **exactly** and not to roundoff, and
+so that the initial data is odd **exactly** and not to roundoff —
+`sin(2π(1 − y))` is not `−sin(2πy)` in floating point — and
 `mode_amplitude` reads the upper half's `v_y` reversed under this seed, so
 that the two interfaces add rather than cancel and the two boxes report
 one `M`. The half box refuses McNally's seed. It exists for the showcase
@@ -2105,11 +2084,10 @@ cadence, `+1` because the margin must exceed the motion.
 stencil reaches one cell past the block face. The driver runs
 `fill_ghosts!` and the `con2prim` pass before flagging, and flags on `P`.
 
-**(Implemented in step 6.)** `src/refinement.jl`: `lohner`, `cell_tau`,
+`src/refinement.jl`: `lohner`, `cell_tau`,
 `indicator_scales`, `hydro_flags` and `refinement_buffer`, with the
 calibration in [Measured results](#step-6--the-refinement-criterion).
-What the implementation settled, and where the prediction above needed
-amending:
+What the implementation settled:
 
 - **The denominator, exactly as written above**, with `ε = 1//100` — the
   literature's value, not calibrated, since it is the local floor's
@@ -2139,7 +2117,7 @@ amending:
   capture over three or four cells takes it down to 0.57 and leaves it
   there. So Löhner's canonical `τ > 0.8` detects a jump in the *data* and
   would miss a shock the scheme is actually carrying.
-- **A kink does not score `O(1)` forever** (amended in step 6). The
+- **A kink does not score `O(1)` forever.** The
   expectation was that the ratio of slope jump to slope sum is
   `h`-independent, so that a rarefaction's head — a corner against a flat
   state — would fire at every resolution as a shock does. It does not:
@@ -2156,8 +2134,8 @@ amending:
   the HLL diffusion spreads it over more cells the longer the run goes
   on. It will hold the cap in practice.
 
-**(Measured in step 7: the criterion driving a real `regrid!`, and the
-buffer against a real `λ_max · chunk`.)** The calibrated thresholds do what
+**The criterion driving a real `regrid!`, and the buffer against a real
+`λ_max · chunk`.** The calibrated thresholds do what
 they were calibrated to do on a mesh that moves: on the tracked Sod tube
 the initial-data cycle converges in 3 passes in `D = 1` and 2 in `D = 2`,
 the mesh holds the diaphragm at the cap, and every strongly firing cell
@@ -2178,11 +2156,11 @@ partial credit is real.
 Regridding changes the length and the meaning of the state vector, so
 each chunk is a fresh `solve` and a fresh `HydroProblem` — TreeAMR's
 prescription, TreeWave's and Burgers' practice. What is different here is
-that **there is exactly one time-stepping loop** (decided):
+that **there is exactly one time-stepping loop**:
 
     adapt_to_initial_data!(U, ops; initial, flags, buffer, boundary)
     p = HydroProblem(U, ops; eos, floors, limiter, riemann, fixup)
-    for c in 1:chunk_count(t_end, chunk)         # was `while t < t_end`
+    for c in 1:chunk_count(t_end, chunk)
         λ  = max_signal_speed(p)                     # block_mapreduce over P
         dt = cfl · minimum_spacing(forest) / (D · speed_headroom · λ)
         integ = IRK.init(IMEXProblem(hydro_rhs!, nothing, u, (t, stop), p),
@@ -2206,15 +2184,14 @@ that **there is exactly one time-stepping loop** (decided):
         end
     end
 
-*(Amended in step 15, to match `evolve!`: the step carries the case's
-`speed_headroom` since step 7, and the loop runs over `chunk_count(t_end,
-chunk)` chunks since step 12, the last one ending on `t_end` exactly — see
-[Step 12 — precision](#step-12--precision). The loop also skips the regrid
-after its last chunk, as the step-7 notes below say.)* *(Amended
-2026-10-01: the checkpoint is written after the observer and before the
-regrid, and the regrid — flags, margin, `regrid!`, problem, gather, reset —
-is one function, `regrid_chunk!`, which a restart calls first; see
-[Checkpoint and restart](#checkpoint-and-restart).)*
+The step carries the case's `speed_headroom`, and the loop runs over
+`chunk_count(t_end, chunk)` chunks, the last one ending on `t_end` exactly
+— see [Step 12 — precision](#step-12--precision). The loop also skips the
+regrid after its last chunk, as the notes below say. The checkpoint is
+written after the observer and before the regrid, and the regrid — flags,
+margin, `regrid!`, problem, gather, reset — is one function,
+`regrid_chunk!`, which a restart calls first; see
+[Checkpoint and restart](#checkpoint-and-restart).
 
 TreeWave has three near-identical loops and records that a fourth would
 be the one to drift; the four cases here differ in their initial data,
@@ -2237,7 +2214,7 @@ chunk, the tracking measure, the final state and forest, and — through
 `observer(p, t, u)`, called with `U` scattered and `P` current — whatever
 the viewer wants, so that `bin/` contains no time-stepping of its own.
 
-**(Implemented in step 7.)** `src/driver.jl`: `HydroCase`, `evolve!`,
+`src/driver.jl`: `HydroCase`, `evolve!`,
 `uniform_run`, and the three measurements around them — `check_cfl`,
 `tracked_share`, and `reduce_to_grid` / `l1_difference` after TreeAMR's
 Burgers test. The numbers are in
@@ -2255,10 +2232,13 @@ the implementation settled:
   to the loop and never back. The struct carries its own working type, so
   `evolve!` takes `T` as a leading positional argument only to check it
   against the case's, and refuses a mismatch by name.
-- **The headroom is a case parameter, and Sod's is 2.** This is the step-4
-  amendment closed; see [Time integration and the time
-  step](#time-integration-and-the-time-step) for what the driver does with
-  it and for what `speed_headroom = 1` measures.
+
+  **Inconsistent:** this names two case constructors; [File
+  layout](#file-layout) also lists `HydroCase(::SedovBlast)` in `sedov.jl`
+  and `HydroCase(::KelvinHelmholtz)` in `kelvinhelmholtz.jl`.
+- **The headroom is a case parameter, and Sod's is 2.** See [Time
+  integration and the time step](#time-integration-and-the-time-step) for
+  what the driver does with it and for what `speed_headroom = 1` measures.
 - **The criterion the initial-data cycle runs is the evolution's, on a
   scratch primitive set.** The cycle regrids `U` alone with
   `transfer = false` and re-evaluates the initial data, so a primitive set
@@ -2281,7 +2261,7 @@ the implementation settled:
   count and the state that come back all describe the same thing.
 - **The observer is called once at `t = 0` and once per chunk**, with the
   state scattered into `U`, `P` current, and before the regrid that would
-  invalidate either — TreeWave's contract, so that the viewers of step 11
+  invalidate either — TreeWave's contract, so that the viewers
   get the initial frame without a loop of their own.
 - **The cell saving on Sod is modest, and that is the case's doing rather
   than the driver's.** Sod's three waves occupy 59% of the tube by
@@ -2289,19 +2269,24 @@ the implementation settled:
   `t = 0.2` and 28% in `D = 2` at `t = 0.15`. What the tracked run claims
   is the fine reference's *error*, which it matches to four decimal places,
   and the cell count is the price of that match.
+- **The tracking measure is taken before the regrid, and that is the
+  point.** `tracked_share` asks what fraction of the strongly firing cells
+  sit on blocks already at the cap, on the state at the *end* of a chunk —
+  so it is a question about the mesh the *previous* regrid built. Taking it
+  after the regrid would measure the criterion against itself and return 1
+  always.
+- **`evolve!` records no time vector, and its histories are off by one
+  against the observer.** `nblocks_history`, `λ_history` and
+  `buffer_history` are per *chunk*, while the observer fires
+  `nchunks + 1` times — once at `t = 0` and once per chunk — so zipping the
+  two is a frame-shifted plot. Take `t` and the block count from your own
+  observer, as `kh_run` does with `ts` and `nbs` and as both viewers do.
 
 ## Checkpoint and restart
 
-*(Added 2026-09-29, on TreeAMR 0.1.4, whose M9a adds `save_checkpoint` and
-`load_checkpoint` through a package extension on HDF5. The plan was decided
-with Erik the same day, keyword names included; what the implementation
-settled is marked. **Amended 2026-10-01**, Erik's decision to keep the
-checkpoint mechanisms of TreeAMR's applications alike: the checkpoint moved
-from after the regrid to before it, as TreeGeneralizedHarmonic's was written
-the same day, so that a restart may change the regridding criterion and
-regrid with it first; the paragraphs below say where.)* A run of this package on an H200 at ten or twenty
-levels outlasts a queue's day, and TreeAMR's M9a names it as one of its
-reasons. **Everything about the file is upstream**: the forest, the field-set
+A run of this package on an H200 at ten or twenty levels outlasts a
+queue's day, and TreeAMR's M9a names it as one of its reasons.
+**Everything about the file is upstream**: the forest, the field-set
 layout, the atomic and durable write, element types as limbs, the
 provenance and the refusals of a file a version cannot read. That is the
 "no mesh machinery" rule applied to I/O, and it leaves four things to
@@ -2309,8 +2294,7 @@ provenance and the refusals of a file a version cannot read. That is the
 with other parameters, and the files' names and rotation.
 
 **The checkpoint functions are TreeIOHDF5's, a dependency of this
-package** (Erik's decision, 2026-10-09, as for TreeGeneralizedHarmonic and
-TreeWaveGR). TreeAMR 0.2 moved `save_checkpoint`, `load_checkpoint`,
+package.** TreeAMR 0.2 moved `save_checkpoint`, `load_checkpoint`,
 `write_plain`, `read_plain` and `checkpoint_environment`, and its HDF5
 extension with them, into the companion package TreeIOHDF5 — the same
 signatures and the same file format — which is unregistered and located by a
@@ -2318,120 +2302,121 @@ signatures and the same file format — which is unregistered and located by a
 tests that call `load_checkpoint` and `save_checkpoint` directly. This
 package calls nothing but those exported functions with the plain-data
 `data =` form — never the do-block, never an HDF5 type — so it names no
-HDF5 type itself. *(Until 2026-10-09 HDF5 was the caller's to load: the
-functions had methods only once `using HDF5` had loaded TreeAMR's extension,
-and `evolve!` refused a checkpoint keyword without it at the call. A hard
-dependency has nothing left to refuse, and the check and its test went.)*
+HDF5 type itself, and HDF5 is not in its `[deps]`.
 `evolve!` checks every checkpoint keyword **before the initial-data
 cycle**, so a job script that names a directory that does not exist fails in
 a second and not at the first write hours in.
 
 **Where: at a chunk boundary, after the observer and before the regrid, and
-nowhere else** (amended 2026-10-01; it was *after the regrid and its reset*,
-decided on 2026-09-29 as TreeAMR's M9a prescribes for a chunked driver). At
-a chunk boundary the fixed-step integrator holds nothing but `(t, u)`: its
-scratch holds nothing from one step to the next and the step is recomputed
-from the forest and the state; mid-chunk, the integrator's stages would have
-to be saved. The first version wrote after the regrid because a restart
-then has nothing to replay. Writing before it, the restart **replays the
-regrid** as the first thing it does, before its next step:
-`update_primitives!(p, u)` rebuilds the primitives — with `U`'s ghosts,
-which the file does not hold — exactly as step (2) of the chunk left them,
-the flags are computed from them with the criterion the restart is given,
-and `regrid_chunk!`, the one function the loop's own regrid calls —
-`hydro_flags`, the margin derived from the chunk's `λ_end` (the last entry
+nowhere else.** At a chunk boundary the fixed-step integrator holds nothing
+but `(t, u)`: its scratch holds nothing from one step to the next and the
+step is recomputed from the forest and the state; mid-chunk, the
+integrator's stages would have to be saved. Writing before the regrid, the
+restart **replays the regrid** as the first thing it does, before its next
+step: `update_primitives!(p, u)` rebuilds the primitives — with `U`'s
+ghosts, which the file does not hold — exactly as step (2) of the chunk
+left them, the flags are computed from them with the criterion the restart
+is given, and `regrid_chunk!`, the one function the loop's own regrid calls
+— `hydro_flags`, the margin derived from the chunk's `λ_end` (the last entry
 of `λ_end_history`, which the run state already carried) and pushed onto
 `buffer_history`, `regrid!`, the rebuilt problem, the gather and the
 post-regrid reset of [Floors and the atmosphere](#floors-and-the-atmosphere)
 — does the rest. Being the same code path is what keeps the replay exact:
 with the criterion unchanged it is the regrid the uninterrupted run made
-there, bit for bit. What it buys is the point of the change: **a restart may
-change the criterion**, and regrids with the new one before it steps — so a
-run whose refinement turns out wrong is corrected from its last checkpoint,
-not from `t = 0`. The price is one indicator evaluation per restart.
+there, bit for bit. What it buys: **a restart may change the criterion**,
+and regrids with the new one before it steps — so a run whose refinement
+turns out wrong is corrected from its last checkpoint, not from `t = 0`.
+The price is one indicator evaluation per restart.
 
-A second consequence (amended 2026-10-01): **the last chunk is a restart
-point too**, where `t_end` is a whole number of chunks in `T` — `1/20 = 10 ·
-1/200` is, at `Float64`; `7/400` is not — because a longer run would have
-regridded there, and a continuation of the finished run does. Elsewhere it
-writes nothing: a continued run's chunks would not line up with it, which
-the restart's own check of `c_done · chunk == t` would refuse anyway. The
+A second consequence: **the last chunk is a restart point too**, where
+`t_end` is a whole number of chunks in `T` — `1/20 = 10 · 1/200` is, at
+`Float64`; `7/400` is not — because a longer run would have regridded
+there, and a continuation of the finished run does. Elsewhere it writes
+nothing: a continued run's chunks would not line up with it, which the
+restart's own check of `c_done · chunk == t` would refuse anyway. The
 wall-time trigger never fires on the last chunk, which finishes the run.
 
 **What is saved.** The forest and the conserved state `U` with its state
 vector `u`, through TreeAMR, and this package's own plain data `(; recipe,
-criterion, run)` in its group `TreeHydro.jl`, **format version 2** (amended
-2026-10-01; version 1 held `(; recipe, run)` after the regrid, and is
-refused with that reason, since this version would regrid its state a
-second time). **Only `U`**: the primitive set and the fluxes are scratch,
-and `update_primitives!` rebuilds `P` — ghosts of `U` included, which the
-file does not hold — before a restart's regrid and at the start of every
-chunk. `u` and not `U.work`: the state vector is the integrator's and the
-authoritative copy (with the checkpoint after the regrid the reason was that
-the post-regrid reset acts on `u`). The **run state** is the accumulators behind `evolve!`'s return
-value — the chunk and its end time, the step, regrid and pass counts, the
-three floor counts and the injection, `λ_initial`, the tracking minimum, the
-drift, the scales, the initial totals, and the four histories — so that a
-restarted run's *answer* is the uninterrupted one's and not only its state.
+criterion, run)` in its group `TreeHydro.jl`, **format version 2**; version
+1 held `(; recipe, run)` after the regrid, and is refused with that reason,
+since this version would regrid its state a second time. **Only `U`**: the
+primitive set and the fluxes are scratch, and `update_primitives!` rebuilds
+`P` — ghosts of `U` included, which the file does not hold — before a
+restart's regrid and at the start of every chunk. `u` and not `U.work`:
+the state vector is the integrator's and the authoritative copy. The
+**run state** is the accumulators behind `evolve!`'s return value — the
+chunk and its end time, the step, regrid and pass counts, the three floor
+counts and the injection, `λ_initial`, the tracking minimum, the drift, the
+scales, the initial totals, and the four histories — so that a restarted
+run's *answer* is the uninterrupted one's and not only its state. A new
+returned accumulator not added to `run_state` comes back from a restart
+counted from the checkpoint rather than from `t = 0`. The chain test
+compares the fields listed in `CKPT_FIELDS`, so a new returned field goes
+there too.
 
-**Reals are stored exactly** (settled in the implementation). The
-accumulators are in `R = float(real(T))`, which is `Float32x2` in
-`test/type_tests.jl`, and TreeAMR's plain data refuse a MultiFloat scalar.
-So `plain_reals` stores a native float as itself and any other `isbits`
-real made of one native float throughout, with no padding, as the matrix of
-its limbs `(nlimbs, n)` — the rule TreeAMR applies to a field set's element
-type, restated because that function is internal to TreeIOHDF5 — and a
-scalar as a one-element vector.
+**Reals are stored exactly.** The accumulators are in `R = float(real(T))`,
+which is `Float32x2` in `test/type_tests.jl`, and TreeAMR's plain data
+refuse a MultiFloat scalar. So `plain_reals` stores a native float as
+itself and any other `isbits` real made of one native float throughout,
+with no padding, as the matrix of its limbs `(nlimbs, n)` — the rule
+TreeAMR applies to a field set's element type, restated because that
+function is internal to TreeIOHDF5 — and a scalar as a one-element vector.
 
-**The recipe and the criterion, and the two things a restart may change**
-(decided 2026-09-29 with one, amended 2026-10-01 to two). A restart is
-called with the same case and keywords as the run it continues, and **only
-`t_end` and the regridding criterion may change** — `t_end` beyond the
-checkpoint's time, or it is refused. The recipe is every parameter that
-decides a number but the criterion: the working type by name, `D`, `N`,
-`G`, the roots, the periodicity, the reflecting faces (since 2026-09-29) and
+**The recipe and the criterion, and the two things a restart may change.**
+A restart is called with the same case and keywords as the run it
+continues, and **only `t_end` and the regridding criterion may change** —
+`t_end` beyond the checkpoint's time, or it is refused. The recipe is every
+parameter that decides a number but the criterion: the working type by
+name, `D`, `N`, `G`, the roots, the periodicity, the reflecting faces and
 the extents, the equation of state and the floors field by field, the
-speed headroom, `chunk` and `cfl`,
-`limiter`, `riemann`, `fixup`, `reset` and `accounting`, and the operators.
-The **criterion** (`run_criterion`) is `refine_tol`, `coarsen_tol`,
-`maxlevel_cap`, `ε`, `ε_g` and `buffer` — the six were in the recipe until
-2026-10-01. Every real goes through `T` and then `plain_reals`, so `2//25`
-and `0.08` are the same run at `Float64`, as they are. A restart whose
-recipe differs is refused with **one** `ArgumentError` naming every field
-that differs and both values; a restart whose criterion differs is run,
-with one `@info` naming every field that differs and both values, and
-returns their names as `criterion_changed` — `nothing` on a run from the
-initial data, empty on a restart that changes nothing. The criterion
-decides numbers too, which is why it is reported rather than accepted
-silently: the log says where a run stopped being the one it began as. What the recipe cannot hold is the case's
-closures — its initial data, boundary hook and reference — and those are
-trusted. `backend`, `maxpasses` and the observer are not in it: they decide
-no number of a run past its initial-data cycle, so nothing in the recipe
-keeps a checkpoint written on the host from being continued on a device —
-which TreeAMR's load allows, and which this suite does not test.
+speed headroom, `chunk` and `cfl`, `limiter`, `riemann`, `fixup`, `reset`
+and `accounting`, and the operators. The **criterion** (`run_criterion`)
+is `refine_tol`, `coarsen_tol`, `maxlevel_cap`, `ε`, `ε_g` and `buffer`.
+Every real goes through `T` and then `plain_reals`, so `2//25` and `0.08`
+are the same run at `Float64`, as they are. A restart whose recipe differs
+is refused with **one** `ArgumentError` naming every field that differs and
+both values; a restart whose criterion differs is run, with one `@info`
+naming every field that differs and both values, and returns their names as
+`criterion_changed` — `nothing` on a run from the initial data, empty on a
+restart that changes nothing. The criterion decides numbers too, which is
+why it is reported rather than accepted silently: the log says where a run
+stopped being the one it began as. A new `evolve!` keyword that changes the
+numbers and is not added to `run_recipe` lets a restart with a different
+value run as though it were the same run; a new keyword of the regridding
+criterion goes in `run_criterion` instead, and is reported when it changes
+rather than refused. What the recipe cannot hold
+is the case's closures — its initial data, boundary hook and reference —
+and those are trusted. `backend`, `maxpasses` and the observer are not in
+it: they decide no number of a run past its initial-data cycle, so nothing
+in the recipe keeps a checkpoint written on the host from being continued
+on a device — which TreeAMR's load allows, and which this suite does not
+test.
 
-**Names and rotation** (decided). The files are
-`"<prefix>.it<iteration>.h5"`, the iteration being the cumulative step
-count since `t = 0`, zero-padded to ten digits — monotonic across restarts,
-what a directory listing should say, and the Cactus convention. After a
-write has succeeded, every file of the prefix but the one just written and
-the newest `num_checkpoints_keep − 1` others is deleted, **including files
-an earlier job left behind**, which is the point in a job chain; the pattern
-is anchored, so neither TreeAMR's `.h5.partial` nor another prefix's files
+**Names and rotation.** The files are `"<prefix>.it<iteration>.h5"`, the
+iteration being the cumulative step count since `t = 0`, zero-padded to ten
+digits — monotonic across restarts, what a directory listing should say,
+and the Cactus convention. After a write has succeeded, every file of the
+prefix but the one just written and the newest `num_checkpoints_keep − 1`
+others is deleted, **including files an earlier job left behind**, which is
+the point in a job chain — and which means **two runs must never share a
+prefix**: each would rotate the other's files away. The pattern is
+anchored, so neither TreeAMR's `.h5.partial` nor another prefix's files
 ever match. The file just written survives even when it is not the newest
-(settled in the implementation: a run restarted from an older checkpoint
-while newer ones exist), since it is the only one the running job can vouch
-for. `latest_checkpoint(prefix)`, the one export, makes a job chain one
+(a run restarted from an older checkpoint while newer ones exist), since it
+is the only one the running job can vouch for. It is recognised by its
+*name*, never by comparing path strings: `run//sedov` lists as
+`run/sedov`, and the rotation testset has the doubled separator for that
+reason. `latest_checkpoint(prefix)`, the one export, makes a job chain one
 command for every job, the first included:
 
     r = evolve!(case; …, checkpoint_path_prefix = prefix,
                 max_walltime_seconds = 23.5 * 3600,
                 restart_file = latest_checkpoint(prefix))
 
-**Three triggers** (decided): every `checkpoint_every_chunks` chunks; when
+**Three triggers**: every `checkpoint_every_chunks` chunks; when
 `checkpoint_interval_seconds` of wall-clock time have passed since the last
-write or the call (`0` writes at every boundary — settled in the
-implementation, the plan having said "positive"); and before
+write or the call (`0` writes at every boundary); and before
 `max_walltime_seconds`, timed from the call, runs out. The last is an
 estimate: at each boundary the run stops, having written, if the elapsed
 time plus the **longest chunk seen so far**, regrid included, plus the
@@ -2440,25 +2425,25 @@ happen before the call and are not counted, so the caller leaves a margin
 below the queue's limit. Timing decides only *when* a file is written,
 never what is in it, which is why the bit-identity claims do not depend on
 the machine's load. A stopped run returns `finished = false`, the
-checkpointed state — before the regrid (amended 2026-10-01; it was after),
-on the mesh the last chunk ran on, `U` scattered and its ghosts filled —
-and `l1 = linf = nothing`, there being no answer at `t_end`.
+checkpointed state — before the regrid, on the mesh the last chunk ran on,
+`U` scattered and its ghosts filled — and `l1 = linf = nothing`, there
+being no answer at `t_end`; a caller reading `r.l1` must look at
+`r.finished` first.
 
-**The observer is not checkpointed** (decided). A restart does not call it
+**The observer is not checkpointed.** A restart does not call it
 at `t = 0`, since the run is not there, and whatever an observer
 accumulates is the caller's: a restarted run hands it the chunks it runs and
 no others. `kh_run`, whose McNally diagnostics *are* an observer's records,
 forwards no `evolve!` keyword and so cannot be restarted by accident.
 
-**What it amounts to** (measured; see [Checkpoint and restart,
+**What it amounts to** (see [Checkpoint and restart,
 measured](#checkpoint-and-restart-measured)). A chain of restarts, one
 chunk per job, is the uninterrupted run **bit for bit** in every field
 `evolve!` returns — on the tracked tube at `Float64` and `Float32x2`, on a
 floored two-dimensional blast, across a change of `t_end`, from a finished
-run's last chunk, and in a subprocess at another thread count — and all of
-it held unchanged when the checkpoint moved before the regrid on
-2026-10-01. A restart with another criterion regrids with it at the
-checkpoint's boundary, before its next step.
+run's last chunk, and in a subprocess at another thread count. A restart
+with another criterion regrids with it at the checkpoint's boundary, before
+its next step.
 
 ## Precision
 
@@ -2467,30 +2452,33 @@ positional argument defaulting to `Float64`; physical quantities carry
 `T`, counts do not; **no floating-point literal in an expression where
 `T` is in play** — `T(1//2)`, `T(7//5)`, `oftype(x[1], 2)` inside
 closures; `wrap`/`ceilint`/`floorint`/`roundint`/`tofloat64` from a copied
-`precision.jl` where `Base` does not serve a software float.
+`precision.jl` where `Base` does not serve a software float. At `Float64`
+`T(7//5)` and `1.4` are bit-identical, which is what lets measured numbers
+stay put when a driver goes generic.
 
 What differs is which cases each type can run:
 
 | type | Sod, Sedov, entropy wave | Kelvin–Helmholtz |
 |---|---|---|
 | `Float64` | everything measured here | everything |
-| `Float32` | same mesh, same floor counts, errors agreeing to ~1% (predicted, TreeWave's pattern; measured in step 12: exact mesh and floors, errors within 1.2e-3) | same mesh and `M(t)` through the linear phase; then divergence by design (measured in step 10) |
+| `Float32` | same mesh, same floor counts; errors within 1.2e-3 | same mesh and `M(t)` through the linear phase; then divergence by design |
 | `Float32x2` | Sod and Sedov run (arithmetic and `sqrt` only; the references are host `Float64`) | does not run: `sin` and `exp` in the initial data, which MultiFloats lacks |
 
-**(Measured in step 12: every cell of the table holds, the error column
-by a wide margin.)** At `Float32` the tracked tube in `D = 1, 2`, the static
-two-level blast and the tracked blast build the `Float64` mesh history
-exactly, take the same steps and chunks, and floor the same cells — the
-blast's 4136 owned resets and 40 ghost entries at both types; the L1 errors
-agree to **3.6e-6 and 1.6e-5**, the blast's shock radius and peak to 3.4e-8
-and 2.8e-7, and the entropy wave's L1 and L∞ to **3.1e-4 and 1.2e-3** — the
-worst of the table, because its errors are small enough (1.35e-4 and
-2.6e-4) that the *state's* roundoff shows in them. At `Float32x2` the same
-four runs build the same meshes and floors, and agree with `Float64` to
-**1e-13** in every error. Kelvin–Helmholtz at `Float32` is step 10's row:
-the same mesh at every sample and `M(t)` to 200 ulp through `t = 2/5`.
-`test/type_tests.jl` asserts all of it; getting there took one fix in this
-package, one upstream, and a third that only `Float32` could expose — see
+Every cell of the table holds, the error column by a wide margin. At
+`Float32` the tracked tube in `D = 1, 2`, the static two-level blast and
+the tracked blast build the `Float64` mesh history exactly, take the same
+steps and chunks, and floor the same cells — the blast's 4136 owned resets
+and 40 ghost entries at both types; the L1 errors agree to **3.6e-6 and
+1.6e-5**, the blast's shock radius and peak to 3.4e-8 and 2.8e-7, and the
+entropy wave's L1 and L∞ to **3.1e-4 and 1.2e-3** — the worst of the
+table, because its errors are small enough (1.35e-4 and 2.6e-4) that the
+*state's* roundoff shows in them. At `Float32x2` the same four runs build
+the same meshes and floors, and agree with `Float64` to **1e-13** in every
+error. Kelvin–Helmholtz at `Float32` is [Step
+10](#step-10--kelvinhelmholtz)'s row: the same mesh at every sample and
+`M(t)` to 200 ulp through `t = 2/5`. `test/type_tests.jl` asserts all of
+it; getting there took one fix in this package, one upstream, and a third
+that only `Float32` could expose — see
 [Step 12 — precision](#step-12--precision).
 
 The two host reference codes — the exact Riemann solver and the Sedov
@@ -2513,56 +2501,56 @@ Kelvin–Helmholtz and prints digests per chunk, and
 character for character. The Kelvin–Helmholtz is in the workload on
 purpose: an instability is the case where a summation-order difference
 would be *amplified* into a visible one, so it is the sharpest place to
-guard the invariant. *(Done in step 13, which added a third run: a short
-static Sedov blast on `sedov_forest(:center)`, because it is the only case
-in which the floors fire — both limiter hooks, both floor populations and
-a nonzero injection are on the digested path, and a Sod-and-KH workload
-would digest two zeros for each.)*
+guard the invariant. A third run is a short static Sedov blast on
+`sedov_forest(:center)`, because it is the only case in which the floors
+fire — both limiter hooks, both floor populations and a nonzero injection
+are on the digested path, and a Sod-and-KH workload would digest two zeros
+for each.
 
-**(Amended after step 11: TreeAMR 0.1.3 places every block on its owner,
-and so does the integrator.)** Upstream's `4be726e` runs every per-block
-pass — `map_blocks!`, `scatter!`/`gather!`, `fill_by_coordinates!`,
-`zerofill!`, and the ghost, interface and regrid phases — on the thread
-that owns the block, block `b` belonging to the thread whose chunk of
-`threadchunks(nblocks)` contains it, and asks that a new block-shaped launch
-go through `launch_by_owner!`. This package had one launch of its own, the
-ghost floor count, and it now goes through `launch_by_owner!`; and its
-integrator's stage arithmetic runs on the same ownership through
+**TreeAMR places every block on its owner, and so does the integrator.**
+TreeAMR runs every per-block pass — `map_blocks!`, `scatter!`/`gather!`,
+`fill_by_coordinates!`, `zerofill!`, and the ghost, interface and regrid
+phases — on the thread that owns the block, block `b` belonging to the
+thread whose chunk of `threadchunks(nblocks)` contains it, and asks that a
+new block-shaped launch go through `launch_by_owner!` and a new host loop
+over blocks through `TreeAMR.threaded_chunks`. This package has one launch
+of its own, the ghost floor count, and it goes through `launch_by_owner!`;
+and its integrator's stage arithmetic runs on the same ownership through
 `state_partition` (see [Time integration](#time-integration-and-the-time-step)).
 So from the first touch of the state vector to the last stage combination,
 a block's pages are written by one core. Nothing about the answer changes:
 ownership decides *where* a block is computed, never in what order a sum is
-taken, and the digests at one and at four threads are identical.
+taken, and the digests at one and at four threads are identical. Both
+helpers are unexported, and `test/prerequisite_tests.jl` checks by name
+that they and `threadchunks` still exist.
 
-*(Amended 2026-10-02, for MPI: what this paragraph calls host loops in
-block order, and the per-block maxima and counts combined on the host, are
-now combined across ranks as well — through `mesh_mapreduce` where the
-reduction is TreeAMR's, and through this package's `rank_reduce` where the
-loop is its own; see [Running distributed](#running-distributed). Serially
-nothing moved: every one-rank branch returns its argument.)*
+Under MPI, what the first paragraph calls host loops in block order, and
+the per-block maxima and counts combined on the host, are combined across
+ranks as well — through `mesh_mapreduce` where the reduction is TreeAMR's,
+and through this package's `rank_reduce` where the loop is its own; see
+[Running distributed](#running-distributed). Every one-rank branch returns
+its argument.
 
-**What is inherited is narrower than the paragraph above says** (amended
-after step 11, when TreeAMR narrowed its M5 guarantee; the statement is
-"Floating-point sums are promised to roundoff only" under its
-"Parallelism"). Upstream now separates two rules that one name used to
-cover. That every work item owns its output slot, and every collecting pass
-fills a buffer per task and concatenates in block order, is race freedom:
-it costs nothing, it stays, and it keeps the state vector, the leaf array,
-the mesh, the schedule, every per-block value `block_mapreduce` returns and
+**What is inherited is narrower than the first paragraph says** (TreeAMR's
+statement is "Floating-point sums are promised to roundoff only" under its
+"Parallelism"). Upstream separates two rules that one name used to cover.
+That every work item owns its output slot, and every collecting pass fills
+a buffer per task and concatenates in block order, is race freedom: it
+costs nothing, it stays, and it keeps the state vector, the leaf array, the
+mesh, the schedule, every per-block value `block_mapreduce` returns and
 every max, min or integer reduction bit-identical across thread counts —
-and, once M7 exists, across rank counts. That the partials of a
-floating-point *sum* are combined in block order is what is no longer
-promised: a sum is reproducible to roundoff only, across thread counts,
-rank counts, backends and machines, because a hierarchical device
-reduction (one workgroup per block, the weak row of upstream's device
-table) and a plain `Allreduce` under MPI both need the association to be
-theirs. The CPU fold is unchanged for now, so nothing here moves today.
+and across rank counts. That the partials of a floating-point *sum* are
+combined in block order is what is not promised: a sum is reproducible to
+roundoff only, across thread counts, rank counts, backends and machines,
+because a hierarchical device reduction (one workgroup per block, the weak
+row of upstream's device table) and a plain `Allreduce` under MPI both need
+the association to be theirs. The CPU fold is unchanged for now, so nothing
+here moves today.
 
 For this package the line falls as follows. **Exact whatever the fold
 does**: `λ_max`, `indicator_scales`, `peak_compression` and every `p = ∞`
 norm, all of them a `max`; the two floor counts, which sum `1`s and `0`s
-into an exact integer per block and close with `roundint` (`round(Int, …)`
-until step 12) — no
+into an exact integer per block and close with `roundint` — no
 association changes an integer-valued sum while it fits the mantissa,
 `2^24` at `Float32`, which no mesh here approaches — and of which the
 ghost count is this package's own kernel and host loop besides; and every
@@ -2581,36 +2569,19 @@ ulp tolerance, and only those**: a few ulp of `conserved_scales`, as the
 cross-machine measurement under [Testing](#testing) already demands of
 anything compared against a stored number. The mesh history, the step
 count, `λ` and both floor counts stay character for character, and a
-tolerance on any of *those* would be hiding a bug. The totals should also
-stop combining by hand: TreeAMR plans `mesh_mapreduce(f, op, init,
-fs[, u]; vars, weight)`, one number for the mesh — `block_mapreduce`'s
-per-block values scaled by `weight(key)` and combined over the local
-blocks, with the M7 `Allreduce` inside it and nowhere else — and
-`conserved_totals` is that call with `weight = key -> spacing(key)^D`.
-Once it exists the totals go through it, which is how they turn global
-without a communicator ever appearing in this package. *(Amended in step
-15: `mesh_mapreduce` is in TreeAMR 0.1.3 and the field-set totals reach it
-through `total_mass`; the state-vector totals and `conserved_scales` did
-not yet.)* *(Done after step 15: they do now. `conserved_totals(U, u)` and
-`conserved_scales(U)` are each one `mesh_mapreduce` per variable with
+tolerance on any of *those* would be hiding a bug.
+`conserved_totals(U, u)` and `conserved_scales(U)` are each one
+`mesh_mapreduce` per variable with
 `weight = key -> spacing(R, forest, key)^D`, the call `total_mass` makes,
-so nothing in this package combines per-block values by hand any more and
-the M7 `Allreduce` will reach every total, scale and injection without a
-line changing here. The change is bit-identical, and measured so rather
-than argued from upstream's comment that `mapreduce(identity, +, v)` is
-`sum(v)`'s pairwise reduction: the whole suite, run through
-`test/runtests.jl` at four threads in two environments differing only in
-this change, printed **150 `@info` lines on each side and not one byte
-differed** — 38 of them report a drift, an injection, a leak or a total,
-and 90 print some floating-point result to 12–17 digits — nor did any
-other line of the log, the test summary's time excepted.
-`test/reset_tests.jl` now asserts on a two-level mesh that a state vector
-gathered from `U` totals exactly what `U` totals and that
-the scale of an all-positive state equals its total, bit for bit — the
-one thing the injection being exactly zero where nothing fires cannot
-see, since it subtracts two totals of its own; a sequential hand fold of
-the same partials differs from it in 3–5 of the `D + 2` variables in
-`D = 2, 3`, so the check can fail.)*
+so nothing in this package combines per-block values by hand and the M7
+`Allreduce` reaches every total, scale and injection without a line
+changing here. `test/reset_tests.jl` asserts on a two-level mesh that a
+state vector gathered from `U` totals exactly what `U` totals and that the
+scale of an all-positive state equals its total, bit for bit — the one
+thing the injection being exactly zero where nothing fires cannot see,
+since it subtracts two totals of its own; a sequential hand fold of the
+same partials differs from it in 3–5 of the `D + 2` variables in
+`D = 2, 3`, so the check can fail.
 
 ## Running on a device
 
@@ -2629,16 +2600,24 @@ the host bit for bit on the CPU backend of a second run — is TreeAMR's
 Burgers claim, which this package should reproduce for the system at
 `Float32` when a device is present.
 
-**(predicted; measured in step 14, in the next paragraph)** The per-cell
-arithmetic of a hydro RHS — a `con2prim`,
-two reconstructions and a Riemann solve per face — is an order of
-magnitude more work per byte than the wave equation's Laplacian, so on
-unified memory (Apple silicon) the RHS should show a device speedup where
-TreeWave's showed none, and on an H200 it should beat the bandwidth
-ratio. Measured in H6; the number is the first thing anyone will ask.
+**`hostcopy` is split.** `hostcopy(fs)` returns `fs` *itself* on the CPU,
+so on a machine with no device its copying path would be dead code — which
+is every machine CI runs on. The copy is therefore `hostcopy!(dst, src)`,
+callable host to host and tested that way; it checks that the two layouts
+agree, because a `copyto!` between arrays of equal length and unequal
+shape transposes the data instead of failing, and `G` and the centering
+are exactly what a destination built carelessly would get wrong. Only
+`hostcopy` is exported, as in TreeWave; `hostcopy!` is reached as
+`TreeHydro.hostcopy!`.
 
-**(Measured in step 14: right on Apple silicon, and for the hydro kernels
-more than for the RHS.)** At `Float32` on 512 blocks of `16³` in `D = 3`,
+The per-cell arithmetic of a hydro RHS — a `con2prim`, two reconstructions
+and a Riemann solve per face — is an order of magnitude more work per byte
+than the wave equation's Laplacian, so on unified memory (Apple silicon)
+the RHS should show a device speedup where TreeWave's showed none, and on
+an H200 it should beat the bandwidth ratio.
+
+**Right on Apple silicon, and for the hydro kernels more than for the
+RHS.** At `Float32` on 512 blocks of `16³` in `D = 3`,
 the M3 Pro's GPU takes **79 ms** per `SSPRK33` step against **116–134 ms**
 on 8–12 host threads, and **23 ms** per right-hand side against 39–50 ms.
 The flux kernel alone is **3.3×** faster on the device (5.1 ms against
@@ -2646,19 +2625,16 @@ The flux kernel alone is **3.3×** faster on the device (5.1 ms against
 ghost fill, which are 61% of the device's RHS against 30% of the host's.
 The device run reproduces the host `Float32` run exactly on the tracked
 Sod tube and the static Sedov blast — the same mesh history, step count,
-L1, reset, ghost and floor counts — and, since the device tests were
-widened, on every driver of the suite in `D = 1, 2, 3`, the shear layer
-alone differing, through Metal's `sin`. On Symmetry an H200 runs a step at
-**about 11×** a 64-core AMD node and **49×** 16 host cores, up to 715
-million cell updates per second at `Float64` with `N ≥ 32`; see [Step 14 —
-the benchmark and the device](#step-14--the-benchmark-and-the-device).
+L1, reset, ghost and floor counts — and on every driver of the suite in
+`D = 1, 2, 3`, the shear layer alone differing, through Metal's `sin`. On
+Symmetry an H200 runs a step at **about 11×** a 64-core AMD node and
+**49×** 16 host cores, up to 715 million cell updates per second at
+`Float64` with `N ≥ 32`; see [Step 14 — the benchmark and the
+device](#step-14--the-benchmark-and-the-device).
 
 ## Running distributed
 
-*(Added 2026-10-02, on TreeAMR's M7: written against its `main`, which
-`Project.toml` pinned for the day, and taken from the registry at
-`TreeAMR = "0.1.6"` once that release carried the guard below — see [File
-layout](#file-layout).)* A run goes over MPI by passing a
+A run goes over MPI by passing a
 communicator: `evolve!(case; …, comm = MPI.COMM_WORLD)` after `using MPI`
 and `MPI.Init()`, launched under `mpiexec` with every rank making the same
 call. `comm = nothing`, the default everywhere, is a serial run, and a run
@@ -2688,7 +2664,7 @@ its `CODE.md`, and both were this package's:
   keyword checks asked each rank's view of the file system whether a
   directory or a restart file exists.
 
-**The decisions** (made in implementing it, 2026-10-02):
+**The decisions:**
 
 - *`comm` is a keyword of `evolve!` and of every driver that builds a
   forest — `sod_errors`, `sedov_static`, `entropywave_errors`, `kh_run` and
@@ -2750,6 +2726,21 @@ its `CODE.md`, and both were this package's:
   blocks with `interiorview` and would draw one rank's; the showcase runs
   on one H200. Neither is a reason to distribute, and both say so.
 
+**What is a rank's and what is the mesh's.** Over a distributed forest
+every block index, `nblocks(fs)`, `block_mapreduce`'s vector and
+`firing_boxes`' are this rank's, while `nleaves`, `forest.leaves` and
+`mesh_mapreduce` are the mesh's; a count of the mesh's blocks is
+`nleaves`, never `nblocks`. A check that throws must throw on every rank:
+decide it from global data (`reduce_to_grid` checks `forest.leaves`, not
+its own blocks) or agree it (`agree_refusal`), since a throw on one rank
+leaves the others waiting in their next collective. A rank may hold no
+blocks, whenever ranks outnumber leaves, and every function must survive
+it: no launch on an empty `ndrange`, no `maximum` of an empty vector, no
+read of block 1; `rank_reduce`'s `present = false` leaves such a rank out.
+`evolve!`'s returned `U` and `u` are this rank's too, while everything else
+it returns is global. Serial tests see none of this — `test/mpi_tests.jl`
+is the only thing that will.
+
 **The claim** is the thread claim one level up: **a distributed run is the
 serial run — its state, its mesh, its step and chunk counts, every floor
 count, every speed, every maximum and the tracking measure, bit for bit at
@@ -2785,24 +2776,11 @@ of the state gathered in curve order (the ranks' state vectors concatenated
 in rank order *are* the serial one), not `hash` of the vector, which samples
 a long one.
 
-**An upstream bug, found by the empty rank** (2026-10-02). TreeAMR's
-`AllVariables` boundary hook checks its callback's tuple length at "the first
-owned point of block 1, which every field set has" — and over a distributed
-forest a rank may have none, so the check reads a block that is not there and
-throws on that rank alone, which the others then wait for. Its
-`fill_by_coordinates!` has the guard (`nblocks(fs) == 0 && return fs`) and its
-`cell_boundary!` does not; this package is the only caller of that form (its
-boundary hook is `boundary_by_coordinates` over an `AllVariables`). The fix is
-the same one line, verified here first against a scratch copy of TreeAMR's
-`main` with it added; it went upstream the same day (TreeAMR's
-`afb148d`, with its own MPI workload now running a rank without blocks
-through every operation) and was released as **TreeAMR 0.1.6**, which is
-this package's bound. 0.1.5, registered hours before, is M7 without it, and
-is excluded by the bound for that reason.
+The empty rank found an upstream bug, since fixed in TreeAMR 0.1.6; see
+[HISTORY.md](HISTORY.md#running-distributed).
 
-**Measured** (2026-10-02, this machine, MPICH_jll 5.0.2 through MPI.jl
-0.20.27, one thread a rank, against TreeAMR's `main` with the guard above,
-and the suite again against the registered 0.1.6):
+**Measured** (this machine, MPICH_jll 5.0.2 through MPI.jl 0.20.27, one
+thread a rank):
 the workload writes 68 lines per group, 41 of them exact and 26 of sums;
 **every exact line is identical at one, two and three ranks and serially**,
 the restarts from the three-rank checkpoint included, and at one rank so is
@@ -2813,16 +2791,7 @@ which are differences of two such totals and have no relative accuracy (the
 trap under [Testing](#testing)). The launch takes **1 m 20** of wall clock
 for the four groups. `test/mpi_tests.jl` asserts 221
 claims on it, and a negative control — one digit changed in an exact line and
-one in a sum line of the two-rank file — fails both. Before the fix,
-`Pkg.test()` against TreeAMR's `main` passed 12461 and errored in the one
-place the bug predicts, the workload's two-block tube. Against the
-registered **0.1.6**, resolved fresh, `Pkg.test()` passes **12682 tests in
-6 m 10 at one thread and 12716 in 5 m 08 at four**, and a manifest-free
-copy on **Julia 1.11.9**, the floor, 12682 in 9 m 32 — against 12447 in
-5 m 01 and 12481 in 4 m 28 on 2026-10-01, the difference being the MPI test
-and its launch, on a machine shared with another session's suite. Every
-serial number elsewhere in this document is unchanged: the suite's
-assertions on them are the same and pass.
+one in a sum line of the two-rank file — fails both.
 
 ## File layout
 
@@ -2830,136 +2799,248 @@ assertions on them are the same and pass.
 |---|---|
 | `src/TreeHydro.jl` | module shell: `using`s, exports, includes |
 | `src/precision.jl`, `src/device.jl` | copied from TreeWave (not a dependency on it): `Base` bridges for software floats; `to_backend`, `hostcopy` |
-| `src/distributed.jl` | what a run over MPI must make global itself (added 2026-10-02): `rank_reduce`, `rank_sum!`, `agree_any`, `agree_refusal`, `isroot`, over TreeAMR's communicator verbs; see [Running distributed](#running-distributed) |
+| `src/distributed.jl` | what a run over MPI must make global itself: `rank_reduce`, `rank_sum!`, `agree_any`, `agree_refusal`, `isroot`, over TreeAMR's communicator verbs; see [Running distributed](#running-distributed) |
 | `src/eos.jl` | `IdealGas`, `prim2con`, `con2prim`, `soundspeed` |
 | `src/floors.jl` | `Floors`, `apply_floors`, the `reset_atmosphere!` step limiter, the `reset_stage!` stage limiter, and the injection accounting |
 | `src/reconstruction.jl` | the three slopes, face states |
 | `src/riemann.jl` | LLF, HLLE, HLLC fluxes, direction-generic |
-| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `convergence_rate`, and the parity tables `state_parity` and `flux_parity` for reflecting faces (added 2026-09-29) |
+| `src/evolution.jl` | the three kernels (`con2prim_kernel!`, `flux_kernel!`, `divergence_kernel!`), `HydroProblem`, `hydro_rhs!`, `update_primitives!`, `max_signal_speed`, `floor_hits`, `hydro_dt`, the conserved totals and scales, `convergence_rate`, and the parity tables `state_parity` and `flux_parity` for reflecting faces |
 | `src/stepping.jl` | the integrator: `state_partition`, `hydro_integrator` (IMEXRungeKutta's `SSPRK33` by block owner, the reset in both hooks), `hydro_solve!` |
 | `src/refinement.jl` | the Löhner indicator on primitives, `hydro_flags`, `refinement_buffer` |
 | `src/driver.jl` | `HydroCase`, `evolve!` — the one loop — `uniform_run`, and its diagnostics: `check_cfl`, `tracked_share`, `reduce_to_grid`, `l1_difference` |
-| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeIOHDF5's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the criterion a restart may change and its report (2026-10-01), the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation (added 2026-09-29) |
+| `src/checkpoint.jl` | what `evolve!` writes and reads through TreeIOHDF5's `save_checkpoint` and `load_checkpoint`: the recipe and its check, the criterion a restart may change and its report, the run state, the exact encoding of reals (`plain_reals`), the file names, `latest_checkpoint` and the rotation |
 | `src/exact_riemann.jl` | Toro's exact Riemann solver, host `Float64`, the shock-tube reference |
 | `src/sedov_reference.jl` | the similarity law `ξ₀`, its exponent, the energy integral's quadrature and the parametric profile, host `Float64` |
 | `src/entropywave.jl`, `src/sod.jl`, `src/sedov.jl`, `src/kelvinhelmholtz.jl` | the four cases: initial data, parameters, references, per-case diagnostics |
 | `src/benchmark.jl` | `benchmark_phases` (per-phase timings of a step, after TreeWave's) and `benchmark_driver` (a whole tracked blast) |
-| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table (step 12); `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart (added 2026-09-29); `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box (added 2026-09-29); `mpi_tests.jl`, the standalone `mpi_workload.jl` it runs under `mpiexec -n 3` and its launcher `mpi_jobs.jl`, for rank-count independence (added 2026-10-02) |
+| `test/` | one `*_tests.jl` per case holding its unit, structural and physics claims together, plus `reset_tests.jl` for the atmosphere reset (which belongs to no case: its claims are about the floors, the integrator's hooks and the accounting), `stepping_tests.jl` for the integrator, `threading_tests.jl`, `device_tests.jl` and the standalone `thread_workload.jl`; `type_tests.jl` for the precision table; `checkpoint_tests.jl` and the standalone `restart_workload.jl` for checkpoint and restart; `reflecting_tests.jl` for the parity tables and the Kelvin–Helmholtz half box against the full box; `mpi_tests.jl`, the standalone `mpi_workload.jl` it runs under `mpiexec -n 3` and its launcher `mpi_jobs.jl`, for rank-count independence |
 | `.github/workflows/CI.yml` | the one workflow, two jobs: `test` runs the whole suite on every push, at Julia 1.13 on Linux and macOS, at one thread and at four; `viewer` instantiates `bin/` and renders every figure |
 | `bin/visualize1d.jl` | the shock tube against the exact solution, per block, coloured by level, with `τ` and the conserved totals against time |
 | `bin/visualize2d.jl` | the Kelvin–Helmholtz filmstrip and diagnostics; the Sedov filmstrip and radial scatter (`--case=`); either as a movie (`--movie`) |
-| `bin/backend.jl`, `bin/Project.toml` | as in TreeWave; built in step 11 |
+| `bin/backend.jl`, `bin/Project.toml` | as in TreeWave |
 | `bin/benchmark.jl` | as in TreeWave: the phase table per thread count or device, one tab-separated row per phase, and `--scan=N:roots,…` for a block-size scan in one process; runs against the package environment |
 | `bin/symmetry_cpu.sh`, `bin/symmetry_gpu.sh` | the Symmetry jobs: the block-size and thread scans on one 64-core AMD node, and the scan and the device tests on one H200 |
-| `showcase/` | the Kelvin–Helmholtz zoom movie (added 2026-09-29): an environment of its own, `simulate.jl` (the zoom-window loop, writing one frame file per movie frame), `render.jl` (the movie from the frames), `kh_zoom.jl` (the schedule, the camera, the folding, the window), the configurations and the Symmetry job; see [The zoom showcase](#the-zoom-showcase) |
+| `showcase/` | the Kelvin–Helmholtz zoom movie: an environment of its own, `simulate.jl` (the zoom-window loop, writing one frame file per movie frame), `render.jl` (the movie from the frames), `kh_zoom.jl` (the schedule, the camera, the folding, the window), the configurations and the Symmetry job; see [The zoom showcase](#the-zoom-showcase) |
 
-`Project.toml` depends on `TreeAMR`, `KernelAbstractions` and
-`IMEXRungeKutta`; tests add `MultiFloats` (and the standard library's
-`Random`); `bin/` adds `CairoMakie` and
-`SixelTerm` in its own environment. *(Amended 2026-09-29: the TreeAMR bound
-is `0.1.4`, the release with checkpoint and restart, and the tests add
-`HDF5 = "0.17"`, which loads TreeAMR's extension; the package itself does not
-depend on HDF5 — see [Checkpoint and restart](#checkpoint-and-restart).
-`bin/Project.toml`'s `0.1.3` admits 0.1.4 and was left alone, since nothing
-in `bin/` checkpoints.)* *(Amended in step 15: the compat bounds
-are `TreeAMR = "0.1.3"`, `KernelAbstractions = "0.9.42, 1"`,
-`IMEXRungeKutta = "1.3"` — the first release that runs `Float32x2`, see
-[Step 12](#step-12--precision) — and `julia = "1.11"`.)* *(Amended
-2026-10-16: `julia = "1.13"`, in `Project.toml`, `bin/` and `showcase/`;
-see [The 1.13 floor](#the-113-floor-2026-10-16).)*
-TreeAMR is resolved from the General
-registry at `TreeAMR = "0.1.3"`, the release with the owner-based
-threading. *(Amended 2026-10-02: the bound is `TreeAMR = "0.1.6"`, the
-release with MPI support (M7) and the empty-rank guard the distributed runs
-need; for the hours between M7's merge and that release `Project.toml`
-pinned TreeAMR's `main` again, and the entry went with the release. The
-tests add `MPI = "0.20"`, which loads TreeAMR's MPI extension; the package
-itself does not depend on MPI. See [Running
-distributed](#running-distributed).)* *(Amended 2026-10-09: the bound is
-`TreeAMR = "0.2"` here, in `bin/` and in `showcase/`, the release that moved
-the checkpoints into TreeIOHDF5; the package depends on `TreeIOHDF5 =
-"0.1.0"` through a `[sources]` entry pinning its `main`, the tests add it
-with an entry of their own and no longer add HDF5, and `showcase/` adds it
-beside the HDF5 its frame files need. See [Checkpoint and
-restart](#checkpoint-and-restart).)* IMEXRungeKutta is not registered and is located by a
-`[sources]` entry pinning its `main` — with TreeIOHDF5's since 2026-10-09,
-the only pins in the package environment — and a path-tracked dependency's
-`[sources]` is honoured, so `bin/` and the scratch environments of the
-device and Symmetry runs find both through this package without an entry of
-their own. *(Amended after step
-11. Between 2026-09-23 and the 0.1.3 release `Project.toml` also pinned
-TreeAMR's `main` through `[sources]`, to see the owner-based threading
-before it was released; that pin is gone again, and with it the
-contradiction with what the paragraph below says.)*
+File by file, with the names to grep for:
 
-*(Amended when TreeAMR 0.1.1 was released; it says here for the record
-what it used to say, because two of this package's arrangements were built
-on it.)* TreeAMR was unregistered, and was located through a `[sources]`
-entry pinning `rev = "main"`, as TreeWave's does. Two things followed from
-that and no longer do. The Julia floor was **1.11**, because `[sources]`
-is a 1.11 feature; it became **1.10**, which was TreeAMR's own floor, and
-`CI.yml`'s floor cell moved with it. *(Amended 2026-09-25: the floor is
-**1.11** again, for all the Tree* packages; see "The 1.11 floor again"
-below.)* And the tests saw whatever was on
-TreeAMR's `main`, so an unpushed change there was invisible here; they now
-see a released version, so an **unreleased** change is invisible here,
-which is the higher bar and is worth knowing before a step plans on an
-upstream fix. `bin/Project.toml` keeps a `[sources]` entry for *this*
-package, which is unregistered, and therefore keeps 1.11 as its own floor
-— stated there as a compat bound rather than left to be discovered, since
-a 1.10 Pkg ignores `[sources]` and then fails to find TreeHydro at all.
-*(Amended 2026-10-16: the floor is **1.13** for the package and for `bin/`
-alike; see [The 1.13 floor](#the-113-floor-2026-10-16).)*
+- `src/TreeHydro.jl`, the module shell and its exports.
+- `src/precision.jl` (`wrap`, `ceilint`, `floorint`, `roundint`,
+  `tofloat64`) and `src/device.jl` (`to_backend`, `hostcopy`, `hostcopy!`),
+  both ported from TreeWave.
+- `src/distributed.jl`: `rank_reduce` (a per-rank
+  partial folded over the ranks in rank order, TreeAMR's `combine_blocks`
+  rule), `rank_sum!` (an array summed over the ranks), `agree_any`,
+  `agree_refusal` and `isroot`, over TreeAMR's unexported `commrank`,
+  `commsize`, `allgather` and `allgatherv` reached through `forest.comm`.
+  Every one returns its argument untouched at one rank.
+- `src/floors.jl`: `Floors`, `apply_floors`, `in_atmosphere`,
+  `atmosphere_state`, and the reset — `ResetAccounting`,
+  `reset_atmosphere!(u, integrator, p, t)` (the step limiter, and the call
+  after every regrid) and `reset_stage!` (the stage limiter), a
+  `map_blocks!` launch over the owned cells of `statearray(u, U)` writing
+  back *only* where a floor fired.
+- `src/eos.jl`: `EquationOfState`, `IdealGas`, `pressure`,
+  `internal_energy`, `soundspeed`, the state accessors `statedims`,
+  `density`, `velocity`, `momentum`, `pressure_of`, `energy`, and
+  `prim2con` / `con2prim`.
+- `src/reconstruction.jl` (`slope` for `:none`, `:minmod` and `:mc`, and
+  `face_states`) and `src/riemann.jl` (`physical_flux`, `signal_speed`, and
+  `riemann_flux` for `:llf`, `:hlle` and `:hllc`) — all `isbits`,
+  pointwise, kernel-callable, non-allocating and inferred.
+- `src/evolution.jl`: `HydroProblem`, the three kernels
+  `con2prim_kernel!`, `flux_kernel!` and `divergence_kernel!` (the three
+  that carry `@inbounds`), `hydro_rhs!`, `update_primitives!`,
+  `max_signal_speed`, `floor_hits` (both `mesh_mapreduce`),
+  `local_floor_hits` (the reset's per-rank count),
+  `ghost_floor_hits` (the package's one
+  launch of its own, through `TreeAMR.launch_by_owner!`, then
+  `rank_reduce`), `hydro_dt`,
+  `conserved_totals` (field-set and state-vector forms),
+  `conserved_scales`, `check_reset`, `forest_levels`,
+  `convergence_rate`, and the parity tables `reflects`, `state_parity` and
+  `flux_parity` that every field set over a reflecting
+  forest is built with.
+- `src/stepping.jl`: `state_partition`, `hydro_integrator` (IMEXRungeKutta's
+  `SSPRK33`, stage arithmetic by block owner, the reset in both hooks) and
+  `hydro_solve!`.
+- `src/refinement.jl`: `lohner`, `cell_tau`, `indicator_scales`,
+  `hydro_flags` and `refinement_buffer`; `hydro_flags` and
+  `max_signal_speed` each have a `FieldSet` core and a `HydroProblem`
+  forwarder.
+- `src/driver.jl`: `HydroCase`, `evolve!` — the one loop, with `reset`
+  (default `:stage`), `accounting`, the post-regrid reset, the
+  `observer` hook and the checkpoint keywords (`checkpoint_path_prefix`,
+  `checkpoint_every_chunks`, `checkpoint_interval_seconds`,
+  `max_walltime_seconds`, `num_checkpoints_keep`,
+  `checkpoint_hdf5_filters`, `checkpoint_sync_to_disk`, `checkpoint_io`,
+  `restart_file`; and `comm`;
+  it returns `finished`, `t`, `chunk`, `checkpoints_written`,
+  `restart_file` and `criterion_changed` beside the rest), `regrid_chunk!`
+  (the end-of-chunk regrid, which the loop and a restart both call) —
+  `uniform_run`, `check_cfl`,
+  `chunk_count`, `tracked_share`, `reduce_to_grid` and `l1_difference`.
+- `src/checkpoint.jl`: `CHECKPOINT_APPLICATION` and
+  `CHECKPOINT_VERSION`, `checkpointing_available`, `checkpoint_filename`,
+  `checkpoint_files`, `latest_checkpoint` (the one export),
+  `rotate_checkpoints!`, `plain_reals` / `from_plain_reals` (reals as
+  limbs where they are not native), `run_recipe` / `check_recipe`,
+  `run_criterion` / `check_criterion` and `plain_differences`,
+  `run_state`, `save_run` / `load_run`, and
+  `check_checkpoint_keywords`.
+  Included *after* `driver.jl`, because `run_recipe`'s signature names a
+  `HydroCase`; `evolve!` reaches it only at run time.
+- `src/entropywave.jl` (`EntropyWave`, `hydro_forest`,
+  `fill_entropywave_averages!`, `entropywave_reference`,
+  `entropywave_errors`, `entropywave_primitive`, `HydroCase(::EntropyWave)`).
+- `src/exact_riemann.jl` (`ExactRiemann`, `exact_riemann`, `sample`,
+  `max_signal_speed(::ExactRiemann)` — host `Float64`, Toro ch. 4, a
+  *reference* and not a flux) and `src/sod.jl` (`SodTube`, `sod_state`,
+  `sod_initial`, `sod_conserved`, `sod_boundary`, `sod_forest` with
+  `refined = :middle | :left`, `sod_reference`, `assert_no_arrival`,
+  `sod_errors`, `HydroCase(::SodTube)`).
+- `src/sedov_reference.jl` (`SedovSimilarity`, `sedov_alpha`,
+  `sedov_exponent`, `sedov_radius`, `sedov_profile`, `exponent_fit` and an
+  `adaptive_simpson` of its own — host `Float64`, the similarity law
+  *derived* from the similarity equations rather than transcribed, a
+  *reference* and not a method) and `src/sedov.jl` (`SedovBlast`,
+  `sedov_state`, `ambient_state`, `sedov_initial`, `sedov_conserved`,
+  `sedov_boundary`, `HydroCase(::SedovBlast)`, `sedov_forest` with
+  `refined = :center | :corner | :edge`, `sedov_similarity`, `measured_E₀`,
+  `shock_radius`, `peak_compression`, `assert_no_arrival(::SedovBlast, …)`
+  and `sedov_static`).
+- `src/kelvinhelmholtz.jl` (`KelvinHelmholtz` — `D = 2` only, and it
+  refuses any other — `kh_state`, `kh_initial`, `kh_conserved`,
+  `HydroCase(::KelvinHelmholtz)`, `mode_amplitude` and
+  `max_y_kinetic_energy` (McNally's two diagnostics, host loops in block
+  order read once per chunk through the observer), `growth_rate`, and the
+  two measurement drivers `kh_run` and `kh_uniform`, which install that
+  observer and are the only place either diagnostic can be taken; `kh_run`
+  passes an `observer` of the caller's through after its own), with
+  `seed = :mcnally | :mirrored` and `HydroCase(w; half = true)`, the
+  reflecting half box, which refuses McNally's seed.
+- `src/benchmark.jl` (`benchmark_phases`, `benchmark_driver`).
+- Tests, **one suite run whole**, included by `test/runtests.jl` in the
+  dependency order: `precision_tests.jl`, `prerequisite_tests.jl`,
+  `eos_tests.jl`, `riemann_tests.jl`, `evolution_tests.jl`,
+  `reset_tests.jl`, `stepping_tests.jl`, `entropywave_tests.jl`,
+  `exact_riemann_tests.jl`, `sod_tests.jl`, `interface_tests.jl`,
+  `refinement_tests.jl`, `driver_tests.jl`, `sedov_tests.jl`,
+  `kelvinhelmholtz_tests.jl`, `reflecting_tests.jl` (the parity tables,
+  and the half box against the full box — to roundoff, not bit for bit,
+  and why), `type_tests.jl` (every case at `Float64`,
+  `Float32` and `Float32x2`), `checkpoint_tests.jl` (restart chains
+  against the uninterrupted run, a restart with a changed criterion, a
+  finished run continued, the rotation, the refusals; it
+  reruns the standalone `test/restart_workload.jl` in a subprocess at the
+  other thread count), `device_tests.jl` (every driver against the
+  host; the CPU stands in unless `TREEHYDRO_TEST_BACKEND` names a device),
+  `threading_tests.jl`, which reruns the standalone
+  `test/thread_workload.jl` in a subprocess at the other thread count, and
+  `mpi_tests.jl`, which collects the standalone
+  `test/mpi_workload.jl` run under `mpiexec -n 3` by `test/mpi_jobs.jl` —
+  started at the top of `runtests.jl` where the machine has 8+ threads and
+  24+ GB, so that it compiles beside the suite, and run at the end
+  otherwise (`TREEHYDRO_TEST_MPI_CONCURRENT=0/1` decides by hand).
+  Before any of them, a testset refuses two files defining the same
+  top-level `const` (see [Testing](#testing)).
+- `bin/`: `Project.toml` (CairoMakie, SixelTerm and KernelAbstractions in
+  an environment of their own, with a `[sources]` entry for TreeHydro),
+  `backend.jl` (`resolvebackend`, `withbackend`, `checkprecision`, after
+  TreeWave's; also included by the benchmark), `visualize1d.jl` (the
+  tracked tube against the exact solution, per block coloured by level,
+  with `τ` and the conserved totals against time), `visualize2d.jl`
+  (`--case=kh|sedov|both`: the filmstrip with block outlines, and per case
+  the two McNally diagnostics against the uniform fine run or the radial
+  scatter against the similarity profile; `--movie`; `--cap=` and
+  `--chunk=`), `benchmark.jl`, and the two Symmetry jobs
+  `symmetry_cpu.sh` and `symmetry_gpu.sh`.
+- `showcase/`: the Kelvin–Helmholtz zoom movie, in an
+  environment of its own like `bin/`'s (`Project.toml` with CairoMakie and
+  HDF5 for the frame files, TreeIOHDF5 for the checkpoints, and
+  `[sources]` entries for TreeHydro and TreeIOHDF5). `kh_zoom.jl` (the
+  configuration, `Geometry`, `Schedule`, `camera_centre`, `fold`, the
+  interval folds and `block_cap` — pure, shared by both scripts),
+  `simulate.jl` (the zoom-window loop, `evolve!`'s order from TreeHydro's
+  pieces, one HDF5 frame file per movie frame, a checkpoint per new level),
+  `render.jl` (the movie from the frame files, CairoMakie, no mesh),
+  `configs/` (`smoke`, `pilot`, `production`), `symmetry_showcase.sh` and
+  `README.md`. `showcase/output/` is gitignored.
+- One workflow with two jobs, `CI.yml`'s `test` and `viewer`, and a
+  `README.md`.
 
-Testset names are claims, each opening with the failure mode it guards;
-measured numbers are recorded in this file when they change. Conventions
-follow TreeAMR's `CLAUDE.md`, since the three packages are read together.
+`floors.jl` is included *before* `eos.jl`: `con2prim` takes a `Floors` and
+says so in its signature, and a signature is evaluated where the method is
+defined.
+
+`bin/backend.jl` is `include`d by both viewers and by `bin/benchmark.jl`,
+which runs against the *package* environment. So it may use only what both
+environments have, which today is `KernelAbstractions` — which is why that
+is a dependency of `bin/Project.toml` at all, and why a scratch environment
+that runs the benchmark must add it by name.
+
+`Project.toml` depends on `TreeAMR`, `KernelAbstractions`,
+`IMEXRungeKutta` and `TreeIOHDF5`: `TreeAMR = "0.2"` from the General
+registry — here, in `bin/` and in `showcase/` —, `KernelAbstractions =
+"0.9.42, 1"`, `IMEXRungeKutta = "1.3"` — the first release that runs
+`Float32x2`, see [Step 12](#step-12--precision) — and `TreeIOHDF5 =
+"0.1.0"`, TreeAMR's checkpoint functions. IMEXRungeKutta and TreeIOHDF5
+are not registered and are located by `[sources]` entries pinning their
+`main` — the only pins in the package environment — and a path-tracked
+dependency's `[sources]` is honoured, so `bin/` and the scratch
+environments of the device and Symmetry runs find both through this
+package without an entry of their own. `julia = "1.13"` in `Project.toml`,
+`bin/` and `showcase/`, the floor of all the Tree* packages (why: [The 1.13
+floor](HISTORY.md#the-113-floor-2026-10-16)). **No HDF5 of its own**: the
+package names no HDF5 type. `test/Project.toml` adds `MultiFloats`,
+`Random`, `TreeIOHDF5` (with a `[sources]` entry of its own, for the
+testsets that call `load_checkpoint` directly) and `MPI = "0.20"`, which
+loads TreeAMR's MPI extension — **no MPI in `[deps]`**: the caller loads
+it. `bin/` adds `CairoMakie` and `SixelTerm` in its own environment, and
+`showcase/` adds TreeIOHDF5 beside the HDF5 its frame files need.
+`bin/Project.toml` keeps a `[sources]` entry for *this* package, which is
+unregistered, and `bin/` has its own `Manifest.toml` (gitignored, like the
+root's), so `Pkg.update("TreeAMR")` at the root does not touch it: the
+viewers can resolve a different TreeAMR from the tests — an older one, if
+`bin/`'s Manifest is stale — which is what the `viewer` job in CI exists to
+catch. The tests see a released TreeAMR, so an **unreleased** change
+upstream is invisible here, which is the higher bar and is worth knowing
+before planning on an upstream fix.
 
 ## Testing
 
-*(Added in step 7b, rewritten in step 7c.)* **There is one suite and it
-runs whole.** Every physics claim in "Measured results" comes from a test
-that runs on every push *(qualified in step 15: the timings, the benchmark
-and Symmetry tables, the opt-in device runs, and two results recorded but
-not run in the suite — the ramp at `h = 1/1024` in step 6 and the `D = 2`
-tube at `N = 32` in step 5 — are the exceptions, each said where it
-stands)*, at one thread and at four, on Linux and macOS
-in `.github/workflows/CI.yml`: the convergence sweeps and their rates, the
+**There is one suite and it runs whole.** Every physics claim in "Measured
+results" comes from a test that runs on every push — the exceptions are the
+timings, the benchmark and Symmetry tables, the opt-in device runs, and two
+results recorded but not run in the suite (the ramp at `h = 1/1024` in step
+6 and the `D = 2` tube at `N = 32` in step 5), each said where it stands —
+at one thread and at four, on Linux and macOS in
+`.github/workflows/CI.yml`: the convergence sweeps and their rates, the
 interface-order tables and the negative control on the rate, the `D = 3`
 runs, the refinement calibration, the tracked shock tube and its buffer
 and prolongation-order tables. A number recorded in this file is a number
 CI recomputes, and a regression shows up as a changed number rather than
-as a test that merely still passes. The tests take **3 m 44 at one thread
-and 2 m 38 at four** locally as of step 10, on a quiet machine — the shear
-layer added roughly a minute at one thread and thirty seconds at four to
-step 9's 2 m 43 and 2 m 09, and the blast had
-added 50 s and 30 s to step 8's 1 m 50 and 1 m 42 — and a CI
-entry takes a few times that, a shared runner being slower and the rest of
-it precompilation. *(Amended in step 15, with the last numbers recorded:
-after step 12 the suite is **11856 tests in 4 m 26 at one thread and 11890
-in 3 m 44 at four**, the four-thread count higher by the ownership check's
-one assertion per block per thread; the `@inbounds` pass had taken 15% off
-in between and the precision file put about 50 s back, most of it compiling
-the `Float32x2` paths. See [Step 12](#step-12--precision).)* *(Amended
-2026-09-29, with checkpoint and restart: **12030 tests in 4 m 28 at one
-thread and 12064 in 3 m 47 at four**, `test/checkpoint_tests.jl` added
-after `type_tests.jl` — restart chains compared with the uninterrupted run
-field by field, the rotation, the refusals, and a restart in a subprocess at
-the other thread count through the standalone `test/restart_workload.jl`.
-*(Until 2026-10-09 it was also the first file to load HDF5, and tested the
-refusal of a checkpoint without it first; TreeIOHDF5 is a dependency since,
-and that refusal is gone.)* See
-[Checkpoint and restart, measured](#checkpoint-and-restart-measured).)*
-`CI.yml`'s `timeout-minutes: 30` is the guard against a
-runtime regression and has room, though less of it than before: the
-one-thread entry is the one to watch, the Kelvin–Helmholtz file being the
-most parallel work any one file holds and therefore the one that gains
-least from a serial runner.
+as a test that merely still passes. A CI entry takes a few times the
+local time, a shared runner being slower and the rest of it
+precompilation. The four-thread run counts more tests than the one-thread
+run because the ownership check asserts one thing per block per thread and
+has nothing to assert at one thread; about 50 s of either is
+`test/type_tests.jl`, mostly compiling the `Float32x2` paths, which no
+other file exercises. The suite's timings, step by step, are in
+[HISTORY.md](HISTORY.md#suite-timings).
 
-**Code coverage runs on the serial cells and must stay off the threaded
-one** (amended in step 10b), and the reason for the exclusion is the whole
-of the history below. `julia-actions/julia-runtest` turns coverage on by
-default; what it costs on the threaded entry is a factor of a hundred.
+**Every test file is `include`d into the same `Main`, so a top-level
+`const` name must be unique across files — and Julia will not tell you.**
+Julia 1.12 and later quietly allow a `const` to be redefined, the second
+file's value replacing the first's; name a file's shared runs with their
+case (`TRACKED_SEDOV_1D`, `TRACKED_KH`). The check at the top of
+`runtests.jl` — which fails on any duplicate, from the source text, before
+anything is included — is the only guard. How a duplicate reached CI
+unseen is in [HISTORY.md](HISTORY.md#testing-and-ci).
+
+**Code coverage runs on one serial cell and must stay off the threaded
+one.** `julia-actions/julia-runtest` turns coverage on by default; what it
+costs on the threaded entry is a factor of a hundred.
 
 Julia compiles a coverage hit into an atomic read-modify-write on one
 global 64-bit counter per source line (`visitLine` in `src/codegen.cpp`
@@ -2983,27 +3064,6 @@ So coverage alone costs **5.7×** at one thread on kernel-heavy code and
 **100×** at four, and it inverts the sign of threading: without it four
 threads are 2.3× faster than one, with it 7.7× slower.
 
-On CI the same thing, at the same shape. The step 6 push ran both jobs
-under the default `--code-coverage=@<package path>` and
-`--check-bounds=yes`, and took **5 m 14 in the test phase serially against
-52 m 53 at four threads**. Per segment, from the interval between
-consecutive `@info` lines in the two logs:
-
-| segment | 1 thread | 4 threads | ratio |
-|---|---|---|---|
-| `D = 2` interface-order sweep | 1 m 53 | 31 m 06 | 16.5 |
-| `D = 2` `p = 1`, `fixup = false` | 34 s | 9 m 27 | 16.6 |
-| `D = 2` entropy wave, `:mc` | 13 s | 3 m 33 | 16.0 |
-| `D = 2` entropy wave, `:none` | 13 s | 2 m 57 | 14.0 |
-| `D = 3` entropy wave, `N = 4` | 6 s | 47 s | 8.0 |
-| `D = 3` two-level | 14 s | 76 s | 5.3 |
-| `D = 1` Sod sweep, `:minmod` | 8 s | 10 s | 1.3 |
-| first segment (compile-dominated) | 68 s | 46 s | 0.7 |
-
-With coverage off the whole suite runs in **1 m 45 at four threads and
-1 m 58 at one** on the development machine — four threads faster than
-one, as it was before any of this.
-
 Coverage is wanted — there is a badge in `README.md` and a
 `CODECOV_TOKEN` in the repository's secrets — so the rule is not "off"
 but **once, where it is read**. What it costs is measured on the whole
@@ -3014,29 +3074,11 @@ the suite that are not kernel-heavy, and far from the hundred the
 threaded entry would pay. Three conditions follow from that number, and
 `CI.yml` spells out all three.
 
-*One cell, not four, and the cheapest one.* Every serial cell executes
+*One cell, and the cheaper one.* Every serial cell executes
 the same lines, so a second instrumented cell pays again to tell Codecov
-what the first already said. Which cell, though, turned out to matter far
-more than expected, and the reason is the Julia version rather than the
-runner. Measured on this machine at one thread, back to back, the whole
-suite:
-
-| | Julia 1.11 | Julia 1.13 |
-|---|---|---|
-| no coverage | 8 m 55 | 4 m 01 |
-| with coverage | 9 m 17 | 12 m 38 |
-| factor | **1.04×** | **3.14×** |
-
-So instrumentation is very nearly *free* on the floor version and costs a
-factor of three on the current one — and under coverage 1.11 is faster in
-absolute terms than 1.13, though it is 2.2× slower without it. On CI the
-same three instrumented cells came back at 18 m 08 on Linux at 1.11,
-23 m 22 on macOS at 1.13 and 42 m 02 on Linux at 1.13, which agrees in
-ordering; the *factor* cannot be measured there at all, because 1.04×
-sits far below the runners' own scatter.
-
-On CI the choice has a second axis, the runner's architecture, and the
-two together span a factor of 3.4. Instrumented, whole suite, one thread:
+what the first already said. Which cell matters: on CI the choice has two
+axes, the Julia version and the runner's architecture, and the two
+together span a factor of 3.4. Instrumented, whole suite, one thread:
 
 | | Julia 1.11 | Julia 1.13 |
 |---|---|---|
@@ -3046,530 +3088,93 @@ two together span a factor of 3.4. Instrumented, whole suite, one thread:
 macOS is 1.5–1.8× faster than Linux at either version and 1.11 is
 1.9–2.3× faster than 1.13 on either architecture, so each effect is
 reproduced across the other axis rather than resting on one draw — which
-matters, given the ±70% scatter recorded below. Coverage therefore goes
-on the **fastest cell of the four**: the `matrix` puts `coverage: true`
-on the floor version's `macOS-latest` entry and the step reads
-`matrix.coverage == true` — `version: "1.11"` when this was measured,
-`version: "1.10"` after TreeAMR's release moved the floor, and re-measured
-there (below) rather than assumed; `version: "1.11"` again since
-2026-09-25, where the original measurement applies. No file
-here contains a `VERSION` check or an `@static`, so the lines reported are the same lines whichever cell
-carries it, and Codecov cannot tell which one did. *(Amended 2026-10-16:
-with the floor at 1.13 every cell runs 1.13, and the coverage is on the
-`macOS-latest` cell — at 1.13 the faster runner instrumented, 23 m 22
-against 42 m 02 on Linux, from the table above. The 1.11 column is the
-record of what was measured then.)*
+matters, given the ±70% scatter recorded below. With every cell at 1.13,
+the coverage is on the `macOS-latest` cell — at 1.13 the faster runner
+instrumented, 23 m 22 against 42 m 02 on Linux; how it got there from the
+floor cells of older versions is in [HISTORY.md](HISTORY.md#testing-and-ci).
+The `matrix` puts `coverage: true` on that entry and the step reads
+`matrix.coverage == true`. No file here contains a `VERSION` check or an
+`@static`, so the lines reported are the same lines whichever cell carries
+it, and Codecov cannot tell which one did.
 
 *Only where it is read.* The badge reflects `main`, so instrumenting a
 branch or a pull request buys nothing and spends the 3.14× on the cell
 that decides how long anyone waits for a green tick. The condition is
-`github.ref == 'refs/heads/main' || github.event_name ==
-'workflow_dispatch'`; the dispatch arm is there so the upload path can be
-exercised deliberately before it is relied on, because a reporting step
-that runs nowhere reports nothing — the same failure mode as an SSPRK
-stage limiter installed in a field nobody reads.
+`matrix.coverage == true && (github.ref == 'refs/heads/main' ||
+github.event_name == 'workflow_dispatch')`, with `julia-processcoverage`
+and the Codecov upload under the same condition; the dispatch arm is there
+so the upload path can be exercised deliberately before it is relied on,
+because a reporting step that runs nowhere reports nothing — the same
+failure mode as an SSPRK stage limiter installed in a field nobody reads.
 
-*Never the threaded cell*, which is the whole of the history above.
+*Never the threaded cell*, which is the whole of the measurement above.
 
-*(Re-measured when the floor moved to 1.10.)* Dropping the `[sources]`
-entry moved the floor cell from 1.11 to 1.10, and the cell that carries
-the coverage moved with it — so the table above was taken again, whole
-suite, one thread, back to back on a quiet machine, 11622 tests in every
-entry:
+GitHub's runners vary by more than most of the effects being measured. The
+same instrumented cell, unchanged configuration, came back at **18 m 08**,
+**11 m 24** and **19 m 52** on three consecutive runs — a factor of 1.7 end
+to end. Orderings far outside that
+band are safe; any comparison of two cells within a factor of two is not,
+and should be read as the same measurement twice. So treat every CI timing
+as ±70%: only orderings wider than that carry a decision, and a claim about
+which cell is slowest needs more than one run behind it.
 
-| | Julia 1.10 | Julia 1.13 |
-|---|---|---|
-| no coverage | 4 m 25.5 | 3 m 32.3 |
-| with coverage | 8 m 05.4 | 12 m 38.3 |
-| factor | **1.83×** | **3.58×** |
+`timeout-minutes` is there so that a runtime regression fails loudly
+rather than billing an hour. It is per cell,
+`${{ matrix.coverage == true && 45 || 30 }}`, because the instrumented
+cell at 1.13 is the slow one: 23 m 22 measured for it on macOS, while a
+**healthy** Linux run at the current release measured 42 m 45
+instrumented, so moving coverage there needs a larger number. The one-thread
+entry is the one to watch, the Kelvin–Helmholtz file being the most
+parallel work any one file holds and therefore the one that gains least
+from a serial runner.
 
-**The conclusion survives and the reason for it does not.** Instrumenting
-the floor is no longer nearly free: 1.04× was a property of *1.11*, not of
-floor versions, and 1.10 pays 1.83×. Nor is the floor the faster version
-here — uninstrumented it is 1.25× *slower* than 1.13, where 1.11 was 2.2×
-slower. What decides the cell is the instrumented column, and there 1.10
-comes in at 8 m 05 against 12 m 38, a factor of **1.56**, which is the
-same ordering the original measurement found and is far outside the local
-back-to-back scatter. So `coverage: true` stays on the floor cell, and it
-stays there for a measurement taken on the version that now carries it
-rather than for an inherited one. The 1.11 column is left above as the
-record of what was measured then; it was not re-taken, because no cell
-runs 1.11 any more. *(Amended in step 15: the floor cell runs 1.11 again
-since 2026-09-25, and the 1.11 column is once more the one that applies —
-see [The 1.11 floor again](#the-111-floor-again-2026-09-25); and since
-2026-10-16 no cell runs either, see [The 1.13
-floor](#the-113-floor-2026-10-16).)*
-And the 1.13 instrumented entry reading **12 m 38**
-both times is a coincidence and not a number carried over: the
-uninstrumented one moved from 4 m 01 to 3 m 32 over the same interval,
-which is about what the `@inbounds` pass took off everything else.
-
-Measured end to end afterwards, against **14 m 20** for the same suite
-before any of this (the last all-cells-green run under the old matrix)
-and **24 m 39** for the straight mirror of TreeAMR's and TreeWave's
-arrangement:
-
-| | wall clock | critical path |
-|---|---|---|
-| ordinary push or pull request | ~12 m | the threaded cell |
-| push to `main`, coverage collected | 18 m 02 | the instrumented cell |
-
-So the everyday case is no worse than it was and one cell lighter, and
-`main` pays about six minutes for its coverage. **The instrumented cell
-is the critical path on a `main` push**, and has been under every
-arrangement tried: 18 m 02 hosted on macOS at 1.11, 20 m 42 on Linux at
-1.11, and 42 m 45 on Linux at the current release. A draft of this
-paragraph predicted ~13 m and the threaded cell, from the 12 m 12 draw
-alone; the next draw of that same cell was 17 m 03. Which cell is slowest
-is exactly the kind of claim the variance note below says needs more than
-one run behind it, and it has now been got wrong twice.
-
-That correction is really a statement about variance, and it is the
-caution to carry away from every CI number here, in the spirit of the one
-about this machine being shared: GitHub's runners vary by more than most
-of the effects being measured. The same instrumented cell, unchanged
-configuration, came back at **18 m 08**, **11 m 24** and **19 m 52** on
-three consecutive runs — a factor of 1.7 end to end, which swamps the
-1.04× that instrumenting 1.11 costs in the first place; the cell that now
-carries the coverage has itself come back at 12 m 12 and 17 m 03. The
-orderings that decided where coverage goes (12–17 against 42 minutes, and
-each of the two axes reproduced across the other) are far outside that
-band and are safe; any comparison of two cells within a factor of two is
-not, and should be read as the same measurement twice. The flat
-`timeout-minutes: 30` has 1.8× of headroom over the slower of the two
-draws, which is about what the uninstrumented cells had before.
-
-Two more economies come from the same measurement, since `timeout` and
-matrix size are both set by what a cell costs. The cap is a flat
-**30 minutes**, and it is flat *because* coverage sits on the fastest
-cell — every healthy run in the matrix is six to seventeen minutes, so
-one number guards all four the same way. It was briefly per cell,
-`${{ matrix.coverage == true && 40 || 30 }}`, while coverage lived on
-Linux at the current release, where a **healthy** run measured 42 m 45
-and a flat 30 would have failed it. If coverage is ever moved back to a
-1.13 or a Linux cell, the per-cell form has to come back with it.
-*(Amended 2026-10-16: it has, since every cell is now 1.13 — the cap is
-`${{ matrix.coverage == true && 45 || 30 }}`, against the 23 m 22 measured
-for the instrumented cell on macOS at 1.13.)*
-And the
-matrix is spelled out one cell at a time instead of as a
-`version × os` product, because the product's fourth combination is
-redundant whichever one it is, and which one is left out follows from the
-coverage choice above. Three axes, three serial cells: the floor on macOS
-(which carries the coverage, and where a `TRACKED_1D`-style collision is
-red while 1.13 is green), the current release on Linux, and the current
-release on macOS (which carries the arm64 reduction claim above). The
-pair left unbuilt is the floor on Linux: the floor is a property of the
-Julia version rather than of the operating system, so one platform
-exercises it. *(Amended 2026-10-16: with the floor at 1.13 the version
-axis is gone, and the matrix is three cells, all at 1.13: Linux, macOS
-(the arm64 reduction claim and the coverage), and Linux at four threads.
-Nothing in CI now catches a `TRACKED_1D`-style collision at run time; the
-source-text check at the top of `runtests.jl` is what does.)* Pushes whose every path
-matches `**.md` are skipped entirely — half the commits here are
-`Record step N …` and a Markdown change cannot move a measured number —
-while pull requests carry no such filter, so a PR always ends with a
-check on it. Nothing about the suite's contents has to change; a
-`D ≥ 2` sweep is seconds of arithmetic and belongs wherever the claim it
-makes belongs.
-
-**Step 7b's diagnosis was wrong and is corrected here** (amended in step
-7c). It read the same segment table as evidence that "on GitHub's 4-vCPU
-shared runners the two-dimensional sweeps are 10–17× slower at four
-threads than at one", blamed the runner's oversubscription, and split the
-suite into a short tier and a long one to keep the sweeps off the threaded
-job; it said in as many words that coverage "cost nothing measurable". It
-was reading the right table and attributing it to the wrong cause — both
-jobs had coverage on, so the runner was never the variable — and it set
-`coverage: false` in the *same push* as the split, which is why the fast
-CI that followed did not distinguish the two changes. The split, the
-reduced configurations in `test/regression_tests.jl`, the stored
-`test/references/*.toml` and `.github/workflows/Long.yml` were all undone
-in step 7c; what step 7b is kept for is the paragraph below, which is a
-real measurement and cost a red CI run to get.
+The matrix is spelled out one cell at a time instead of as a
+`version × os` product: three cells, all at 1.13 — Linux, macOS (which
+carries the arm64 reduction claim below, and the coverage) and Linux at
+four threads. Nothing in CI catches a `TRACKED_1D`-style collision at run
+time; the source-text check at the top of `runtests.jl` is what does.
+Pushes whose every path matches `**.md` are skipped entirely — a Markdown
+change cannot move a measured number — while pull requests carry no such
+filter, so a PR always ends with a check on it. Nothing about the suite's
+contents has to change; a `D ≥ 2` sweep is seconds of arithmetic and
+belongs wherever the claim it makes belongs. `CI.yml`'s comments state the
+arrangement, not how it was arrived at; the history is in
+[HISTORY.md](HISTORY.md#testing-and-ci).
 
 **Across machines the numbers are *not* bit-identical**, which is a trap
-for any future test that compares against stored numbers. Measured when
-7b's reference files were first taken to CI: on all four runners — macOS
-arm64 on the same Julia 1.13 as the generating machine included, with the
-one differing dependency tested and cleared — the conserved totals of
-order one came back **1 to 4 ulp** from the numbers this machine produces.
-The mechanism is Base's `sum` and `mapreduce`, whose inner loops run under
-`@simd` and may therefore reassociate: the arrangement of vectorized
-partial sums follows the CPU target the code was compiled for, and
-TreeAMR's `block_mapreduce` — hence every conserved total and every
-volume-weighted norm here — rests on them. TreeAMR's bit-identity across
-*thread counts* is untouched by this and is asserted; it is bit-identity
-across *microarchitectures* that Base's reductions never offered. (TreeAMR
-has since narrowed what it promises across thread counts for a
-floating-point sum to roundoff as well, citing this measurement as the
-thing SIMD does break; its CPU fold is unchanged, so the totals here are
-still exact across thread counts, by implementation rather than by
-contract — amended after step 11, see
-[Multi-threading](#multi-threading).) So a
-claim of the form "this run produces this number" needs a tolerance of a
-few hundred ulp of the quantity's own scale *and* an absolute floor, and a
+for any future test that compares against stored numbers. Measured on CI:
+on all four runners then in the matrix — macOS arm64 on the same Julia 1.13
+as the generating machine included, with the one differing dependency
+tested and cleared — the conserved totals of order one came back **1 to 4
+ulp** from the numbers this machine produces. The mechanism is Base's `sum`
+and `mapreduce`, whose inner loops run under `@simd` and may therefore
+reassociate: the arrangement of vectorized partial sums follows the CPU
+target the code was compiled for, and TreeAMR's `block_mapreduce` — hence
+every conserved total and every volume-weighted norm here — rests on them.
+TreeAMR's bit-identity across *thread counts* is untouched by this and is
+asserted; it is bit-identity across *microarchitectures* that Base's
+reductions never offered. (TreeAMR narrows what it promises across thread
+counts for a floating-point sum to roundoff as well, citing this
+measurement as the thing SIMD does break; its CPU fold is unchanged, so the
+totals here are still exact across thread counts, by implementation rather
+than by contract — see [Multi-threading](#multi-threading).) So a claim of
+the form "this run produces this number" needs a tolerance of a few
+hundred ulp of the quantity's own scale *and* an absolute floor, and a
 claim about a *difference* of two order-one totals — every drift in this
 package is one — cannot be made relatively at all. The claims in the suite
 are made against bounds instead, which is why they survive the move.
-
-## Milestones
-
-Each has an acceptance test; serial `Float64` correctness first. *(Step 15:
-H0 to H6 are all done, each on its acceptance or on an amendment to it
-recorded in its own entry; H7 is optional and not planned.)*
-
-- **H0 — Scaffolding and prerequisites.** *(Done.)* The two TreeAMR
-  prerequisites landed on TreeAMR's `main`; `Project.toml` with the
-  `[sources]` pin to `main`, CI on 1.11 and release at one and four
-  threads, `CLAUDE.md`, this document. *Accept:* a clean clone
-  instantiates, an empty test suite passes, and the pinned TreeAMR
-  provides both prerequisites.
-
-  What H0 settled, beyond what was written above:
-
-  - **The suite is not empty.** `test/prerequisite_tests.jl` asserts the
-    two prerequisites rather than assuming them — that
-    `fill_by_coordinates!(AllVariables(f), fs)` fills a field set with
-    *bit-for-bit* the numbers the per-variable form does (the convergence
-    studies compare against numbers the two forms must agree on, so
-    agreement to roundoff would put a floor under every error this
-    package measures), and that `map_blocks!(…; stored = true)` reaches
-    every stored point with the kernel's index *as* the stored index,
-    checked on a face-centered set with `G = (0, 1)` so that a
-    per-dimension ghost width with a zero in it is what is tested. The
-    rest of the M8 surface — `InterfaceSchedule`, `restrict_interfaces!`,
-    `CellBoundary`, `boundary_by_coordinates`, `firing_boxes`,
-    `block_mapreduce` — is checked as a list of exported names, which is
-    the cheapest thing that fails when the pin moves under a rename.
-  - **`hostcopy` is split.** `hostcopy(fs)` returns `fs` *itself* on the
-    CPU, so on a machine with no device its copying path would be dead
-    code — which is every machine CI runs on. The copy is therefore
-    `hostcopy!(dst, src)`, callable host to host and tested that way; it
-    checks that the two layouts agree, because a `copyto!` between arrays
-    of equal length and unequal shape transposes the data instead of
-    failing, and `G` and the centering are exactly what a destination
-    built carelessly would get wrong. Only `hostcopy` is exported, as in
-    TreeWave; `hostcopy!` is reached as `TreeHydro.hostcopy!`.
-  - **The compat bounds.** `KernelAbstractions = "0.9.42, 1"` and
-    `SciMLBase = "3.50.1"` follow TreeWave's, `OrdinaryDiffEqSSPRK =
-    "2.3.2"` the version TreeAMR's test environment resolves,
-    `TreeAMR = "0.1.0"`, `julia = "1.11"` for the `[sources]` entry.
-    *(Amended when TreeAMR 0.1.1 was released: the entry is gone,
-    `TreeAMR = "0.1.1"` comes from the registry and the floor is
-    `julia = "1.10"`.)*
-    `OrdinaryDiffEqSSPRK` and `SciMLBase` are dependencies from H0 and
-    unused until H1c, so that the floor is fixed before anything relies
-    on it. *(Amended in step 15, for the finished package: neither is a
-    dependency any more. The deps are `TreeAMR = "0.1.3"`,
-    `KernelAbstractions = "0.9.42, 1"` and `IMEXRungeKutta = "1.3"`, the
-    last through a `[sources]` entry, and the floor is `julia = "1.11"`
-    again; see [File layout](#file-layout).)*
-- **H1 — The scheme on a uniform mesh.** *(Done.)* EOS, `con2prim`, MUSCL
-  with the three limiters, LLF, HLLE and HLLC, SSPRK33, the six-step RHS
-  with `D` flux sets, the exact Riemann solver and the Dirichlet boundary
-  hook — on a single-level forest, `D = 1, 2` (3D smoke).
-  *Accept:* the entropy wave converges at second order in L1 and L∞ with
-  `:none`, and in L1 with `:mc` (amended in step 3: the first draft said
-  "near it" in both norms under a limiter, and the measurement says
-  otherwise — `:mc` clips the smooth extrema and its L∞ rate is 1.35, see
-  [Measured results](#measured-results)); Sod against the exact Riemann
-  solution at an L1 rate in `[0.8, 1.0]`; direction independence bit for
-  bit; every conserved integral constant to roundoff (every face is a
-  same-level face, with or without the fixup — the control).
-
-  What H1 measured, across steps 1–4, all of it in
-  [Measured results](#measured-results) and all of it identical at one and
-  at four threads:
-
-  - **Second order on smooth data**: the entropy wave at L1 and L∞ rates
-    2.015 and 2.024 in `D = 1`, 2.021 and 2.029 in `D = 2`, with `:none`;
-    and the semi-discrete residual — one right-hand-side evaluation against
-    the exact time derivative of the exact cell averages, with no time
-    stepping in it — at 2.033.
-  - **What a limiter costs on smooth data**: `:mc` keeps the L1 rate (2.006)
-    and loses the L∞ one (1.354, falling toward the 1 the theory gives),
-    which is why the convergence study runs with `:none`. The prediction was
-    wrong and is amended rather than met.
-  - **First order, near enough, on a discontinuous one**: Sod at an L1 rate
-    of 0.903 under `:minmod` and 0.945 under `:mc` over `N = 16 … 128`,
-    inside the predicted 0.8 to 1.
-  - **Conservation on the uniform mesh**: all `D + 2` integrals to a few ulp
-    of their own scale in `D = 1, 2, 3`, with the drift *per step* falling
-    as `N` rises, and **bit-identical with the fixup and without it** —
-    which is the control that gives H2's coarse-fine claim its meaning. No
-    floor fired in any run of any case.
-  - **The boundary flux where a boundary is physical**: Sod's momentum total
-    moves by exactly `(p_L − p_R) · t_end · A` while its mass and energy
-    totals do not move, which is the form the conservation claim takes when
-    the domain integral is not constant.
-  - **Direction independence, bit for bit, both halves**, over the whole
-    stored array including the ghosts the boundary hook wrote.
-  - **`λ_max` from the initial data is not a bound.** Sod's post-shock gas
-    is 1.8522 times faster than anything at `t = 0`, which is the amendment
-    under [Time integration and the time
-    step](#time-integration-and-the-time-step) and the number that will size
-    the driver's headroom factor in H3.
-
-  The pieces H1 wrote but did not measure: HLLC, which is step 10's
-  comparison; the two-level `hydro_forest`, which is H2's; and the boundary
-  hook's other two call sites, `regrid!` and `adapt_to_initial_data!`, which
-  are H3's.
-- **H2 — Coarse-fine faces, static mesh.** *(Done.)* The two-level
-  `hydro_forest`, the two two-level `sod_forest` configurations, the
-  fixup, the boundary hook on a fine block. *Accept:* conservation of all
-  `D + 2` integrals to roundoff with the fixup and a leak without, in
-  `D = 1, 2, 3`, on the entropy wave and on Sod; the interface-order
-  table for the system (predicted L∞ 1, 2, 2 at `p = 1, 3, 5`; L1 2, 2,
-  2); a two-level Sod whose refined region touches the Dirichlet
-  boundary.
-
-  What H2 measured, all of it in
-  [Measured results](#measured-results) and all of it identical at one and
-  at four threads. Step 5 added almost no code — `sod_forest`'s `refined`
-  option and a one-line `forest_levels` — and the whole of it is
-  `test/interface_tests.jl`:
-
-  - **The fixup is what conserves.** On the static two-level mesh, with
-    the fixup every one of the `D + 2` integrals holds to a *hundredth* of
-    one ulp of its own scale per step in `D = 1, 2, 3`; without it — the
-    same mesh, the same block count, the same step count, one line
-    different — every one of them leaks by `1e8` to `1e9` times that
-    bound. This is TreeAMR's M8b claim for a system, and the 3D entry is
-    where a coarse-fine face carries four fine faces.
-  - **The interface-order rule carries over to the system unamended.** L∞
-    rates **0.963 / 2.034 / 2.037** in `D = 1` and **0.925 / 2.041 /
-    2.037** in `D = 2` for `p = 1, 3, 5`, against unrefined controls of
-    2.024 and 2.029, with `p = 3` landing within 0.013 of the control and
-    `p = 5` buying nothing further; every L1 rate is the scheme's own,
-    `p = 1` included. Predicted before it was run.
-  - **The norm is part of the result, and the reason is conservation.**
-    With `fixup = false` at `p = 1` the L1 rate falls from 1.966 to
-    **1.111** in `D = 1` and from 1.900 to **1.192** in `D = 2`, while L∞
-    is 1.0 either way. TreeAMR measured 1.98 → 1.12 and 1.80 → 1.25 on
-    Burgers.
-  - **Sod conserves across a coarse-fine face its shock crosses.** The
-    shock leaves the refined box at `t = 0.14268` of a `t_end = 0.2` run.
-    With the fixup the mass and energy drift is 0.15 to 2.8 times the
-    uniform mesh's at the same coarse spacing — the coarse-fine face adds
-    nothing to the boundary's own numerical flux — and the momentum total
-    moves by the closed-form boundary flux to `5e-11` relative; without it
-    all three are `6.3e3` to `7.7e7` times worse. At `N = 32` in `D = 1`,
-    where the boundary's own flux has itself reached roundoff, the claim
-    is the plain one: `0.0`, `2.2e-16` and `2.8e-17` against bounds of
-    `2.8e-13`, `6.9e-13` and `9.0e-14`.
-  - **The Dirichlet hook fills a fine block's outer ghosts**, all of them,
-    including the ghost rows across the tube, with zero mismatches after
-    the run.
-  - **The two-level tube costs 1.338 times the uniform fine run's L1
-    error** at the same finest spacing, in both dimensions — a sanity
-    bound, since the refined region here is static.
-
-  What H2 wrote but did not decide: the `p = 1` question, which the smooth
-  wave cannot answer (it confirms the premise — an integral norm does not
-  see the interface defect — and leaves the answer to the discontinuous
-  cases of steps 7 and 9).
-- **H3 — Regridding.** *(Done.)* The criterion, the buffer, `evolve!`, the
-  initial-data cycle. *Accept:* the cycle converges to a fixed hierarchy
-  on the initial data it is given — Sod's and the entropy wave's here;
-  Sedov's and Kelvin–Helmholtz's arrive with their cases in H4 and H5, and
-  run through this same cycle; the tracked Sod tube in `D = 1, 2` matches
-  the uniformly fine reference at fewer cells with the uniform coarse
-  mesh as control, conserves to roundoff through the regrids, and leaks
-  without the fixup; the `p = 1` against `p = 3` table for Sod; the
-  buffer-width table.
-
-  What step 6 measured, all of it in
-  [Measured results](#step-6--the-refinement-criterion) and all of it
-  identical at one and at four threads:
-
-  - **The indicator fires where the physics is and nowhere else.** Sod's
-    initial data fires in exactly the two cells straddling the diaphragm
-    and at exactly zero everywhere else; a top-hat pressure in a uniform
-    density fires on `p` with the density's indicator exactly zero, which
-    is Sedov's initial data and the case a criterion on `ρ` alone would
-    miss entirely; a pure contact fires with the pressure's indicator
-    exactly zero.
-  - **The global term is what silences the atmosphere.** Six orders below
-    the data, with `O(1)` relative noise: `τ = 0.0020` with
-    `ε_g = 1/1000` and **0.971** with `ε_g = 0`, every cell of it firing
-    in the second case. The negative control is the measurement.
-  - **The thresholds, calibrated against `h`**: `refine_tol = 0.08` and
-    `coarsen_tol = 0.02`, mid-plateau of the depth the shear layer's ramp
-    reaches. The ramp is what picks them because the discontinuities
-    cannot — they exceed any usable threshold at every resolution.
-  - **Two predictions amended.** A captured shock scores 0.57 rather than
-    the ≈ 1 of a sharp jump, while keeping the property that matters (it
-    does not fall with `h`, so `maxlevel_cap` binds there); and a kink
-    does *not* fire forever — a numerically computed rarefaction head
-    falls at first order in `h`.
-
-  What step 7 measured, all of it in
-  [Measured results](#step-7--the-driver-and-the-tracked-shock-tube) and
-  all of it identical at one and at four threads. Step 7 is the first step
-  whose mesh *moves*:
-
-  - **A tracked shock matches the uniformly fine reference at fewer
-    cells.** The tracked Sod tube's L1 error against the exact Riemann
-    solution is **1.0004** times the uniform fine run's in `D = 1` and
-    **1.0000** in `D = 2`, at 200 cells against 256 and 1472 against 2048,
-    with the uniform coarse control at **3.678** and **1.850** — and
-    reduced onto the grid the meshes share, the tracked and fine runs
-    differ by three to four orders of magnitude less than the coarse and
-    fine runs do. The static two-level mesh of H2 cost 1.338 for the same
-    finest spacing; a mesh that follows the waves costs essentially
-    nothing.
-  - **The mesh really does follow them.** `tracking == 1.0` in both
-    dimensions: at every chunk, every cell whose indicator exceeded
-    `refine_tol` sat on a block already at the cap. The initial-data cycle
-    converges in 3 passes and 2, and puts the diaphragm's two blocks at the
-    cap.
-  - **Conservation survives a mesh rebuilt under the solution.** Mass
-    `3.3e-16` and energy `1.6e-15` in `D = 1` over 588 steps and 9 mesh
-    changes, `4.2e-17` and `1.9e-16` in `D = 2`, the momentum equal to its
-    closed-form boundary flux to `8.6e-16` and `1.0e-16`; `fixup = false`
-    leaks `4.9e8` to `7.4e9` times more, on the same step count and the
-    same mesh history, and the single-level control is bit-identical either
-    way.
-  - **The headroom is what the recheck is for.** `speed_headroom = 1` on
-    Sod throws in the **first chunk** — a CFL number of 0.6236 against the
-    requested 0.4 — and at 2 the run completes with `λ_end ≤ 2λ` at every
-    chunk. That closes the step-4 amendment.
-  - **The buffer table is new**, and reproduces neither upstream finding:
-    the widths are strictly ordered in both tracking and error, because a
-    shock fires forever and a partially covered one is partially resolved.
-  - **The first discontinuous row of the `p = 1` question**, and it goes
-    against `p = 1`: 3.6% worse in L1, 8% more cells, tracking lost to
-    0.9091, and no floor count to buy — which is exactly why Sod cannot
-    close the question and Sedov must. *(It did, in step 9, and with the
-    opposite sign: on a strong shock crossing a coarse-fine face `p = 1`
-    floors nothing where `p = 3` floors 4096 owned cells, for 0.47% of L1.
-    The two rows measure different things — whether a prolongation ever
-    spans a shock — and `p = 3` stays the default. See
-    [Operator order](#operator-order).)*
-
-  What step 7 wrote but did not exercise: every case but Sod and the
-  entropy wave. (The atmosphere reset, which was the other item on that
-  list, landed in step 8; see [Measured
-  results](#step-8--the-atmosphere-reset).)
-- **H4 — Sedov.** *(Done.)* Floors and the atmosphere reset, the `D = 2`
-  and `D = 3` blasts, the similarity checks, the hook on edges and corners.
-  *Accept:* the exponent and the jump; the reset idempotent and `U`/`P`
-  consistent after it; the injection measured and the drift net of it
-  at roundoff, `:stage` against `:step`; floor counts by population; the
-  shell tracked to the
-  uniform fine reference at fewer cells; block count rising then
-  falling behind the shock; the `p = 1` / `p = 3` comparison and the
-  ghost-floor count that decides the upstream question. The 3D adaptive
-  run at test size. *(The reset, its accounting and both floor counts
-  landed in step 8 and are measured there on cases where nothing fires;
-  what is left for this milestone is the blast itself, which is the case
-  where they do.)*
-
-  What step 9 measured, all of it in
-  [Measured results](#step-9--the-sedov-blast) and all of it identical at
-  one and at four threads:
-
-  - **The law, twice over.** `ξ₀ = 1.0327774677614250` for `γ = 7/5` in
-    3D, which is Taylor's 1.033, from a parametrization derived rather
-    than transcribed and checked against the one similarity equation it
-    was not built from (residual `3.6e-14`). The measured exponents are
-    **0.64146, 0.50443, 0.43766** against `2/3, 1/2, 2/5`, and the peak
-    jumps **4.111, 3.765, 2.057** against the strong-shock 6, approached
-    from below as a captured shock must.
-  - **The tracked blast reproduces the uniform fine run to roundoff** —
-    `8.3e-15` at 12544 cells against 16384 — with `tracking == 1` in
-    every dimension, conservation at roundoff through the regrids, and a
-    boundary that contributes exactly nothing, unlike Sod's.
-  - **A tracked mesh cannot measure its own coarse-fine faces**, and that
-    is the step's sharpest finding: tracking puts the refined region's
-    boundary ahead of the shock, so `fixup = false`, `p = 1` and
-    `reset = :step` come back identical to the run they control. The
-    static `sedov_forest(:center)` mesh, where the blast leaves the
-    refined region, is where every interface claim is made — and there
-    the fixup buys `3.2e12` in mass in `D = 2` and `8.5e7` in `D = 3`.
-  - **The floors fire, and neither rule nor place is what was predicted.**
-    The evacuated interior never reaches `ρ_atm`, so the atmosphere rule
-    never fires and every mass injection stays exactly zero; what fires is
-    the *pressure floor*, driven by the interface flux restriction itself,
-    4096 owned cells and 40 ghost entries in `D = 2` and 24504 and 4703 in
-    `D = 3`.
-  - **`p = 1` buys exact positivity for 0.47% of L1**, which closes the
-    open question of [Operator order](#operator-order) with the opposite
-    sign from Sod's row — and the two rows do not disagree, they measure
-    whether a prolongation ever spans a shock.
-  - **The injection is a bound under `:stage` and an equality under
-    `:step`**, because SSPRK33's stages carry weights `1/6, 2/3, 1`;
-    measured ratios `0.51984` and `0.52203`, and `|drift − injection|` of
-    `4.4e-16` and `2.2e-16` under `:step`.
-  - **The M2 ordering case in full**: zero mismatched entries out of
-    1664, 72000 and 59360 stored outward-facing ghost entries on a 2D
-    corner, a 3D edge and a 3D corner, with the fine corner block's
-    density and energy bit-identical to the ambient.
-
-  What the acceptance list got wrong, and it is one item: **the block count
-  does not rise and then fall**. It rises monotonically, because the Sedov
-  interior is a steep density ramp rather than a flat bubble and a Löhner
-  indicator on `ρ` correctly fires throughout it; the refined region is a
-  growing disk. The hollow opens only at the very centre and only late. The
-  milestone is marked done on the strength of what that item was *for* — a
-  mesh that follows a closed expanding surface, at a real saving — which is
-  met; a criterion that would produce a shell is listed under
-  [Possible extensions](#possible-extensions).
-- **H5 — Kelvin–Helmholtz.** *(Done.)* The McNally setup, `M(t)` and the kinetic
-  energy diagnostic, HLLC, the viewer. *Accept:* `M(t)` grows below the
-  incompressible bound and converges toward the uniform fine run as the
-  cap rises; conservation through regrids; HLLE against HLLC measured and
-  the default chosen; the filmstrip rendered in CI.
-
-  **Step 10 did the physics; the picture is what is left.** Done: the setup
-  checked against the paper term for term, `mode_amplitude` in the
-  area-weighted form, `max_y_kinetic_energy`, `growth_rate` and its window,
-  the case and `kh_run`/`kh_uniform`, the measured growth rate 2.58036
-  below both the `4.384` and the `5.9238` bounds, conservation to roundoff
-  through the regrids with a five-to-six-order leak without the fixup, the
-  cap sweep converging onto the uniform fine run, the `Float32` claim, and
-  the HLLE/HLLC measurement with HLLC chosen as this case's default. Not
-  done when step 10 closed: the **viewer and the filmstrip in CI**.
-  **Step 11 built it and H5 is done.** `bin/visualize2d.jl --case=kh`,
-  `bin/Project.toml` and the `viewer` job in `CI.yml` render the filmstrip,
-  the two diagnostics against the uniform fine run, and the block count, on
-  every push. The viewer adds no time stepping of its own: it reads
-  `kh_run`'s observer through the pass-through step 11 gave it. The last
-  clause of the acceptance — "the filmstrip rendered in CI" — is **closed
-  on the first run of the job**, PR #1: the `viewer` job passed in 11 m 43,
-  and the `kh_2d.png` it uploaded carries the same 232 blocks, the same
-  `M(1.5) = 0.12346` and the same fitted 2.58036 as the local render.
-- **H6 — Precision, threads, device.** *(Done.)* `T` and `backend` on every
-  driver, the type table above, the thread workload, device tests, the
-  benchmark. *Accept:* `Float32` reproduces the Sod and Sedov meshes and
-  floor counts; `Float32x2` runs Sod and Sedov; digests identical across
-  thread counts; the per-phase device table with the RHS speedup on
-  unified memory measured. *(Threads and device done, as steps 13 and 14,
-  ahead of precision: digests identical at one and four threads, the
-  device table on Metal and an H200, and scans on Symmetry. See [Step 13 —
-  threads](#step-13--threads) and [Step 14 — the benchmark and the
-  device](#step-14--the-benchmark-and-the-device).)* **Precision done in
-  step 12, and H6 is done:** `Float32` and `Float32x2` reproduce the Sod and
-  Sedov meshes and floor counts exactly, with errors inside the predicted
-  1% by a factor of eight or more; see [Step 12 —
-  precision](#step-12--precision).
-- **H7 — Higher-order reconstruction** *(optional)*. PPM or WENO-Z at
-  `G = 3`, and the interface-order rule re-measured against it. *(Not
-  planned, and not started: the package is complete at H6. Step 10's
-  comparison with the paper's curves is the one measurement that points at
-  it — at 128² this second-order scheme reaches about half the published
-  `M(1.5)`, where the codes on the reference are piecewise-parabolic or
-  sixth-order.)*
 
 ## Measured results
 
 This section takes the numbers as the milestones produce them, each beside
 the prediction it confirms or corrects. Everything here is `Float64` on the
-CPU backend, and every number is identical at one and at four threads.
-*(Amended in step 15: except where a section says otherwise — the `Float32`
-rows of steps 8, 10 and 12, the device tables and Symmetry scans of step
-14, and the timings, which are wall clock on the machine named.)*
+CPU backend, and every number is identical at one and at four threads,
+except where a section says otherwise — the `Float32` rows of steps 8, 10
+and 12, the device tables and Symmetry scans of step 14, and the timings,
+which are wall clock on the machine named. The "Step N" headings name the
+step that took the numbers (the steps are listed in
+[HISTORY.md](HISTORY.md#milestones-and-steps)); measurements that later
+ones replaced are in [HISTORY.md](HISTORY.md#measured-results-replaced).
 
 ### Step 3 — the entropy wave on the uniform mesh
 
@@ -3592,7 +3197,7 @@ falling as `N` grows (1.49, 1.25, 1.36 between consecutive `D = 1` pairs;
 1.55 then 1.15 in `D = 2`). This is the TVD limiter clipping the sine's
 two smooth extrema, where it is first order by construction, so L∞ tends
 to 1 while the shrinking width of the clipped region leaves L1 at 2. The
-step plan (deleted in step 15) predicted "≥ 1.5 with `:mc`"; that
+step plan predicted "≥ 1.5 with `:mc`"; that
 prediction was wrong in L∞ and the
 tests assert 1.2, with the measured value recorded here rather than the
 threshold moved to meet it. It is also the reason the convergence study is
@@ -3661,12 +3266,11 @@ tolerance.
 monotonically. L∞ is recorded and nothing is asserted on it: on a solution
 with a shock in it, L∞ is the error in the one cell nearest the
 discontinuity and does not even decrease with `h`. Under `:mc` the same
-sweep gives 0.945, which is the number to beat when HLLC is measured.
-*(Amended in step 15: HLLC was measured on the shear layer and never on
-Sod, so this number has nothing beside it; the sweep under HLLC is under
-[Possible extensions](#possible-extensions).)*
+sweep gives 0.945. HLLC was measured on the shear layer and never on Sod,
+so this number has nothing beside it; the sweep under HLLC is under
+[Possible extensions](#possible-extensions).
 
-**The signal speed, and why the driver will need headroom.**
+**The signal speed, and why the driver needs headroom.**
 
 | | value |
 |---|---|
@@ -3860,7 +3464,10 @@ cells straddling the diaphragm fire, at **`τ = 0.9657`** and **`0.9847`**,
 and every other cell scores **exactly zero**. The two blocks that meet at
 `x₀` report exactly those cells as their boxes (`N:N` and `1:1`) and every
 other block is a bare `Keep`. In `D = 2` the same holds with a whole
-column of cells firing in each. Against that, a synthetic atmosphere six
+column of cells firing in each. A top-hat pressure in a uniform density fires
+on `p` with the density's indicator exactly zero, which is Sedov's initial
+data and the case a criterion on `ρ` alone would miss entirely; a pure
+contact fires with the pressure's indicator exactly zero. Against that, a synthetic atmosphere six
 orders below the data, alternating cell by cell between `ρ_atm` and
 `2ρ_atm` and likewise in `p`:
 
@@ -4029,7 +3636,7 @@ it.
 
 **`p = 1` against `p = 3` and `p = 5`** (`D = 1`, tracked): the table is
 under [Operator order](#operator-order), where it is the first
-*discontinuous* row of the open question — 4.701364e-3 at tracking 0.9091
+*discontinuous* row of the question — 4.701364e-3 at tracking 0.9091
 and 216 cells for `p = 1`, against 4.540016e-3 at 1.0000 and 200 cells for
 `p = 3`, with `p = 5` indistinguishable from `p = 3`, and zero floor hits
 throughout.
@@ -4129,19 +3736,21 @@ recovered pressure `1.0e-5` against `-1.0`. The control matters because
 the right-hand side floors `P` internally, so a `:none` run completes and
 looks healthy from the outside while its *state* is untouched.
 
+The one-step vacuum test asserts the hit counts as well as the flooring:
+`:stage` resets 12 owned cells in `D = 1` and 192 in `D = 2` on a step
+where `:step` resets 2 and 32, and `:none` resets none — which is what
+says the stage hook is installed, since the step's result is floored by
+either. And `test/sedov_tests.jl` asserts drift = injection to roundoff
+under *both* cadences.
+
 **The ghost population is counted over the stored extent.**
 `ghost_floor_hits` equals the hand count of ghost *entries* whose
 `con2prim` fired, at both types in `D = 1, 2`, with `floor_hits` equal to
 the owned count from the same sweep — the split the Sedov milestone
 reports against the ghost-exchange decision.
 
-**What the default reset costs.** The whole suite is **11 282 tests in
-1 m 42.9 at four threads and 1 m 55.8 at one**, against 11 149 in 1 m 42.3
-and 1 m 36.8 on the same machine before the step — but most of that
-difference is the new file's own twenty-odd evolutions and the
-compilation they move earlier, and two runs of the same tree differ by
-seconds, so the reset's price is better read off a controlled comparison.
-The tracked tube of `driver_tests.jl` (`D = 1`, `t_end = 1/5`, 588 steps,
+**What the default reset costs**, read off a controlled comparison: the
+tracked tube of `driver_tests.jl` (`D = 1`, `t_end = 1/5`, 588 steps,
 9 mesh changes), best of three:
 
 | | 1 thread | 4 threads |
@@ -4153,21 +3762,13 @@ The tracked tube of `driver_tests.jl` (`D = 1`, `t_end = 1/5`, 588 steps,
 
 So the per-stage reset costs **10% at one thread and 19% at four** of a
 run that is nothing but driver, and `:step` costs a third of that — the
-comparison Sedov will make on accuracy is cheap in either direction. (It
-made it in step 9, and the answer is that the two give the same state to
-roundoff, `:stage` making three times the repairs and reporting a bound
-where `:step` reports an equality; see
-[Step 9](#step-9--the-sedov-blast).) The
+comparison Sedov makes on accuracy is cheap in either direction. The
 injection accounting costs **2.5× at four threads**, which is what six
 extra whole-state reductions per step buy and exactly why it is a keyword
 the tests turn on and the demos do not. (The four-thread column being
 slower than the one-thread column is this mesh being tiny — 25 blocks of
 8 cells — and is the launch overhead the benchmark of step 14 is for, not
 anything the reset introduced.)
-
-Every one of the 75 `@info` lines the suite printed before this step is
-printed **byte-identically** after it; the 20 new ones are identical at
-one thread and at four.
 
 ### Step 9 — the Sedov blast
 
@@ -4233,7 +3834,7 @@ is which cell centres fall inside a circle and a sphere, and the ratio is
 3.5% and 4.4%.
 
 **The first chunk outgrows the speed it was sized from**, which corrects
-"`λ_max` only decreases" in [Sedov blast wave](#sedov-blast-wave):
+"`λ_max` only decreases" ([HISTORY.md](HISTORY.md#sedov-blast-wave)):
 
 | `D` | `λ` at chunk 1 | `λ_end` at chunk 1 | growth | worst over the run | `λ` at `t_end` |
 |---|---|---|---|---|---|
@@ -4286,7 +3887,7 @@ the coarse-fine face at `1/4`, and every control at the same step count:
 
 | run | mass drift | energy drift | reset hits | ghost hits | injection (E) | L1 vs fine |
 |---|---|---|---|---|---|---|
-| `p = 3`, `:stage` | 1.332e-15 | 1.2465883e-5 | 4096 | 40 | 2.3980402e-5 | 4.406604e-2 |
+| `p = 3`, `:stage` | 1.332e-15 | 1.24609e-5 | 4136 | 40 | 1.24609e-5 | 4.406604e-2 |
 | `p = 3`, `:step` | 1.443e-15 | 1.2457381e-5 | 1384 | 40 | 1.2457381e-5 | 4.406604e-2 |
 | `p = 3`, `:none` | 1.221e-15 | **1.554e-15** | 0 | 40 | — | — |
 | `p = 1`, `:stage` | 1.665e-15 | **2.0e-15** | **0** | **0** | 0 | 4.427249e-2 |
@@ -4301,7 +3902,7 @@ is **bit-identical** with the fixup and without it, so the leak is the
 coarse-fine face's. The `:none` row shows the energy drift of the other
 rows is *entirely* the reset's injection and not a leak. Under `:step` the
 drift **equals** the injection to `4.44e-16` against a bound of `7.96e-13`;
-under `:stage` it is `0.51984` of it, the SSPRK stage weights. And `p = 1`
+under `:stage` to `8.9e-16`. And `p = 1`
 floors nothing at all, for `0.47%` of L1.
 
 **The same mesh in `D = 3`** — 120 blocks, levels `[0, 1]`, `N = 4`,
@@ -4309,14 +3910,16 @@ floors nothing at all, for `0.47%` of L1.
 
 | run | mass drift | energy drift | floor / reset / ghost hits |
 |---|---|---|---|
-| `p = 3`, `:stage` | 3.251e-11 | 4.4512289e-5 | 75 / 24504 / 4703 |
+| `p = 3`, `:stage` | 3.251e-11 | 4.44841e-5 | 89 / 24576 / 4786 |
 | `p = 3`, `:step` | 3.251e-11 | 4.4472762e-5 | 49 / 8232 / 4581 |
 | `fixup = false` | **2.758779e-3** | **5.8954619e-2** | 0 / 0 / 4224 |
 | uniform coarse | 2.773e-10 | 3.0e-14 | 0 / 0 / 0 |
 
 The 3D coarse-fine face under a real shock, where the fixup averages
-`2 × 2` fine faces: **8.5e7** in mass and **1324×** in energy. The mass
-drift is *not* roundoff and is *not* the face's — the uniform mesh at the
+`2 × 2` fine faces: **8.5e7** in mass and **1324×** in energy (this ratio
+and the 2350× above were taken against the energy drifts under
+OrdinaryDiffEq; see [HISTORY.md](HISTORY.md#measured-results-replaced)).
+The mass drift is *not* roundoff and is *not* the face's — the uniform mesh at the
 same coarse spacing leaks eight times more, which is a strong blast's
 numerical precursor reaching the Dirichlet boundary, the same trap Sod's
 tube sets. Under `:step` the drift equals the injection to `2.22e-16`
@@ -4329,8 +3932,8 @@ on:
 |---|---|---|---|
 | tracked `D = 2` | 0 | 0 | 0 |
 | tracked `D = 3` | 0 | 288 | 1152 |
-| `:center` `D = 2` | 0 | 4096 | 40 |
-| `:center` `D = 3` | 75 | 24504 | 4703 |
+| `:center` `D = 2` | 0 | 4136 | 40 |
+| `:center` `D = 3` | 89 | 24576 | 4786 |
 | uniform `D = 2` | 0 | 0 | 0 |
 
 The **atmosphere rule never fires**: the minimum density is `6.7e-2`, not
@@ -4353,15 +3956,6 @@ is `10⁻³³` of it; the density and the energy are bit-identical in every
 case and only the momenta, which start at exactly zero, move at all. See
 [Boundaries](#boundaries).
 
-**The suite.** 11507 tests in **2 m 43 at one thread and 2 m 09 at four**
-(wall 2 m 51 and 2 m 14), against step 8's 11282 in 1 m 50 and 1 m 42 — so
-the blast adds roughly 50 s and 30 s, which is what a case with a 3D
-adaptive run and eleven two-dimensional evolutions costs. Run to run this
-machine moves by about ten percent at four threads, so the delta is worth
-one significant figure and no more. Every one of the 95 `@info`
-lines the suite printed before this step is printed **byte-identically**
-after it, and the 28 new ones are identical at one thread and at four.
-
 ### Step 10 — Kelvin–Helmholtz
 
 The configuration everything below is measured on: `roots = 4`, `N = 8`,
@@ -4378,11 +3972,7 @@ cap sweep and the flux comparison run to `3/2` with the headline pair.
 perturbation, `γ = 5/3`, `p = 5/2` and `t = 1.5` are
 McNally, Lyra & Passy's equations (1)–(5) **term for term**: the test
 re-evaluates them from the paper's own literals and the worst difference
-over 38 × 132 sample points is **exactly zero**. The one thing that was
-wrong is the weighting of `M(t)`, which read "the lower interface alone"
-and is in fact mirrored over both interfaces; it is corrected above, as is
-the absence of the area-weighted form (14)–(17) that an adaptive mesh
-needs. The initial data's closed-form integrals check the branch *signs*,
+over 38 × 132 sample points is **exactly zero**. The initial data's closed-form integrals check the branch *signs*,
 the `ρ_m` terms of the four branches cancelling exactly:
 
 | | closed form | discrete, on the adapted mesh |
@@ -4419,8 +4009,7 @@ the uniform fine run agrees to 0.1%.
 local logarithmic derivative falls from **3.349** at `t ≈ 0.5`, through the
 window's 2.580, to **1.844** over the last twenty chunks, and `M` is still
 at its maximum at `t_end`. So the run ends on the shoulder of the curve
-rather than on its plateau, which is the reason the prediction above now
-says "eventually saturates" rather than "saturates by `t_end`".
+rather than on its plateau.
 
 **Against the paper's curves, the first half of the shape is reproduced and
 the second half is under-resolved.** The reference in their Figure 7 starts
@@ -4518,39 +4107,14 @@ under HLLC and **1.1712** under HLLE at the same resolution, and HLLC at
 **`Float32`**, to `t = 2/5` (720 steps), against the `Float64` run of the
 same configuration: the **same** 160 blocks at levels `[1, 2]` at every one
 of the 81 samples, the same step count, the same `tracking = 1.0` and the
-same 4 cycle passes; `max |M₃₂ − M₆₄|/M = 1.857e-5`, which is **156 ulp of
-`Float32`**, and `max |K₃₂ − K₆₄|/K = 2.552e-4` (200 ulp and 2.221e-4 since
-the move to IMEXRungeKutta, which associates the stage sums differently). The final state is *not*
+same 4 cycle passes; `max |M₃₂ − M₆₄|/M` is **200 ulp of `Float32`**, and
+`max |K₃₂ − K₆₄|/K = 2.221e-4`. The final state is *not*
 claimed and is not asserted, for the reason the case description gives.
 MultiFloats is skipped entirely: `sin` and `exp` are not implemented there,
 so this case cannot run at `Float32x2` at all, and Sod and Sedov carry that
 half of the precision study.
 
-**The suite.** 11609 tests in **3 m 44 at one thread and 2 m 38 at four**
-on a quiet machine, against step 9's 11507 in 2 m 43 and 2 m 09 — so the
-shear layer adds roughly a minute at one thread and thirty seconds at four.
-Runs taken while this (shared) machine was busy with other work reached
-4 m 10 and 3 m 12, so the number carries one significant figure and the
-comparison is only fair between measurements taken under the same load. The
-gap between the two
-thread counts is the largest in the package's history and is the case's
-own shape: twelve two-dimensional evolutions, of which four run 2700 steps
-on 128²-equivalent meshes, is the most parallel work any one file has held.
-Every one of the 123 `@info` lines the suite printed before this step is
-printed **byte-identically** after it, and the 11 new ones are identical at
-one thread and at four. The clean-checkout check — a `git archive` tree
-with no `Manifest.toml`, resolving TreeAMR from GitHub `main`, which is
-what CI does and what the `[sources]` pin exists for — passes.
-
 ### Step 11 — the viewers and the figure job
-
-The step that closes H5b and H5, and it is the first in this package whose
-deliverable is a picture rather than a number. What it built:
-`bin/Project.toml` (CairoMakie and SixelTerm in an environment of their
-own, with `[sources]` for *both* packages), `bin/backend.jl` after
-TreeWave's, `bin/visualize1d.jl` (the tracked tube) and
-`bin/visualize2d.jl` (`--case=kh|sedov|both`), and the `viewer` job in
-`CI.yml`.
 
 **Every figure reproduces the recorded numbers**, which is the check that
 the viewers are drawing the runs this document is about and not
@@ -4564,40 +4128,50 @@ records. The shear layer renders 14848 cells in 232 blocks against 16384
 uniformly fine, with `M(0) = 0.0100` growing to `M(1.5) = 0.12346` at a
 fitted **2.58036** — step 10's row.
 
-**Three things the implementation settled:**
+**Four things the implementation settled:**
 
 - **`kh_run` needed an `observer` pass-through, and the design did not say
-  so** *(amended here)*. `evolve!` takes exactly one observer and `kh_run`
+  so.** `evolve!` takes exactly one observer and `kh_run`
   installs it; the design had the viewer reading `kh_run`'s returned curves
   and never said how it would also get *frames*. A viewer that installed
   its own observer on `evolve!` would have displaced `kh_run`'s and taken
   `M` and `K` somewhere other than the one place this document says they
   may be taken. So `kh_run` gained `observer = nothing`, called after its
   own three diagnostics; a run that passes nothing is bit-identical to one
-  from before the keyword. Asserted rather than assumed: the new testset in
+  from before the keyword. Asserted rather than assumed: the testset in
   `test/kelvinhelmholtz_tests.jl` sees the hook called **81 times** on the
   `t = 2/5` control, at the same times and the same 160 blocks the case's
   own hook saw, with `Ms`, `Ks`, `nbs`, `ts`, the drift, the step count and
   the mesh history all equal — and every one of this file's recorded
   numbers is unchanged, `M → 0.1234566379057999` and the rate
-  `2.5803559556363127` included. The suite goes from **11610 tests in
-  4 m 13.6 to 11622 in 4 m 31.9** at one thread.
+  `2.5803559556363127` included.
 - **A tracked Sedov run floors nothing, and the figure has to say so.** The
   render reports `0` owned and `0` ghost floor hits, which is not a
   contradiction of step 9 but its central correction restated: tracking
   puts the refined region's boundary ahead of the shock, so a tracked run's
-  coarse-fine faces stand in undisturbed ambient. The 4096 owned and 40
+  coarse-fine faces stand in undisturbed ambient. The 4136 owned and 40
   ghost hits of step 9 are the *static* `sedov_forest(:center)` mesh's. The
   figure's title says which of the two it is showing, because a reader who
   knows the recorded number and sees a zero would otherwise conclude the
   floors had stopped working.
-- **Two exported names collide with Makie, and one is new.** TreeAMR
+- **Two exported names collide with Makie.** TreeAMR
   exports `scatter!` (the state-vector one) and Makie exports the plot
   recipe; TreeHydro exports `density` and Makie's `@recipe` exports
   `density`/`density!` too. Julia errors on any *use* of an ambiguous
-  name, so `bin/` writes `CairoMakie.scatter!` in full and never writes
-  `density` at all — it reads slot 1 of `P` directly. TreeWave met the
-  first; the second is this package's own.
+  name, not on the `using`, so the failure arrives at the first plot call
+  and names neither package helpfully; `bin/` writes `CairoMakie.scatter!`
+  in full and never writes `density` at all — it reads slot 1 of `P`
+  directly. TreeWave met the first; the second is this package's own, and
+  any new `bin/` script inherits both.
+- **A viewer snapshot must *materialize* everything it keeps.**
+  `hostcopy(fs)` returns `fs` **itself** on the CPU — deliberately, since
+  the viewer only reads — and `regrid!` reuses and resizes the working
+  array, so a frame that stored a view or a bare `Array(work)` comes back
+  holding the *last* frame in every slot and the filmstrip shows four
+  copies of the final one. `Float64.(interiorview(fs, b, v))` does the
+  materializing and doubles as the one place a `Float32` run stops being
+  one; everything below it is a figure. The same applies to the `τ` a
+  viewer computes with `cell_tau`: take the number, not the array.
 
 **Cost.** Locally, on a machine also running the suite: the tube renders in
 **26 s**, the blast in **28 s**, and the shear layer in **53 s** — of which
@@ -4648,32 +4222,15 @@ at 9 m 52 and then 12 m 34 on two consecutive runs of the same commit
 range: 27%, and a reminder that none of these single draws is worth more
 than an ordering.
 
-**What was checked, beyond the figures looking right.** The suite is green
-at 11622 tests both on the current release and — the check that matters for
-a step which adds files — on the **floor version from a clean checkout**:
-`git archive` into an empty tree, TreeAMR resolved from GitHub `main`,
-`julia +1.11`, 6 m 32.2 and every number identical to the 1.13 run's. The
-viewer environment was instantiated and rendered from that same clean tree,
-which is the only thing that proves `bin/Project.toml`'s two `[sources]`
-entries resolve — a local run, with a depot that already has everything,
-proves nothing about it.
+And **the device path works through the viewer**. `bin/visualize1d.jl
+--backend=metal --type=f32` renders, and it renders the *same run*: 200
+cells in 25 blocks, 588 steps over 40 chunks and 9 regrids, L1 `4.54e-3`,
+`tracking == 1`, zero floor hits — every figure on it indistinguishable
+from the host `Float32` render. That exercises `withbackend`'s
+`invokelatest`, and it exercises `hostcopy` doing the thing it exists for
+rather than the CPU short-circuit it usually takes.
 
-And **the device path works through the viewer**, which was not planned for
-this step and is worth recording because it is the first time anything in
-this package has run on one. `bin/visualize1d.jl --backend=metal
---type=f32` renders, and it renders the *same run*: 200 cells in 25 blocks,
-588 steps over 40 chunks and 9 regrids, L1 `4.54e-3`, `tracking == 1`, zero
-floor hits — every figure on it indistinguishable from the host `Float32`
-render. That exercises `withbackend`'s `invokelatest`, and it exercises
-`hostcopy` doing the thing it exists for rather than the CPU short-circuit
-it usually takes. It is **not** the device milestone: H6c still owes the
-per-phase table, the opt-in device tests and the benchmark, and nothing
-here was measured for speed. *(All three delivered in step 14; see [Step 14
-— the benchmark and the device](#step-14--the-benchmark-and-the-device).)*
-It is one case, at one precision, saying the
-plumbing is connected.
-
-### A movie (added after step 11)
+### A movie
 
 `--movie` on `bin/visualize2d.jl` keeps every frame the observer hands over
 instead of the filmstrip's four and writes them as a video —
@@ -4682,12 +4239,10 @@ layer's `chunk = 1/200` over `t_end = 3/2` is **301 observer calls**, so the
 movie is 301 frames at 30 fps: ten seconds, 1.17 MB. It works for
 `--case=sedov` too, the drawing code being shared.
 
-This is an addition and not part of what H5 accepted, which is why it is
-recorded here rather than folded into the step 11 entry. The strip shows
-four states; the movie shows the *order*, which on this case is the whole
-point — the seeded mode decays while the ramp sheds its transient, takes off
-near `t = 0.5`, and only then rolls up, and the refined region thickens with
-the rolls rather than travelling with them.
+The strip shows four states; the movie shows the *order*, which on this
+case is the whole point — the seeded mode decays while the ramp sheds its
+transient, takes off near `t = 0.5`, and only then rolls up, and the
+refined region thickens with the rolls rather than travelling with them.
 
 **It costs `bin/Project.toml` nothing.** `FFMPEG_jll` arrives as a
 dependency of Makie, so `Makie.record` encodes `.mp4` and `.gif` with no new
@@ -4699,16 +4254,8 @@ is the one property the design exists to protect: `keptframes` takes the
 more frames and draws the identical four. Checked with `cmp` on both cases,
 not by inspection.
 
-**The cost was superlinear, and then it was not.** The first implementation
-drew one `heatmap!` per block and rebuilt all of them every frame behind an
-`empty!(ax)`. That cost 7 m 31 for 301 frames against 2 m 45 for 151 —
-doubling the frames cost **3.66×**, not 2× — and the mechanism was never
-attributed: the per-frame `ax.title` and the `Colorbar` were free
-(0.28–0.34 s/frame with and without), plots did not accumulate across
-`empty!`, and holding 301 frames live did not slow drawing on its own.
-
-The rewrite sidesteps it rather than explaining it. Measured on the same
-mesh, 200 blocks, per frame:
+**One heatmap over a uniform fine grid, built once.** Measured on a mesh of
+200 blocks, per frame:
 
 | | s/frame |
 |---|---|
@@ -4719,8 +4266,8 @@ mesh, 200 blocks, per frame:
 
 So the shipped path builds **four plot objects once** — one heatmap, one
 outline polyline per level, one colorbar — and then only pushes new data.
-The full Kelvin–Helmholtz movie went from **7 m 31 to 57 s**, against a
-57.8 s baseline for the runs and the figure alone: the 301 frames now cost
+The full Kelvin–Helmholtz movie takes **57 s**, against a
+57.8 s baseline for the runs and the figure alone: the 301 frames cost
 about as much as the noise. `px_per_unit` drops to 1 for the recording
 (900×950 rather than 1800×1900, and 393 KB rather than 1.17 MB) and is put
 back afterwards.
@@ -4811,20 +4358,16 @@ its cache is cold, and leaves it at a tenth of its 30-minute guard.
 **Why the job is ungated**, unlike the coverage step: coverage is a
 *report* whose consumer reads only `main`, while this is a *check*, and a
 pull request is exactly where a broken viewer should surface. `bin/` sits
-outside `src/` and `test/` with its own environment and its own copy of the
-TreeAMR pin (since TreeAMR's release, its own `Manifest.toml` and compat
-bound — amended in step 15),
-so nothing else in CI would notice it breaking — which is how
-TreeWave's `bin/` went on building against a TreeAMR older than its own
-tests until it failed on the removed `cell_center`. The four renders run as
-four separate processes rather than one, because both scripts define
-`main` and `const LEVELCOLORS` at top level in `Main` and Julia 1.11 — this
-package's floor — refuses to redefine a `const`. *(Amended 2026-10-16: at
-1.13, the floor since, the redefinition is allowed, and the separate
-processes stay so that neither script silently runs with the other's
-definitions.)*
+outside `src/` and `test/` with its own environment, its own
+`Manifest.toml` and its own TreeAMR compat bound, so nothing else in CI
+would notice it breaking — which is how TreeWave's `bin/` went on building
+against a TreeAMR older than its own tests until it failed on the removed
+`cell_center`. The four renders run as four separate processes rather than
+one, because both scripts define `main` and `const LEVELCOLORS` at top
+level in `Main`, and the separate processes stay so that neither script
+silently runs with the other's definitions.
 
-### Bounds checking in the kernels (added after step 11)
+### Bounds checking in the kernels
 
 Handed over as a brief from TreeAMR's ghost-performance pass, which found
 the same defect upstream. There was not a single `@inbounds` in `src/`, and
@@ -4928,175 +4471,6 @@ in the RHS path and TreeAMR's own host-side code — with nothing in it a
 single change worth making. Three kernels, five closures, four loops; the
 brief's advice to stop there is taken.
 
-### TreeAMR's release and the 1.10 floor (added after step 11)
-
-TreeAMR 0.1.1 was registered in General, which ends the arrangement that
-H0 built and that three of this package's notes were written around.
-`Project.toml` loses its `[sources]` entry and gains
-`TreeAMR = "0.1.1"`; `bin/Project.toml` loses its copy of the same entry
-and keeps the one for *this* package, which is unregistered.
-
-**What actually changed, as against what it looks like.** It looks like a
-dependency bump. Three things move with it.
-
-- **The bar for an upstream change rose.** The pin was `rev = "main"`, so
-  a TreeAMR change was visible here as soon as it was *pushed*. It is now
-  visible only once it is tagged and registered. The old note — "an
-  unpushed TreeAMR change is invisible here" — understates the new
-  situation rather than merely restating it, and `CLAUDE.md` and the
-  step plan (`PLAN.md`, deleted in step 15) said so.
-- **The Julia floor fell from 1.11 to 1.10.** `[sources]` is a 1.11
-  feature and was the *only* reason the floor was 1.11; TreeAMR's own
-  floor is 1.10, and that is now this package's. The suite is green there
-  at **11622 tests**, the same count as at the current release, from a
-  clean resolve with no `Manifest.toml`. Nothing in `src/` or `test/`
-  needed changing for it, which is the outcome worth recording: the
-  package had no 1.11-only construct in it, and nobody had checked.
-- **`bin/` did not follow.** Its `[sources]` entry for TreeHydro cannot
-  go anywhere, so the viewer environment keeps 1.11 — stated there as a
-  `[compat]` bound, because a 1.10 Pkg does not reject `[sources]`, it
-  *ignores* it, and then fails to find TreeHydro with an error about the
-  wrong thing. The environment re-resolves to TreeAMR 0.1.1 and
-  `bin/visualize1d.jl` renders unchanged.
-
-**The measurements.** Whole suite, one thread, back to back on a quiet
-machine, 11622 tests in every entry; the coverage column is in "Testing"
-above and the argument it settles is which CI cell carries the
-instrumentation:
-
-| | Julia 1.10 | Julia 1.13 |
-|---|---|---|
-| no coverage | 4 m 25.5 | 3 m 32.3 |
-| with coverage | 8 m 05.4 | 12 m 38.3 |
-
-The floor is now the *slower* version uninstrumented — 1.25×, where 1.11
-was 2.2× slower — and the cheaper one instrumented, by 1.56×. Coverage
-therefore stays on the floor cell, for a reason re-measured on the version
-that carries it.
-
-**One thing that inverted, and is left as an observation.** CI passes
-`check_bounds: 'yes'` on every cell, so what the floor cell actually runs
-is the *checked* suite — and at 1.10 that costs nothing: **4 m 11.6
-checked against 4 m 25.5 plain**, where at the current release it costs
-1.4× (5 m 19.9 against 3 m 44.8, measured after step 11). Both
-environments resolve the same KernelAbstractions 0.9.42, so that is not
-it. One draw each, not investigated, and recorded because the `@inbounds`
-saving in "Bounds checking in the kernels" was measured at the *release*
-and there is now a reason to think it is not the same size at the floor.
-It changes nothing: the annotation is a correctness assertion that CI
-checks, and its cost is not what justifies it.
-
-**What was checked.** The suite at 1.10 from a clean resolve (green,
-11622); the same suite at 1.10 under `--check-bounds=yes`, which is what
-CI's floor cell runs (green, 11622); the suite at the current release
-(green, 11622); the viewer
-environment re-resolved from a removed `Manifest.toml`, taking
-TreeAMR 0.1.1 from the registry, and the tracked tube rendered from it.
-The `[compat]` bound in `bin/` is not exercised by any of that — nothing
-runs `bin/` at 1.10 — and is there to turn a confusing failure into a
-clear one.
-
-### The 1.11 floor again (2026-09-25)
-
-The Julia floor went back from 1.10 to **1.11** (decided), in this package
-and in TreeAMR, TreeWave and TreeGRRMHD at once, TreeGeneralizedHarmonic
-having been at 1.11 throughout. The reason is the one the floor had
-before TreeAMR's release: `[sources]` is a 1.11 key, and every package in
-the family should be free to depend on an unregistered package — each
-other, or a new upstream — through a `[sources]` entry without moving the
-floor again, and without each package reaching the same conclusion on its
-own. `CI.yml`'s floor cell is `version: "1.11"`; it keeps the coverage,
-for the 1.04× measured on 1.11 in "Testing" above, which is the number
-that applies once more. The 1.10 measurements in the section above are
-left as the record of what was measured then.
-
-### The 1.13 floor (2026-10-16)
-
-The Julia floor went from 1.11 to **1.13** (decided by Erik on
-2026-10-16), in this package and in all the Tree* packages at once:
-supporting the versions before 1.13 slows development and is not useful
-at the moment. `julia = "1.13"` in `Project.toml`, `bin/Project.toml` and
-`showcase/Project.toml`. `CI.yml` runs 1.13 only — three cells, Linux,
-macOS (arm64, with the coverage) and Linux at four threads — and its
-`viewer` job runs 1.13 rather than the current release.
-
-Nothing in `src/` or `test/` needed changing, there being no `VERSION`
-check anywhere; only comments that named 1.11 as the floor did. Two
-things the 1.11 cell did, and that go with it:
-
-- **It caught a `const` defined in two test files**, which 1.11 refuses
-  and 1.12 and later allow — the `TRACKED_1D` collision of step 10. The
-  source-text check at the top of `runtests.jl`, added then, is now the
-  only guard, and it stays.
-- **It made coverage nearly free** (1.04× on 1.11 against 3.14× on 1.13,
-  in [Testing](#testing)). Coverage moved to the macOS 1.13 cell, which
-  measured 23 m 22 instrumented on CI against 12–17 m for the old 1.11
-  cell, so a push to `main` is expected to take longer; the timeout is per
-  cell again for the same reason.
-
-The clean-checkout check at the older version, and the `julia +1.11`
-line in `CLAUDE.md`'s "Commands", are gone. The measurements taken at
-1.10 and 1.11 elsewhere in this document stay, as the record of what was
-measured then.
-
-### IMEXRungeKutta and TreeAMR 0.1.3 (added after step 11)
-
-Two upstream changes taken together, because each alone would have moved
-the same numbers: TreeAMR 0.1.3, whose owner-based threading places every
-per-block pass on the thread that owns the block, and the move from
-OrdinaryDiffEq's `SSPRK33` to IMEXRungeKutta's (see [Time
-integration](#time-integration-and-the-time-step) and [Floors and the
-atmosphere](#floors-and-the-atmosphere) for the design; `src/stepping.jl`
-for the code). `Project.toml` loses `OrdinaryDiffEqSSPRK`, `SciMLBase` and
-the `[sources]` pin on TreeAMR's `main`, and gains `IMEXRungeKutta = "1.2"`
-with a `[sources]` entry of its own.
-
-**How it was checked.** The whole suite was run on the tree before the
-change and on the tree after it, at four threads, and the 136 `@info` lines
-of each compared line by line. 75 differ, and in all but the lines listed
-below the difference is in the last one to three of seventeen printed
-digits — Shu–Osher and Butcher form compute the same `uⁿ⁺¹` with the sums
-associated differently, and every run inherits that. No number `CODE.md`
-records to its printed precision moved except these, and each moved for
-the limiter placement and not for the arithmetic:
-
-| run | before (OrdinaryDiffEq) | after (IMEXRungeKutta) |
-|---|---|---|
-| static Sedov `:center` `D = 2`, `:stage` reset hits | 4096 | **4136** |
-| the same, energy drift | 1.24659e-5 | 1.24609e-5 |
-| the same, injection | 2.39804e-5 (a bound; ratio 0.51984) | **1.24609e-5 (equal to the drift to 8.9e-16)** |
-| the same, L1 against the fine run | 4.4066042e-2 | 4.4066041e-2 |
-| static Sedov `:center` `D = 3`, floor / reset / ghost hits | 75 / 24504 / 4703 | **89 / 24576 / 4786** |
-| the same, injection | 8.52677e-5 (a bound; ratio 0.52203) | **4.44841e-5 (equal to the drift to 3.6e-15)** |
-| Kelvin–Helmholtz `Float32` to `t = 2/5`, `max |M₃₂ − M₆₄|/M` | 156 ulp | 200 ulp |
-
-The `:step` columns — 1384 and 8232 hits, drift equal to injection — are
-unchanged apart from the last digits, as they must be: the step limiter is
-called on the same state at the same point in both integrators. The
-`Float32` shear layer is an instability amplifying roundoff, so a
-different association of the same sums is exactly what moves it; the mesh,
-the step count and the tracking are still equal to the `Float64` run's.
-
-**What the tests now say about the hooks.** The one-step vacuum test
-(`test/reset_tests.jl`) asserts the hit counts as well as the flooring:
-`:stage` resets 12 owned cells in `D = 1` and 192 in `D = 2` on a step
-where `:step` resets 2 and 32, and `:none` resets none — which is what
-says the stage hook is installed, since the step's result is floored by
-either. And `test/sedov_tests.jl` asserts drift = injection to roundoff
-under *both* cadences, where it used to assert a bound under `:stage` and
-that the bound was not tight.
-
-**Tests: 11708 at four threads and 11674 at one**, against 11622 — the
-integrator's own file (`test/stepping_tests.jl`), the two thread-identity
-and device files, two TreeAMR internals checked by name, and the hit counts
-above; the difference between the two thread counts is the ownership
-check, which asserts one thing per block per thread and has nothing to
-assert at one thread. Whole suite, back to back on a quiet machine:
-**2 m 58.4 at one thread and 2 m 35.2 at four**, against 3 m 44.8 at one
-thread after step 11. The share of that owed to the two kernel fixes of
-step 14 rather than to the integrator was not separated; the
-thread-identity subprocess costs twenty seconds of the four-thread run.
-
 ### Step 13 — threads
 
 `test/thread_workload.jl` prints twelve lines — a tracked Sod tube in
@@ -5142,14 +4516,18 @@ before and after, line for line).
   `v` and `p` are uniform, exactly at first and to roundoff afterwards, and
   `:minmod`'s sign test on a roundoff-level difference is a coin flip the
   branch predictor loses. `slope(::Val{:minmod})` is now two `ifelse`s,
-  which choose the same value in every case; the flux kernel holds at
+  which choose the same value in every case, NaN and signed zero included;
+  the flux kernel holds at
   **3.64 ms** and the RHS at **30.9 ms** on the evolved state. Every
   uniform region pays this — Sedov's ambient, the shear layer's pressure —
   so the measurement's own initial data was the one state that hid it.
 - **The divergence kernel's loop over directions was not unrolled.** It
   indexed the tuple of flux arrays with a runtime `d`, and took **6.35 ms**
   on the same mesh; written out per dimension it takes **1.38 ms**, the
-  same additions in the same order. (A plain Julia loop with `i` innermost
+  same additions in the same order. An `ntuple` closure with `foldl` did
+  *not* fix it inside a kernel (11.5 ms), nor did recursion on `Val`
+  (65 ms); explicit methods for `D = 1, 2, 3` did. A loop over `v` into an
+  `isbits` tuple is fine. (A plain Julia loop with `i` innermost
   and `@simd` takes 0.69 ms: KernelAbstractions' CPU backend runs one work
   item at a time and does not vectorize across them, and that factor is
   left on the table deliberately, since `map_blocks!`'s contract is one
@@ -5218,8 +4596,7 @@ work-item kernel on a backend that does not vectorize across work items.
 
 `test/device_tests.jl`, run with `TREEHYDRO_TEST_BACKEND=metal` in an
 environment that has Metal, reproduces the host `Float32` run **exactly**:
-the tracked Sod tube's L1 (4.1725063e-3; 4.172509e-3 since step 12's
-chunk count, on both), step count (138) and mesh
+the tracked Sod tube's L1 (4.172509e-3, on both), step count (138) and mesh
 history, and the static Sedov blast's 1280 resets, 128 ghost hits, shock
 radius and peak. Without the variable the CPU stands in for the device.
 
@@ -5359,8 +4736,7 @@ updates per second per `SSPRK33` step:
   boundary hook and the floors cost the device about what they cost the
   host.
 
-**The device tests, widened** (after step 14, closing the acceptance's "the
-suite on Metal in `Float32`"). The file ran two cases; it now runs **every
+**The device tests, widened.** The file runs **every
 driver the suite measures with** — `entropywave_errors`, `sod_errors`,
 `sedov_static`, `evolve!` on the tube, the blast and through `kh_run` —
 in `D = 1, 2, 3`, on uniform, static two-level and tracked meshes, with and
@@ -5414,7 +4790,7 @@ bit for bit** in everything except the shear layer. **H200 (job 564514):
 
 ### Step 12 — precision
 
-Done last, after steps 13 and 14. `test/type_tests.jl` runs four drivers —
+`test/type_tests.jl` runs four drivers —
 the tracked tube in `D = 1` and `D = 2`, the static two-level blast and the
 tracked blast — at `Float64`, `Float32` and `Float32x2`, and the entropy
 wave at `Float32`; the measured table is under
@@ -5459,16 +4835,10 @@ leak detector — MultiFloats promotes `Float64` *downward* — which is why
 `Float32` carries the type assertions and `Float32x2` the claim that
 nothing needs a hardware float at all.
 
-**The suite: 11856 tests in 4 m 26 at one thread and 11890 in 3 m 44 at
-four**, against 3 m 36 and 2 m 57 just before the step on the same machine.
-Most of the 50 s is compiling the `Float32x2` paths, which no other file
-exercises.
-
 ### Checkpoint and restart, measured
 
-*(Added 2026-09-29, with [Checkpoint and restart](#checkpoint-and-restart),
-on TreeAMR 0.1.4 and HDF5.jl 0.17.4.)* The claims are all equalities, and
-`test/checkpoint_tests.jl` makes every one of them on every push:
+The claims are all equalities, and `test/checkpoint_tests.jl` makes every
+one of them on every push:
 
 - **A chain of restarts is the uninterrupted run, bit for bit.** The
   tracked tube of step 7, shortened to ten chunks and run as ten one-chunk
@@ -5495,10 +4865,6 @@ on TreeAMR 0.1.4 and HDF5.jl 0.17.4.)* The claims are all equalities, and
   `1//200`, the two being the same `Float64`s, and reports no criterion
   changed.
 
-*(Amended 2026-10-01, when the checkpoint moved before the regrid.)* Every
-equality above held unchanged — the same tests, with only the counts of
-files written amended for the last chunk's — and two more were added:
-
 - **From a finished run.** The tube run to `1/50` — four chunks of `1/200`
   exactly — writes a checkpoint at its last chunk too, holding its own
   returned state and mesh, unregridded; continued from it to `1/20`, it is
@@ -5512,13 +4878,6 @@ files written amended for the last chunk's — and two more were added:
   in place of the derived 7 cells, it records a margin of 0 at chunk 3 and
   refines nothing there (12 blocks). The histories up to the checkpoint
   are the uninterrupted run's, and `criterion_changed` names the field.
-
-The suite after the move, merged with the reflecting walls, on the
-development machine under an unknown share of other load: **12447 tests in
-5 m 01 at one thread and 12481 in 4 m 28 at four**, **6 m 33** with
-`--check-bounds=yes`, and **7 m 45** for the clean tree at Julia 1.11 —
-within the scatter of the walls' own 4 m 46, 4 m 10, 6 m 36 and 7 m 47: the
-new testsets restart the tube, a second each.
 
 **The cost, on one run** (measured 2026-09-29, one thread, the development
 machine, shared; not in the suite). The configuration is `README.md`'s
@@ -5548,19 +4907,9 @@ recommendation stands here too: **no filter**, unless the disk is what is
 short. A restart from the filtered copy continued to `t_end` exactly as one
 from the unfiltered file.
 
-**The suite** after this change, back to back on the development machine
-under an unknown share of other load: **12030 tests in 4 m 28 at one thread
-and 12064 in 3 m 47 at four**, **6 m 12** with `--check-bounds=yes`, and
-**7 m 27** for the clean tree at Julia 1.11 (TreeAMR 0.1.4 and HDF5 0.17.4
-resolved from the registry). That is within the machine's scatter of step
-12's 4 m 26 and 3 m 44, so the new file's cost inside the suite is not
-separated from it; run alone in a fresh process, compilation of the tube and
-the blast included, the file takes 51 s, 14 s of it the subprocess.
-
 ### Reflecting walls, measured
 
-*(Added 2026-09-29, with [reflecting faces](#boundaries), on TreeAMR
-0.1.4.)* `test/reflecting_tests.jl` makes each claim on every push, on the
+`test/reflecting_tests.jl` makes each claim on every push, on the
 shear layer under the mirrored seed to `t = 1/5` (`N = 8`, four roots, the
 calibrated thresholds, `chunk = 1/200`, HLLC, minmod):
 
@@ -5591,24 +4940,16 @@ calibrated thresholds, `chunk = 1/200`, HLLC, minmod):
   `nothing`, so every other case builds exactly what it built before.
 - **A restart of the half box is the uninterrupted run, bit for bit**, with
   the walls in the file's forest and in its recipe; a recipe written before
-  the field existed reads as having none (`test/checkpoint_tests.jl`).
-  *(Amended 2026-10-01: such a recipe is a version-1 file, which the move of
-  the checkpoint before the regrid refuses — see [Checkpoint and
-  restart](#checkpoint-and-restart) — so the reading went with it, and the
-  test asserts the refusal instead.)*
+  the field existed is a version-1 file, which is refused — see [Checkpoint
+  and restart](#checkpoint-and-restart) — and the test asserts the refusal
+  (`test/checkpoint_tests.jl`).
 - **On a device**, the half box through `kh_run` builds the host's mesh in
   the host's steps with `M(t)` at `sqrt(eps)` (`test/device_tests.jl`, the
   CPU standing in unless a device is named).
 
-**The suite** after this change, on the development machine under other
-load: **12396 tests in 4 m 46 at one thread and 12430 in 4 m 10 at four**,
-**6 m 36** with `--check-bounds=yes`, and **7 m 47** for the clean tree at
-Julia 1.11. The four-thread run overlapped a precompilation of the
-showcase's environment, so it is an upper bound.
-
 ### The zoom showcase
 
-*(Added 2026-09-29.)* `showcase/` makes a 1080p movie of the shear layer in
+`showcase/` makes a 1080p movie of the shear layer in
 its reflecting half box, zooming through the refinement levels:
 
 - level `ℓ` is allowed only in a box about the camera, sized for the largest
@@ -5622,6 +4963,15 @@ Its loop is a second one on purpose. `evolve!` fixes `chunk` and
 `maxlevel_cap` for a run, and the zoom needs both per chunk. The loop follows
 `evolve!`'s order. `showcase/README.md` has the design, the commands and every
 number.
+
+The order it follows is: step, CFL recheck, observe, regrid, rebuild the
+problem, `gather!`, `integ_prev = nothing`, `reset_atmosphere!`. The
+window is sized for the zoom-out, not the zoom-in: level `ℓ` is allowed in
+a box covering the *largest* view that needs it — twice the height of the
+smallest — because the zoom-out reads the final mesh at every zoom, and a
+box sized for the current view would leave its outer part at the level
+below. The zoom-out stays centred on the anchor for the same reason; the
+pan home happens at zoom 1, where the floor level covers the whole box.
 
 **The pilot's finding decides what the movie can be.** The coarse pilot ran
 at 128–256 finest cells across the view, levels 3 → 12 over nine doublings,
@@ -5681,8 +5031,15 @@ then thins as fast as the camera closes in.
 
 Not planned, listed because they are the obvious next questions:
 
+- **Higher-order reconstruction** (the optional milestone H7). PPM or
+  WENO-Z at `G = 3`, and the interface-order rule re-measured against it.
+  Not planned, and not started: the package is complete at H6. Step 10's
+  comparison with the paper's curves is the one measurement that points at
+  it — at 128² this second-order scheme reaches about half the published
+  `M(1.5)`, where the codes on the reference are piecewise-parabolic or
+  sixth-order.
 - **A criterion that produces a Sedov *shell* rather than a disk**
-  (measured in step 9, and deliberately not built). The Löhner indicator on
+  (measured, and deliberately not built). The Löhner indicator on
   `ρ` fires throughout the blast's interior, correctly — the similarity
   solution's `G(λ) ∼ λ^{D/(γ−1)}` is a steep, under-resolved ramp and not a
   flat bubble — so the refined region is a growing disk and the block count
@@ -5694,61 +5051,46 @@ Not planned, listed because they are the obvious next questions:
   the blast and still saves cells, so this is an economy rather than a
   defect.
 - **A limited, positivity-preserving prolongation** — `p = 3` accuracy with
-  `p = 1`'s floor count. Step 9 put a number on what it would buy: on a
-  strong shock crossing a coarse-fine face, `p = 1` floors nothing where
-  `p = 3` floors 4096 owned cells and 40 ghost entries, and costs 0.47% of
-  L1 for it. It is not a fixed-weight tensor-product stencil, so it is an
-  upstream request rather than a keyword; it is still not made, because the
-  repairs `p = 3` needs are ones the reset makes correctly and accounts for
-  exactly.
+  `p = 1`'s floor count. [Step 9](#step-9--the-sedov-blast) put a number on
+  what it would buy: on a strong shock crossing a coarse-fine face,
+  `p = 1` floors nothing where `p = 3` floors 4136 owned cells and 40 ghost
+  entries, and costs 0.47% of L1 for it. It is not a fixed-weight
+  tensor-product stencil, so it is an upstream request rather than a
+  keyword; it is still not made, because the repairs `p = 3` needs are ones
+  the reset makes correctly and accounts for exactly.
 - The Sedov radial profile *at a given radius*, making the radial-scatter
   figure quantitative. The parametric profile `(λ, G, V, Z)` came for free
-  with the energy integral in step 9 and is in `sedov_profile`; what is
-  missing is the inversion `λ ↦ V`, which is a root find nothing in the
-  acceptance needs.
+  with the energy integral and is in `sedov_profile`; what is missing is the
+  inversion `λ ↦ V`, which is a root find nothing in the acceptance needs.
 - Positivity-preserving flux limiting (Zhang–Shu, Hu–Adams–Shu), the
   conservative complement to the atmosphere reset; see
   [Floors and the atmosphere](#floors-and-the-atmosphere) for why it is
   a complement and not a replacement, and for its interaction with the
   coarse-fine fixup.
-- ~~A hand-written SSPRK33 with kernel stage updates, shared with
-  TreeWave.~~ *(Superseded after step 11: IMEXRungeKutta forms the stage
-  combinations by block owner on the host and by one fused broadcast on a
-  device, which is what this item was for; on a 64-core node it is worth
-  2–2.7× on the step. See [Step 14](#step-14--the-benchmark-and-the-device).)*
-- **Upstream, from step 14's tables** (TreeAMR's, and listed here because
-  this package measured them): `scatter!` runs one entry per work item and
-  is 1.8 ns per entry on the host against 0.16 for a `copyto!`, and 15–25%
-  of an H200's RHS; the ghost fill is 30% of the RHS at `16³` blocks on
-  every backend; and the schedule construction after a regrid is 390 ms at
-  32768 blocks on an H200 against a few on the host. A per-cell kernel
-  that vectorized across `i` on the CPU would be worth another 2× on the
-  divergence (0.69 ms against 1.38), which is `map_blocks!`'s contract to
-  change or not.
-- **HLLC on the entropy wave and on Sod** (added in step 15). Both were
-  named as the place HLLC would first be measured — "the HLLE/HLLC
-  comparison has its first number here" and Sod's `:mc` rate of 0.945 as
-  "the number to beat" — and neither was run: the comparison was made where
-  it decides something, on the shear layer, and there it is not close.
-  Every entropy-wave and Sod number in this file is HLLE's.
-- **A 3D Sedov render in `bin/`** (added in step 15). The design said
-  "`bin/` runs it at demo size"; the viewer of step 11 is `D = 2` only,
+- **Upstream, from [Step 14](#step-14--the-benchmark-and-the-device)'s
+  tables** (TreeAMR's, and listed here because this package measured them):
+  `scatter!` runs one entry per work item and is 1.8 ns per entry on the
+  host against 0.16 for a `copyto!`, and 15–25% of an H200's RHS; the ghost
+  fill is 30% of the RHS at `16³` blocks on every backend; and the schedule
+  construction after a regrid is 390 ms at 32768 blocks on an H200 against
+  a few on the host. A per-cell kernel that vectorized across `i` on the
+  CPU would be worth another 2× on the divergence (0.69 ms against 1.38),
+  which is `map_blocks!`'s contract to change or not.
+- **HLLC on the entropy wave and on Sod.** Both were named as the place
+  HLLC would first be measured — "the HLLE/HLLC comparison has its first
+  number here" and Sod's `:mc` rate of 0.945 as "the number to beat" — and
+  neither was run: the comparison was made where it decides something, on
+  the shear layer, and there it is not close. Every entropy-wave and Sod
+  number in this file is HLLE's.
+- **A 3D Sedov render in `bin/`.** The Sedov viewer is `D = 2` only,
   because a 3D render needs a midplane slice, and nothing asked for one.
-- **Two observations recorded and not investigated** (collected in step
-  15, each with its section): which kernel keeps `Float32` on the H200 at
-  1.3–1.45× of `Float64` rather than the 2× that halving every byte would
-  give (step 14, "Symmetry: one H200"); and why `--check-bounds=yes` cost
-  nothing at Julia 1.10 where it costs 1.4× at the release ("TreeAMR's
-  release and the 1.10 floor"). Neither moves a claim, and each rests on
-  one job or one draw. *(Amended 2026-10-16: the second is moot, no CI cell
-  running 1.10 or 1.11 any more.)*
-- ~~Reflecting boundaries, once the region-form hook has a device form
-  upstream; the 2D Sedov in a quadrant is the case that would want them.~~
-  *(Done 2026-09-29, and there was no hook to wait for: TreeAMR's reflecting
-  faces are first-class and run on every backend. The Kelvin–Helmholtz half
-  box uses them; the Sedov quadrant would need only its case — reflecting
-  low faces, the ambient Dirichlet hook on the high ones. See [Reflecting
-  walls, measured](#reflecting-walls-measured).)*
+- **An observation recorded and not investigated**: which kernel keeps
+  `Float32` on the H200 at 1.3–1.45× of `Float64` rather than the 2× that
+  halving every byte would give
+  ([Step 14](#step-14--the-benchmark-and-the-device), "Symmetry: one
+  H200"). It does not move a claim, and rests on one job.
+- The 2D Sedov in a quadrant, which would need only its case — reflecting
+  low faces, the ambient Dirichlet hook on the high ones.
 - The isentropic vortex, a second exact smooth solution in 2D that is
   stationary and would isolate the limiter's clipping from advection.
 - The next package: constrained-transport MHD, which is where the
@@ -5758,63 +5100,9 @@ Not planned, listed because they are the obvious next questions:
 
 ## Open questions
 
-Decided in review: the ghost exchange in conserved variables with
-`con2prim` over the stored extent (was "may change, on the ghost floor
-count"; step 9 measured that count and it does not change — see
-[Floors and the atmosphere](#floors-and-the-atmosphere));
-primitive reconstruction; HLLE as the baseline flux with HLLC as the
-Kelvin–Helmholtz comparison; the atmosphere reset of `U` in the
-integrator's stage hook, with the floor on `P` as the second line;
-Dirichlet boundaries wherever the physics does not require periodicity;
-one `evolve!` driver with cases as data; the two
-[upstream prerequisites](#upstream-prerequisites); default prolongation
-order `p = 3`, with `p = 1` measured beside it; the McNally smooth-ramp
-Kelvin–Helmholtz setup; Sedov acceptance on the exponent, the jump and a
-uniform reference, the full profile an extension; and the `[sources]`
-pin to TreeAMR's `main` (`m8` having been merged) — which TreeAMR's 0.1.1
-release has since replaced with an ordinary registry dependency.
-
-Still proposed *(amended in step 15: neither is, any more)*:
-
-1. **Whether the entropy wave is a case** or only a test fixture; it is
-   written above as a case so that the interface-order table has a
-   driver, and it does not appear in `bin/`. **(Settled in step 7: it is
-   a case.)** `HydroCase(::EntropyWave)` runs it through `evolve!` on the
-   periodic, hook-free path, and it is the case against which the driver's
-   chunking and point-sampled initial data were measured
-   (L1 ratios 0.9424 and 0.9945 against the study, see
-   [Step 7](#step-7--the-driver-and-the-tracked-shock-tube)). It is still
-   not drawn in `bin/`, which is a statement about pictures and not about
-   what it is.
-2. **The reset cadence**, `:stage` against `:step`, is a measurement and
-   not a question; it is listed so that it is not mistaken for a
-   decision already made. **(Measured in step 9.)** On the blast the two
-   give the same final state to roundoff, `:stage` making three times the
-   repairs and reporting a strictly less informative injection — a bound
-   rather than an equality, because a stage's injection enters the step
-   with that stage's SSPRK weight. `:stage` stays the default on the
-   strength of what it was adopted for and what a blast in an ambient
-   cannot show: a stage vector that the *next* stage's right-hand side
-   never sees in an unphysical state, which is a star-in-a-vacuum
-   property. See [Floors and the atmosphere](#floors-and-the-atmosphere).
-   *(Amended in step 15, recording what the move to IMEXRungeKutta after
-   step 11 changed: the injection is now an equality under both cadences,
-   since the stage limiter's correction no
-   longer reaches a total, and `:stage` resets 4136 cells on the static
-   `D = 2` blast against `:step`'s 1384.)*
-
-Smaller defaults marked (proposed) in the text — the variable order,
-point samples rather than cell averages for discontinuous initial data,
-`λ_max` measured once per chunk — are implementation choices that the
-first milestones will either confirm or amend in place. All three are now
-settled: the variable order in step 1, the point samples in step 4 (and
-generalized in step 7, where a case states its data pointwise because the
-adaptation cycle changes `h` under it), and `λ_max` once per chunk in
-steps 4 and 7 — confirmed, but only beside a `speed_headroom` factor and
-a recheck that throws.
-
-**Nothing is open** (step 15). The one question this package was expected
-to take upstream — a limited, positivity-preserving prolongation — was
-measured in step 9 and not made, with its price recorded; it, and every
-other thing measured and not built, is under [Possible
-extensions](#possible-extensions).
+**Nothing is open.** The one question this package was expected to take
+upstream — a limited, positivity-preserving prolongation — was measured
+and not made, with its price recorded; it, and every other thing measured
+and not built, is under [Possible extensions](#possible-extensions). The
+questions that were once open, and the decisions taken in review, are in
+[HISTORY.md](HISTORY.md#open-questions).
