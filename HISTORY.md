@@ -56,6 +56,7 @@ steps](#milestones-and-steps).
   - [IMEXRungeKutta and TreeAMR 0.1.3](#imexrungekutta-and-treeamr-013)
 - [Testing and CI](#testing-and-ci)
   - [Suite timings](#suite-timings)
+  - [Precompiled code and mixed runners](#precompiled-code-and-mixed-runners)
 - [Measured results replaced](#measured-results-replaced)
 - [Possible extensions](#possible-extensions)
 - [Open questions](#open-questions)
@@ -1324,6 +1325,25 @@ the pull-request cells had taken 13–24 min and the instrumented macOS cell
 on `main` up to 38, 55 of the last 80 commits on `main` touched only
 Markdown, and macOS cells queued behind the other repositories', since
 the account runs five at once.
+
+### Precompiled code and mixed runners
+
+On 2026-11-06, after the same finding in TreeWave (whose `HISTORY.md` has
+the runs and the local checks), Erik had the fix carried over here. The
+viewer job had restored its cache and still rebuilt 293 of its 333
+packages, 7 minutes of it, in runs 38913196620 and 38934479627; the 40
+that survived were the ones that ship precompiled with Julia. The test
+cells did not show it in the runs looked at, but most of those found no
+cache at all. GitHub's `ubuntu-latest` runners have several x86 CPUs
+(TreeWave's CI saw AMD EPYC 7763, 9V74 and 9V45 in one afternoon),
+`JULIA_CPU_TARGET` was unset so Julia built for `native`, and the cache
+key named no CPU. Both jobs now build for `x86-64-v3` on Linux and
+`apple-m1` on macOS, put that target into the cache key, and print the
+runner's CPU. The key matters: TreeWave's first run with the target set
+restored the old `native` caches and kept them, since Julia refuses a
+cached file only when the CPU cannot run it, not for a different target.
+The official x86_64 builds' list of targets was considered and dropped:
+it compiles every package once per entry.
 
 ## Measured results replaced
 

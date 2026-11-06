@@ -65,12 +65,34 @@ jobs:
     # entry that matches none adds one.
     env:
       COVERAGE: ${{ matrix.os == 'macOS-latest' && matrix.threads == 1 && github.event_name != 'pull_request' }}
+      # Precompiled code is built for one fixed CPU per OS, not the
+      # runner's own; see the viewer job below. `apple-m1` is the oldest
+      # Apple Silicon, which GitHub documents for every arm64 macOS label,
+      # so a cache built for it loads on whatever Apple CPU comes later.
+      # The names are per architecture: `x86-64-v3` is an error on arm64.
+      JULIA_CPU_TARGET: ${{ matrix.os == 'ubuntu-latest' && 'x86-64-v3' || 'apple-m1' }}
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
+      # Which CPU this runner has, so that a cache that was restored and
+      # then rebuilt anyway can be matched against the runner that saved it.
+      - name: Show the runner's CPU
+        run: |
+          if command -v lscpu >/dev/null; then
+            lscpu | grep -E '^(Model name|Flags)' | cut -c1-200
+          else
+            sysctl -n machdep.cpu.brand_string
+          fi
+      # The CPU target is part of the key. Julia does not refuse a cached
+      # file built for a different target, as long as this runner's CPU
+      # can run it, so without this the caches saved before the target
+      # was set (built for `native`) would carry on being restored, and
+      # refused only when they landed on a different CPU model.
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache;workflow=${{ github.workflow }};job=${{ github.job }};cpu=${{ env.JULIA_CPU_TARGET }}
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -124,15 +146,43 @@ jobs:
     # 2.5x of headroom over a cold draw, and a warm one skips most of the
     # precompilation.
     timeout-minutes: 30
+    # GitHub's `ubuntu-latest` runners have different x86 CPUs (AMD EPYC
+    # 7763, 9V74 and 9V45 seen so far), and Julia builds precompiled code
+    # for the CPU it is on (`native`) unless told otherwise. The cache key
+    # did not include the CPU, so a cache saved on one CPU model and
+    # restored on another was thrown away: 293 of 333 packages rebuilt
+    # after a cache hit, the 40 that survived being the ones shipped
+    # precompiled with Julia. `x86-64-v3` (AVX2, FMA; Haswell and later,
+    # every runner GitHub has) is one target, so a build costs what it did
+    # and the cache is no larger; code for it loads on any of the runners,
+    # at the price of not using AVX-512 where a runner has it.
+    env:
+      JULIA_CPU_TARGET: "x86-64-v3"
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: "1.13"
-      # The default cache key carries the job name, so this environment --
-      # which is CairoMakie and this package by path, and the test matrix's
-      # is neither -- gets its own entry without being told to.
+      # Which CPU this runner has, so that a cache that was restored and
+      # then rebuilt anyway can be matched against the runner that saved it.
+      - name: Show the runner's CPU
+        run: |
+          if command -v lscpu >/dev/null; then
+            lscpu | grep -E '^(Model name|Flags)' | cut -c1-200
+          else
+            sysctl -n machdep.cpu.brand_string
+          fi
+      # The key carries the job name, so this environment -- which is
+      # CairoMakie and this package by path, and the test matrix's is
+      # neither -- gets its own entry without being told to.
+      # The CPU target is part of the key. Julia does not refuse a cached
+      # file built for a different target, as long as this runner's CPU
+      # can run it, so without this the caches saved before the target
+      # was set (built for `native`) would carry on being restored, and
+      # refused only when they landed on a different CPU model.
       - uses: julia-actions/cache@v3
+        with:
+          cache-name: julia-cache;workflow=${{ github.workflow }};job=${{ github.job }};cpu=${{ env.JULIA_CPU_TARGET }}
       - name: Instantiate the viewer environment
         run: julia --project=bin -e 'using Pkg; Pkg.instantiate()'
       - name: Render the tracked shock tube
