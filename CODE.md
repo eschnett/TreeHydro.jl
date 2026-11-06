@@ -3141,6 +3141,25 @@ belongs wherever the claim it makes belongs. `CI.yml`'s comments state the
 arrangement, not how it was arrived at; the history is in
 [HISTORY.md](HISTORY.md#testing-and-ci).
 
+**CI builds precompiled code for one fixed CPU per OS**:
+`JULIA_CPU_TARGET=x86-64-v3` on Linux (AVX2 and FMA, which every runner
+has) and `apple-m1` on macOS (the oldest Apple Silicon). GitHub's
+`ubuntu-latest` runners do not all have the same CPU, and code built for
+`native` is refused by a runner with a different one, so a cache *hit*
+could still mean every package rebuilt — 7 minutes of CairoMakie in the
+viewer job. A single target costs no more to build than `native`; the
+price is AVX-512 going unused where a runner has it, and, since Base's
+`@simd` reductions follow the target the code was compiled for, Linux
+totals that may differ by a few ulp from a `native` build — which the
+bounds the suite asserts already allow (below). The target is part of the
+cache key (`cache-name`): Julia does not refuse a cached file built for a
+different target as long as the CPU can run it, so without the key a
+change of target would go on restoring the old files. Each job prints its
+runner's CPU before the cache step. On Linux the cache now holds across
+CPU models; on macOS it has in TreeWave, whose cell has run on both an
+M1 and an M2 Pro **(open: here, until it has run twice on `main`)**. The history is in
+[HISTORY.md](HISTORY.md#precompiled-code-and-mixed-runners).
+
 **Across machines the numbers are *not* bit-identical**, which is a trap
 for any future test that compares against stored numbers. Measured on CI:
 on all four runners then in the matrix — macOS arm64 on the same Julia 1.13
@@ -4199,7 +4218,9 @@ one thing it confirms:
 
 So instantiating the environment is **64% of a cold run and 2% of a warm
 one**: the cache is the whole story, and `julia-actions/cache` needs no
-configuration to do it, its default key carrying the job name. The renders
+configuration to do it, its default key carrying the job name. (It has
+since been given one, the CPU target in the key; see
+[Testing](#testing).) The renders
 are the same work either way, 3 m 50 cold against 3 m 21 warm, and cost
 1.4–2.1× their local times — which is what a 2-vCPU runner does to this
 arithmetic. The guard is the test job's `timeout-minutes: 30`, 2.5× a cold
