@@ -1345,6 +1345,16 @@ cached file only when the CPU cannot run it, not for a different target.
 The official x86_64 builds' list of targets was considered and dropped:
 it compiles every package once per entry.
 
+The pull request's run 42281040421 confirmed it on Linux. Its first
+attempt found no cache under the new key and rebuilt everything, the
+viewer 297 packages in 382 s. The re-run restored those caches and
+rebuilt nothing, including on a different CPU from the one that saved
+them in both test cells (AMD EPYC 7763 to 9V74, 9V74 to 9V45): the
+viewer's instantiate step took 11 s, and the viewer job 5 m 43 against
+12 m 01. In TreeWave the same change held on macOS too, across an
+Apple M1 and an M2 Pro, although GitHub documents every arm64 macOS
+runner as an M1.
+
 ## Measured results replaced
 
 What the "Measured results" of `CODE.md` used to record, where a later

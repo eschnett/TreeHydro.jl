@@ -3155,8 +3155,9 @@ bounds the suite asserts already allow (below). The target is part of the
 cache key (`cache-name`): Julia does not refuse a cached file built for a
 different target as long as the CPU can run it, so without the key a
 change of target would go on restoring the old files. Each job prints its
-runner's CPU before the cache step **(open: whether cache hits now hold,
-on either OS)**. The history is in
+runner's CPU before the cache step. On Linux the cache now holds across
+CPU models; on macOS it has in TreeWave, whose cell has run on both an
+M1 and an M2 Pro **(open: here, until it has run twice on `main`)**. The history is in
 [HISTORY.md](HISTORY.md#precompiled-code-and-mixed-runners).
 
 **Across machines the numbers are *not* bit-identical**, which is a trap
