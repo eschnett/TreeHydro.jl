@@ -519,11 +519,15 @@ Match TreeAMR's, since the three packages are read together:
   different TreeAMR from the tests; grep for `TreeAMR =` across both
   `Project.toml`s rather than editing from memory ("File layout").
 - One workflow with two jobs: `.github/workflows/CI.yml`. `test` runs the
-  whole suite on every push that touches something other than Markdown, on
-  three cells at Julia 1.13 — Linux, macOS (the arm64 reduction claim and
-  the coverage) and Linux at 4 threads; coverage is collected on one cell,
-  on `main` or a manual dispatch only. `viewer` instantiates `bin/` and
-  renders all four figures, ungated, on pull requests too. Treat every CI
+  whole suite on every change that touches something other than Markdown
+  or `docs/`, at Julia 1.13, in two tiers, the same in every Tree*
+  repository: a pull request runs the two Linux cells (one and four
+  threads), uninstrumented; a push to `main`, a weekly schedule and a
+  manual dispatch add macOS (the arm64 reduction claim and the coverage,
+  collected on that cell only). Tags are not tested. So **run the full
+  suite locally before opening a pull request**: that is the macOS run the
+  pull request does not get. `viewer` instantiates `bin/` and renders all
+  four figures, ungated, on pull requests too. Treat every CI
   timing as ±70%. `CI.yml`'s comments state the arrangement, not how it was
   arrived at; the reasons are in `CODE.md`'s "Testing" and the history in
   `HISTORY.md`.

@@ -1313,6 +1313,18 @@ target.
   4 m 28 on 2026-10-01, the difference being the MPI test and its launch,
   on a machine shared with another session's suite.
 
+**Two CI tiers** (2026-11-05, Erik, for all eight Tree* repositories at
+once; TreeAMR's `HISTORY.md`, "Development environment and CI", has the
+measurements across them). Pull requests now run the two Linux cells
+only, uninstrumented; a push to `main`, a weekly schedule and a manual
+dispatch add the macOS cell with its coverage; `docs/` changes now skip
+CI as Markdown already did, on pull requests as well as pushes; tags are
+no longer tested, since a release tags a commit `main` has passed. Here
+the pull-request cells had taken 13–24 min and the instrumented macOS cell
+on `main` up to 38, 55 of the last 80 commits on `main` touched only
+Markdown, and macOS cells queued behind the other repositories', since
+the account runs five at once.
+
 ## Measured results replaced
 
 What the "Measured results" of `CODE.md` used to record, where a later
